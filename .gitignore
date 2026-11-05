@@ -1,0 +1,36 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Build output (release binaries live in GitHub Releases)
+dist/
+shots/
+android/build/
+android/_backup_assets_*/
+*.blockmap
+*.idsig
+
+# Local dev archive
+_archive/
+
+# Signing secrets — never commit
+android/superbox.keystore
+android/build.local.ps1
+*.keystore
+*.jks
+.env
+.env.*
+*.local
+
+# Logs and temporary files
+*.log
+tmp_*.json
+*.tmp
+*.bak
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+*.swp

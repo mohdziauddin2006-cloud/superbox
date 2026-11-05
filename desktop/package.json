@@ -1,0 +1,66 @@
+{
+  "name": "superbox",
+  "productName": "SuperBox",
+  "version": "1.0.0",
+  "description": "SuperBox - ad-free movies, series, anime and live TV in one desktop app",
+  "main": "main.js",
+  "author": "SuperBox",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win nsis portable"
+  },
+  "devDependencies": {
+    "electron": "44.7.0",
+    "electron-builder": "26.18.0"
+  },
+  "build": {
+    "appId": "com.superbox.desktop",
+    "productName": "SuperBox",
+    "copyright": "SuperBox",
+    "directories": {
+      "output": "../dist",
+      "buildResources": "../build-resources"
+    },
+    "files": [
+      "**/*",
+      "!*.map",
+      "!**/*.map"
+    ],
+    "asar": true,
+    "compression": "normal",
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "../build-resources/icon.ico",
+      "artifactName": "SuperBox-${version}-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "SuperBox",
+      "uninstallDisplayName": "SuperBox",
+      "artifactName": "SuperBox-Setup-${version}.${ext}"
+    },
+    "portable": {
+      "artifactName": "SuperBox-Portable-${version}.${ext}"
+    }
+  }
+}

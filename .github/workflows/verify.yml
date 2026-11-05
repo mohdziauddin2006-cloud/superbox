@@ -1,0 +1,40 @@
+name: verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Check JavaScript syntax
+        run: |
+          node --check android/assets/app.js
+          node --check android/assets/vault.js
+          node --check android/assets/sources.js
+          node --check android/assets/libraries.js
+          node --check desktop/main.js
+          node --check desktop/preload.js
+          node --check desktop/renderer.js
+          node --check desktop/srv2.js
+          node --check desktop/sources.js
+          node --check desktop/libraries.js
+
+      - name: Validate JSON
+        run: |
+          node -e "for (const f of ['desktop/package.json','desktop/package-lock.json']) JSON.parse(require('fs').readFileSync(f,'utf8')); console.log('json ok')"
+
+      - name: Guard the shipped brand
+        run: |
+          if grep -RniE 'watchanybox|watch any box' android/assets android/src desktop --include='*.js' --include='*.java' --include='*.html' --include='*.css'; then
+            echo "Unexpected old brand text found"; exit 1
+          fi
+          echo "brand guard ok"

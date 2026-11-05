@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Download SuperBox
+    url: https://github.com/mohdziauddin2006-cloud/superbox/releases/latest
+    about: Get the latest APK, Windows Setup and Portable builds.
+  - name: Release verification
+    url: https://github.com/mohdziauddin2006-cloud/superbox/blob/main/docs/VERIFY.md
+    about: Checksums, APK signature and test results for the current release.

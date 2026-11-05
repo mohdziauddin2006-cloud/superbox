@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>SuperBox · Tube</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: #000; overflow: hidden; }
+  #f { position: fixed; inset: 0; width: 100%; height: 100%; border: 0; background: #000; }
+  #fallback {
+    position: fixed; inset: 0; display: none; place-items: center; padding: 24px;
+    color: #fff; font: 15px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif;
+    text-align: center; background: #08080b;
+  }
+  #fallback b { display: block; font-size: 17px; margin-bottom: 6px; }
+  #fallback a { color: #ffc105; font-weight: 700; text-decoration: none; }
+</style>
+</head>
+<body>
+<iframe id="f" allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
+        allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>
+<div id="fallback">
+  <div>
+    <b>This video refused to embed</b>
+    <a id="open" href="#" target="_blank" rel="noopener">Watch it on YouTube</a>
+  </div>
+</div>
+<script>
+  var q = new URLSearchParams(location.search);
+  var id = (q.get('id') || '').replace(/[^\w-]/g, '');
+  var title = q.get('t') || '';
+  if (title) document.title = title + ' · SuperBox';
+  var frame = document.getElementById('f');
+  var fallback = document.getElementById('fallback');
+  document.getElementById('open').href = 'https://www.youtube.com/watch?v=' + id;
+  if (!id) {
+    frame.style.display = 'none';
+    fallback.style.display = 'grid';
+  } else {
+    /* origin must match the referer this page sends, otherwise YouTube
+       answers the player with error 153. */
+    var origin = location.origin;
+    frame.src = 'https://www.youtube.com/embed/' + id +
+      '?autoplay=1&playsinline=1&rel=0&modestbranding=1&origin=' + encodeURIComponent(origin);
+  }
+  frame.addEventListener('error', function () {
+    frame.style.display = 'none';
+    fallback.style.display = 'grid';
+  });
+</script>
+</body>
+</html>

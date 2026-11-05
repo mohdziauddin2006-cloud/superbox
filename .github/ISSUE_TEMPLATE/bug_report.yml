@@ -1,0 +1,45 @@
+name: Bug report
+description: Something broke, stalled, or looked wrong.
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Android
+        - Windows
+        - Both
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: SuperBox version
+      placeholder: "1.0.0"
+  - type: input
+    id: device
+    attributes:
+      label: Device / Windows version
+      placeholder: "Pixel 7, Android 14 — or Windows 11 24H2"
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you tap, what did you expect, what appeared instead?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open SuperBox Vault
+        2. Tap Movies
+        3. Open a title and press Play
+  - type: textarea
+    id: context
+    attributes:
+      label: Screenshots, logs or provider details
+      description: Drag images here, or paste any log lines. Do not include personal data.

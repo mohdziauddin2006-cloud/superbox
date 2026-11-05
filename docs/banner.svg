@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="640" viewBox="0 0 1600 640" role="img" aria-labelledby="title desc">
+  <title id="title">SuperBox — one box, infinite library</title>
+  <desc id="desc">Dark gold banner with the SuperBox wordmark and an infinity aura.</desc>
+  <defs>
+    <radialGradient id="aura" cx="0.82" cy="0.12" r="0.7">
+      <stop offset="0" stop-color="#ffc105" stop-opacity="0.24"/>
+      <stop offset="0.45" stop-color="#ffc105" stop-opacity="0.06"/>
+      <stop offset="1" stop-color="#ffc105" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="aura2" cx="0.1" cy="1" r="0.6">
+      <stop offset="0" stop-color="#ffc105" stop-opacity="0.10"/>
+      <stop offset="1" stop-color="#ffc105" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffe38a"/>
+      <stop offset="0.45" stop-color="#ffc105"/>
+      <stop offset="1" stop-color="#e09b00"/>
+    </linearGradient>
+    <linearGradient id="inf" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#ffc105" stop-opacity="0.15"/>
+      <stop offset="0.5" stop-color="#ffda6b" stop-opacity="0.95"/>
+      <stop offset="1" stop-color="#ffc105" stop-opacity="0.15"/>
+    </linearGradient>
+    <pattern id="grid" width="48" height="48" patternUnits="userSpaceOnUse">
+      <path d="M48 0H0V48" fill="none" stroke="#ffffff" stroke-opacity="0.028" stroke-width="1"/>
+    </pattern>
+  </defs>
+
+  <rect width="1600" height="640" fill="#08080b"/>
+  <rect width="1600" height="640" fill="url(#grid)"/>
+  <rect width="1600" height="640" fill="url(#aura)"/>
+  <rect width="1600" height="640" fill="url(#aura2)"/>
+
+  <!-- infinity aura -->
+  <g opacity="0.9">
+    <circle cx="1260" cy="320" r="150" fill="none" stroke="#ffc105" stroke-opacity="0.10"/>
+    <circle cx="1260" cy="320" r="220" fill="none" stroke="#ffc105" stroke-opacity="0.07"/>
+    <circle cx="1260" cy="320" r="295" fill="none" stroke="#ffc105" stroke-opacity="0.04"/>
+    <text x="1260" y="445" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="400" font-weight="700" fill="none" stroke="#ffc105" stroke-opacity="0.12" stroke-width="14">&#8734;</text>
+    <text x="1260" y="445" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="400" font-weight="700" fill="none" stroke="url(#inf)" stroke-width="2.5">&#8734;</text>
+    <circle cx="1010" cy="150" r="3" fill="#ffda6b" fill-opacity="0.9"/>
+    <circle cx="1490" cy="250" r="2.5" fill="#ffda6b" fill-opacity="0.7"/>
+    <circle cx="1440" cy="470" r="2" fill="#ffda6b" fill-opacity="0.55"/>
+    <circle cx="1060" cy="500" r="2.2" fill="#ffda6b" fill-opacity="0.5"/>
+  </g>
+
+  <!-- brand -->
+  <g>
+    <circle cx="156" cy="150" r="150" fill="#ffc105" fill-opacity="0.09"/>
+    <rect x="108" y="102" width="96" height="96" rx="26" fill="url(#gold)"/>
+    <rect x="108" y="102" width="96" height="96" rx="26" fill="none" stroke="#ffffff" stroke-opacity="0.28"/>
+    <text x="156" y="174" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="62" font-weight="900" fill="#15110a">S</text>
+
+    <text x="108" y="66" font-family="Segoe UI, Arial, sans-serif" font-size="15" font-weight="700" letter-spacing="7" fill="#ffc105">ONE BOX &#183; INFINITE LIBRARY</text>
+
+    <text x="238" y="178" font-family="Segoe UI, Arial, sans-serif" font-size="78" font-weight="900" letter-spacing="2">
+      <tspan fill="#ffffff">SUPER</tspan><tspan fill="#ffc105">BOX</tspan>
+    </text>
+
+    <text x="110" y="292" font-family="Segoe UI, Arial, sans-serif" font-size="34" font-weight="600" fill="#f4f4f7">Movies. Series. Anime. Live TV.</text>
+    <text x="110" y="334" font-family="Segoe UI, Arial, sans-serif" font-size="21" font-weight="400" fill="#9a9aa6">No ads. No account. No trackers.</text>
+
+    <g font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="700" letter-spacing="2.6">
+      <rect x="110" y="382" width="132" height="38" rx="19" fill="#ffffff" fill-opacity="0.035" stroke="#ffffff" stroke-opacity="0.10"/>
+      <text x="176" y="406" text-anchor="middle" fill="#d9d9e2">ANDROID</text>
+      <rect x="254" y="382" width="140" height="38" rx="19" fill="#ffffff" fill-opacity="0.035" stroke="#ffffff" stroke-opacity="0.10"/>
+      <text x="324" y="406" text-anchor="middle" fill="#d9d9e2">WINDOWS</text>
+      <rect x="406" y="382" width="158" height="38" rx="19" fill="#ffc105" fill-opacity="0.07" stroke="#ffc105" stroke-opacity="0.34"/>
+      <text x="485" y="406" text-anchor="middle" fill="#ffc105">VAULT &#8734;</text>
+    </g>
+
+    <line x1="110" y1="500" x2="620" y2="500" stroke="#ffffff" stroke-opacity="0.08"/>
+    <text x="110" y="536" font-family="Segoe UI, Arial, sans-serif" font-size="13" font-weight="600" letter-spacing="3" fill="#6d6d78">V1.0.0 &#183; SUPERBOX</text>
+    <text x="110" y="566" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#55555f">The mighty box, standing on its own.</text>
+  </g>
+
+  <!-- edge light -->
+  <rect x="0" y="0" width="1600" height="1" fill="#ffc105" fill-opacity="0.18"/>
+  <rect x="0" y="639" width="1600" height="1" fill="#ffc105" fill-opacity="0.10"/>
+</svg>
