@@ -32,4 +32,5 @@ One library. Faster start. Reliable playback.
 The APK is one universal build (`armeabi-v7a`, `arm64-v8a`, `x86`, `x86_64`),
 signed with the existing SuperBox release key.
 
-Full verification details: [VERIFY.md](VERIFY.md).
+Full verification details:
+[VERIFY.md](https://github.com/mohdziauddin2006-cloud/superbox/blob/main/docs/VERIFY.md).
