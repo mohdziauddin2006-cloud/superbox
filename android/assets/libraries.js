@@ -1,4 +1,4 @@
-/* libraries.js - the SuperBox Vault custom-library scrapers (data in, items out).
+/* libraries.js - the SuperBox unified-library scrapers (data in, items out).
    ---------------------------------------------------------------------------
    Every function returns plain item arrays; the renderer turns them into cards.
    Fetch strategy for any URL: Chromium/direct fetch first (it reaches hosts
@@ -43,25 +43,44 @@
      only real interstitial markers count - a false positive here throws away
      a perfectly good direct fetch and cascades into the slow fallbacks. */
   function cfChallenge(t) {
-    return /just a moment|enable javascript and cookies|checking your browser|cf-chl|cf_chl_opt|ddos protection|challenge-platform\/h\//i.test(String(t).slice(0, 4000));
+    /* Cloudflare interstitials are tiny. Big pages (YouTube, news sites)
+       legitimately contain "enable javascript and cookies" inside <noscript>,
+       so a large body can never be an interstitial. */
+    var s = String(t || '');
+    if (s.length > 60000) return false;
+    return /just a moment|enable javascript and cookies|checking your browser|cf-chl|cf_chl_opt|ddos protection|challenge-platform\/h\//i.test(s.slice(0, 4000));
   }
   async function fetchText(u, ms) {
     ms = ms || 12000;
     /* Android WebView: source sites are cross-origin and CORS blocks direct
-       reads, so the Java /page proxy is the primary transport. Direct fetch
-       stays as a fallback for hosts that do allow it. */
+       reads, so the Java /page proxy is the primary transport. When the proxy
+       is reachable, direct fetches can only fail with a CORS error and spam
+       logcat, so they are skipped entirely. */
+    var serverUp = false;
     try {
       var B0 = await base();
       var rp0 = await withTimeout(fetch(B0 + '/page?url=' + enc(u), { cache: 'no-store' }), ms);
+      serverUp = true;
       if (rp0 && rp0.ok) { var tp0 = await withTimeout(rp0.text(), ms); if (tp0 && tp0.length > 40 && tp0.indexOf('PROXY_ERROR') !== 0 && !cfChallenge(tp0)) return tp0; }
     } catch (e) {}
-    try {
-      var rd = await withTimeout(fetch(u, { cache: 'no-store' }), ms);
-      if (rd && rd.ok) { var td = await withTimeout(rd.text(), ms); if (td && td.length > 40 && !cfChallenge(td)) return td; }
-    } catch (e) {}
-    var ra = await withTimeout(fetch('https://api.allorigins.win/raw?url=' + enc(u), { cache: 'no-store' }), ms);
-    if (!ra.ok) throw new Error('HTTP ' + ra.status);
-    return await withTimeout(ra.text(), ms);
+    if (serverUp) {
+      /* Retry the public mirror through the same proxy instead of letting the
+         renderer issue a cross-origin request that the browser will refuse. */
+      try {
+        var B1 = await base();
+        var mirror = 'https://api.allorigins.win/raw?url=' + enc(u);
+        var rp1 = await withTimeout(fetch(B1 + '/page?url=' + enc(mirror), { cache: 'no-store' }), ms);
+        if (rp1 && rp1.ok) {
+          var tp1 = await withTimeout(rp1.text(), ms);
+          if (tp1 && tp1.length > 40 && tp1.indexOf('PROXY_ERROR') !== 0 && !cfChallenge(tp1)) return tp1;
+        }
+      } catch (e) {}
+      throw new Error('proxy failed');
+    }
+    /* No local server (file:// dev mode): direct fetch is the only option. */
+    var rd = await withTimeout(fetch(u, { cache: 'no-store' }), ms);
+    if (!rd.ok) throw new Error('HTTP ' + rd.status);
+    return await withTimeout(rd.text(), ms);
   }
 
   async function fetchJSON(u, ms) {
@@ -1227,3 +1246,4 @@
   SC.imgAlt = imgAlt;
   window.SC = SC;
 })();
+

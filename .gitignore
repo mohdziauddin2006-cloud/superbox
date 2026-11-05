@@ -16,6 +16,7 @@ _archive/
 # Signing secrets — never commit
 android/superbox.keystore
 android/build.local.ps1
+android/src/com/superbox/mobile/BuildSecrets.java
 *.keystore
 *.jks
 .env

@@ -7,6 +7,33 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>SuperBox</title>
+<script>
+window.__SB_TOKEN__ = "__SB_TOKEN_VALUE__";
+(function () {
+  var raw = window.fetch ? window.fetch.bind(window) : null;
+  if (!raw) return;
+  var guarded = /^\/(?:api\/|page(?:\?|$)|extract(?:\?|$)|tmdb\/|img(?:\?|$)|stream(?:\?|$)|hls(?:\?|$)|hlsseg(?:\?|$)|dash(?:\?|$)|dashseg(?:\?|$))/;
+  function sign(u) {
+    var abs, clean = u.split("#")[0];
+    try { abs = new URL(clean, location.href); } catch (e) { return u; }
+    if (abs.origin !== location.origin) return u;
+    if (!guarded.test(abs.pathname + abs.search)) return u;
+    if (/[?&]t=/.test(clean)) return u;
+    return clean + (clean.indexOf("?") >= 0 ? "&" : "?") + "t=" + encodeURIComponent(window.__SB_TOKEN__);
+  }
+  window.fetch = function (input, init) {
+    try {
+      var u = typeof input === "string" ? input : ((input && input.url) || "");
+      var next = u ? sign(u) : u;
+      if (next !== u) {
+        if (typeof input === "string") input = next;
+        else if (window.Request) input = new Request(next, input);
+      }
+    } catch (e) {}
+    return raw(input, init);
+  };
+})();
+</script>
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
@@ -20,9 +47,6 @@
 
 <div id="app" class="app">
   <header id="topbar" class="topbar">
-    <button id="menuBtn" class="icon-btn menu-btn" aria-label="Browse all libraries">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"></path></svg>
-    </button>
     <button id="brand" class="brand" aria-label="SuperBox home">
       <span class="brand-mark">S</span>
       <span class="brand-word">SUPER<span>BOX</span></span>
@@ -148,6 +172,6 @@
 <script src="/sources.js"></script>
 <script src="/libraries.js"></script>
 <script src="/app.js"></script>
-<script src="/vault.js"></script>
+<script src="/library.js"></script>
 </body>
 </html>

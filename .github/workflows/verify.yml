@@ -18,7 +18,7 @@ jobs:
       - name: Check JavaScript syntax
         run: |
           node --check android/assets/app.js
-          node --check android/assets/vault.js
+          node --check android/assets/library.js
           node --check android/assets/sources.js
           node --check android/assets/libraries.js
           node --check desktop/main.js

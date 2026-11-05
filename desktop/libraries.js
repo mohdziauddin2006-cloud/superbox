@@ -1,4 +1,4 @@
-/* libraries.js - SuperBox Vault custom-library scrapers (data in, items out).
+/* libraries.js - SuperBox unified-library scrapers (data in, items out).
    ---------------------------------------------------------------------------
    Every function returns plain item arrays; the renderer turns them into cards.
    Fetch strategy for any URL: Chromium/direct fetch first (it reaches hosts
@@ -58,7 +58,12 @@
      only real interstitial markers count - a false positive here throws away
      a perfectly good direct fetch and cascades into the slow fallbacks. */
   function cfChallenge(t) {
-    return /just a moment|enable javascript and cookies|checking your browser|cf-chl|cf_chl_opt|ddos protection|challenge-platform\/h\//i.test(String(t).slice(0, 4000));
+    /* Cloudflare interstitials are tiny. Big pages legitimately contain
+       "enable javascript and cookies" inside <noscript>, so a large body can
+       never be an interstitial. */
+    var s = String(t || '');
+    if (s.length > 60000) return false;
+    return /just a moment|enable javascript and cookies|checking your browser|cf-chl|cf_chl_opt|ddos protection|challenge-platform\/h\//i.test(s.slice(0, 4000));
   }
   async function fetchText(u, ms) {
     ms = ms || 12000;

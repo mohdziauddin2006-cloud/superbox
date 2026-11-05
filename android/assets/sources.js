@@ -1,4 +1,4 @@
-/* sources.js - the SuperBox Vault data catalog v4 (pure data, no DOM).
+/* sources.js - the SuperBox unified-library data catalog v4 (pure data, no DOM).
    ---------------------------------------------------------------------------
    Extracted and cleaned from the reference build:
      - TMDB/Bollywood provider ladder (dead hosts purged: VidBinge invalid-cert,
@@ -428,7 +428,7 @@
      exactly ONCE. The `if (window.ZAI) return;` guard above already makes
      this whole file a no-op on any re-evaluation; this pass additionally
      collapses any row that was somehow pushed twice, so a category can never
-     duplicate in the vault UI no matter how the tables above evolve.
+     duplicate in the library UI no matter how the tables above evolve.
 
      A row's identity is its kind PLUS its exact source target (query / path /
      url / tmdb id, with order, genre, page count and mirror key) PLUS its
@@ -464,7 +464,6 @@
   })();
 
   window.ZAI = {
-    TMDB_KEY: '3104601db7b49ab8140edd482412445a',
     PROVIDERS: PROVIDERS,
     LANGS: LANGS,
     TMDB_ROWS: TMDB_ROWS,
@@ -480,3 +479,4 @@
     LIVE: LIVE
   };
 })();
+

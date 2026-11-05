@@ -1,7 +1,7 @@
 # SuperBox for Windows
 
 The desktop edition: Electron shell, local proxy, native playback, and the full
-Spotlight + Vault catalogue.
+Spotlight + unified library catalogue.
 
 - **Targets:** Windows 10/11 x64 — NSIS installer and portable EXE
 - **Electron:** 44.7.0
@@ -30,8 +30,8 @@ main.js       Electron main process and window
 preload.js    the narrow bridge exposed to the renderer
 renderer.js   the app UI and catalogue views
 srv2.js       loopback proxy, catalogue resolver and stream extractor
-sources.js    SuperBox Vault catalogue data
-libraries.js  SuperBox Vault scrapers
+sources.js    library catalogue data
+libraries.js  library scrapers
 styles.css    desktop visual system
 hls.min.js    vendored HLS playback support
 ```

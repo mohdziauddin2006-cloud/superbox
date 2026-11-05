@@ -34,8 +34,14 @@
     lastPlayed: null,
     quality: 0,
     autoplay: true,
-    speed: 1
+    speed: 1,
+    searchToken: 0
   };
+
+  var hlsEngine = null;
+  var dashEngine = null;
+  var scriptPromises = {};
+  var HOME_KEY = "sb.home.v2";
 
   var view = document.getElementById("view");
   var detail = document.getElementById("detail");
@@ -91,9 +97,31 @@
   }
   function imgUrl(u) {
     if (!u) return "";
-    return "/img?u=" + encodeURIComponent(u).replace(/'/g, "%27").replace(/\)/g, "%29");
+    return withToken("/img?u=" + encodeURIComponent(u).replace(/'/g, "%27").replace(/\)/g, "%29"));
+  }
+  function sbToken() {
+    try { return window.__SB_TOKEN__ || ""; } catch (e) { return ""; }
+  }
+  function withToken(u) {
+    if (!u || !sbToken()) return u;
+    return u + (u.indexOf("?") >= 0 ? "&" : "?") + "t=" + enc(sbToken());
   }
   function cssUrl(u) { return u ? "url('" + imgUrl(u) + "')" : "none"; }
+
+  /* Transient image failures are common while the disk cache warms up (the
+     first /img request fetches from a slow CDN). Retry a few times before
+     giving up so cards don't stay stuck on their initials placeholder. */
+  window.SBIMG = function (el) {
+    if (!el) return;
+    var n = parseInt(el.getAttribute("data-retry") || "0", 10) || 0;
+    if (n >= 3) { el.remove(); return; }
+    el.setAttribute("data-retry", String(n + 1));
+    var src = el.getAttribute("src") || "";
+    if (!src) { el.remove(); return; }
+    setTimeout(function () {
+      el.src = src + (src.indexOf("?") >= 0 ? "&" : "?") + "r=" + (n + 1);
+    }, 500 + n * 1200);
+  };
   function detailUrl(dp) { return "https://movieboxph.org/movies/" + String(dp || "").replace(/^\/+/, ""); }
   function fmtTime(t) {
     t = Number(t);
@@ -212,21 +240,65 @@
     return null;
   }
 
+  function readHomeSnapshot() {
+    try {
+      var raw = localStorage.getItem(HOME_KEY);
+      if (!raw) return null;
+      var snap = JSON.parse(raw);
+      if (!snap || !snap.data || !snap.data.operatingList) return null;
+      return snap;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function saveHomeSnapshot() {
+    if (!S.home) return;
+    try {
+      localStorage.setItem(HOME_KEY, JSON.stringify({ at: S.homeAt, data: S.home }));
+    } catch (e) {}
+  }
+
   async function loadHome(force) {
+    if (!force && !S.home) {
+      var snap = readHomeSnapshot();
+      if (snap) {
+        S.home = snap.data;
+        S.homeAt = num(snap.at, 0);
+        buildHome();
+      }
+    }
     if (!force && S.home && Date.now() - S.homeAt < 300000) return S.home;
     if (S.homePromise) return S.homePromise;
+    var hadPaint = !!S.home;
     S.homePromise = (async function () {
       var j = await api("home");
       if (!j || !j.data || !j.data.operatingList) throw new Error("Catalogue unavailable");
       S.home = j.data;
       S.homeAt = Date.now();
       buildHome();
+      saveHomeSnapshot();
       return S.home;
     })();
+    var refreshing = S.homePromise;
+    if (hadPaint && !force) {
+      // Instant paint from the local snapshot, then quietly refresh.
+      refreshing.then(function () {
+        if (S.homePromise === refreshing) S.homePromise = null;
+        if (S.tab === "home" && window.scrollY < 80) {
+          view.innerHTML = homeMarkup();
+          startHero();
+          paintLibRows("home");
+        }
+      }).catch(function () {
+        if (S.homePromise === refreshing) S.homePromise = null;
+      });
+      return S.home;
+    }
     try {
-      return await S.homePromise;
+      return await refreshing;
     } finally {
-      S.homePromise = null;
+      if (S.homePromise === refreshing) S.homePromise = null;
     }
   }
 
@@ -320,7 +392,7 @@
     return '<button class="card" data-id="' + esc(it.id) + '" aria-label="' + esc(it.t) + '">' +
       '<div class="card-poster">' +
       '<span class="ph">' + esc(initials(it.t)) + "</span>" +
-      (it.poster ? '<img src="' + imgUrl(it.poster) + '" alt="' + esc(it.t) + '" loading="lazy" onerror="this.remove()">' : "") +
+      (it.poster ? '<img src="' + imgUrl(it.poster) + '" alt="' + esc(it.t) + '" loading="lazy" decoding="async" onerror="SBIMG(this)">' : "") +
       '<span class="card-tag' + gold + '">' + tag + "</span>" +
       (it.rating ? '<span class="card-rate">★ ' + esc(it.rating) + "</span>" : "") +
       "</div>" +
@@ -382,7 +454,9 @@
       ["Movies", "movies"],
       ["Series", "series"],
       ["Anime", "anime"],
-      ["Cinema", "cinema"]
+      ["Cinema", "cinema"],
+      ["Live TV", "live"],
+      ["18+", "adult"]
     ].map(function (c, i) {
       return '<button class="chip' + (i === 0 ? " on" : "") + '" data-go="' + c[1] + '">' + c[0] + "</button>";
     }).join("");
@@ -398,22 +472,35 @@
     return heroMarkup() +
       '<div class="chips" id="homeChips">' + chips + "</div>" +
       (rowsHtml || '<div class="empty"><b>No catalogue rows</b>Pull to refresh from the Me tab.</div>') +
-      '<div class="footer"><div class="f-mark">SUPERBOX</div><p>Ad-free movies, series and anime. No account. No trackers.</p></div>';
+      '<div id="libHomeRows" class="lib-rows"></div>' +
+      '<div class="footer"><div class="f-mark">SUPERBOX</div><p>Ad-free movies, series and anime. No account. No trackers.</p>' +
+      '<button class="footer-link" data-lib-sources>Library sources</button></div>';
   }
 
   function renderHome() {
     clearInterval(S.heroTimer);
-    view.innerHTML = skeletonHome();
+    if (!S.home && S.homeRows.length === 0) view.innerHTML = skeletonHome();
     loadHome().then(function () {
       if (S.tab !== "home") return;
-      view.innerHTML = homeMarkup();
-      startHero();
+      if (!document.getElementById("libHomeRows") || !document.getElementById("heroTrack")) {
+        view.innerHTML = homeMarkup();
+        startHero();
+      }
+      paintLibRows("home");
       removeBoot();
     }).catch(function () {
       if (S.tab !== "home") return;
       view.innerHTML = errorView("Catalogue unavailable", "SuperBox could not reach the catalogue. Check the connection and try again.");
+      paintLibRows("home");
       removeBoot();
     });
+  }
+
+  function paintLibRows(tab) {
+    var host = document.getElementById(tab === "home" ? "libHomeRows" : "libTabRows");
+    if (host && window.LIB && window.LIB.appendRows) {
+      try { window.LIB.appendRows(host, tab); } catch (e) {}
+    }
   }
 
   function startHero() {
@@ -511,10 +598,12 @@
     }).join("");
     return '<div class="page-head"><div class="page-kicker">SuperBox library</div>' +
       '<h1 class="page-title">' + titles[tab] + "</h1>" +
-      '<div class="page-sub" id="gridCount">' + cat.items.length + " titles · Ad-free</div></div>" +
+      '<div class="page-sub" id="gridCount">' + cat.items.length + " titles · Ad-free</div>" +
+      '<div class="lib-links"><button class="chip" data-lib-live>Live TV</button><button class="chip" data-lib-adult>18+</button><button class="chip" data-lib-sources>Sources</button></div></div>' +
       '<div class="chips" id="catChips">' + chips + "</div>" +
       '<div class="grid" id="gridWrap">' + (cat.items.length ? cards(cat.items) : "") + "</div>" +
-      (!cat.items.length ? '<div class="empty"><b>Nothing here yet</b>Try another category.</div>' : "");
+      (!cat.items.length ? '<div class="empty"><b>Nothing here yet</b>Try another category.</div>' : "") +
+      '<div id="libTabRows" class="lib-rows"></div>';
   }
 
   function renderLibrary(tab) {
@@ -522,15 +611,18 @@
     view.innerHTML = '<div class="page-head"><div class="sk" style="width:105px;height:10px;margin-bottom:10px"></div><div class="sk" style="width:190px;height:31px;border-radius:9px"></div></div>' +
       '<div class="chips"><span class="sk" style="width:62px;height:32px;border-radius:999px"></span><span class="sk" style="width:90px;height:32px;border-radius:999px"></span><span class="sk" style="width:76px;height:32px;border-radius:999px"></span></div>' +
       '<div class="grid">' + Array(9).join('<div class="sk sk-poster"></div>') + "</div>";
+    paintLibRows(tab);
     loadHome().then(function () {
       if (S.tab !== tab) return;
       var data = buildTabData(tab);
       S.tabData[tab] = data;
       view.innerHTML = libraryMarkup(tab, data);
+      paintLibRows(tab);
       removeBoot();
     }).catch(function () {
       if (S.tab !== tab) return;
       view.innerHTML = errorView("Library unavailable", "The catalogue could not be loaded.");
+      paintLibRows(tab);
       removeBoot();
     });
   }
@@ -545,7 +637,7 @@
 
   function renderMe() {
     clearInterval(S.heroTimer);
-    var version = "1.0.0";
+    var version = "1.1.0";
     try { if (window.SBAndroid && window.SBAndroid.version) version = window.SBAndroid.version(); } catch (e) {}
     view.innerHTML =
       '<div class="page-head" style="padding-top:14px"><div class="page-kicker">Your space</div><h1 class="page-title">Me</h1></div>' +
@@ -674,7 +766,7 @@
         var av = mediaUrl(p.avatarUrl) || mediaUrl(p.avatar) || mediaUrl(p.image);
         var nm = p.name || p.staffName || p.title || "";
         var role = p.character || p.role || p.characterName || "";
-        return '<div class="person"><div class="av">' + (av ? '<img src="' + imgUrl(av) + '" alt="' + esc(nm) + '" loading="lazy" onerror="this.remove()">' : esc(initials(nm))) + "</div>" +
+        return '<div class="person"><div class="av">' + (av ? '<img src="' + imgUrl(av) + '" alt="' + esc(nm) + '" loading="lazy" onerror="SBIMG(this)">' : esc(initials(nm))) + "</div>" +
           '<div class="nm">' + esc(nm) + "</div>" + (role ? '<div class="role">' + esc(role) + "</div>" : "") + "</div>";
       }).join("") + "</div></div>" : "";
 
@@ -682,7 +774,7 @@
       '<div class="detail-hero" style="background-image:' + cssUrl(backdrop) + '"></div>' +
       '<div class="detail-body">' +
       '<div class="detail-top"><div class="detail-poster"><span class="ph">' + esc(initials(title)) + "</span>" +
-      (poster ? '<img src="' + imgUrl(poster) + '" alt="' + esc(title) + '" onerror="this.remove()">' : "") +
+      (poster ? '<img src="' + imgUrl(poster) + '" alt="' + esc(title) + '" onerror="SBIMG(this)">' : "") +
       "</div><div class=\"detail-head\"><div class=\"detail-type\">" + (data.isSeries ? "Series" : "Movie") + "</div>" +
       '<h1 class="detail-title">' + esc(title) + "</h1>" +
       '<div class="detail-meta">' + metaChips(s, [data.isSeries ? "Ad-free stream" : "Ad-free"]) + "</div>" +
@@ -761,8 +853,78 @@
   function qualityLabel(q) {
     if (!q) return "Auto";
     if (q.height) return q.height + "p";
+    if (/dash/i.test(q.format || "")) return "DASH";
     if (/hls/i.test(q.format || "")) return "HLS";
     return "Auto";
+  }
+
+  function streamFormat(q) {
+    var f = String((q && q.format) || "").toLowerCase();
+    var u = String((q && q.url) || "");
+    if (f.indexOf("dash") >= 0 || /\.mpd(?:[?#]|$)/i.test(u)) return "dash";
+    if (f.indexOf("hls") >= 0 || f.indexOf("m3u8") >= 0 || /\.m3u8(?:[?#]|$)/i.test(u)) return "hls";
+    return "mp4";
+  }
+
+  function loadScriptOnce(src) {
+    if (scriptPromises[src]) return scriptPromises[src];
+    scriptPromises[src] = new Promise(function (resolve, reject) {
+      var s = document.createElement("script");
+      s.src = src;
+      s.async = true;
+      s.onload = function () { resolve(); };
+      s.onerror = function () { scriptPromises[src] = null; reject(new Error("engine " + src)); };
+      document.head.appendChild(s);
+    });
+    return scriptPromises[src];
+  }
+
+  function ensureHls() {
+    if (window.Hls && window.Hls.isSupported && window.Hls.isSupported()) return Promise.resolve();
+    if (window.Hls) return Promise.resolve();
+    return loadScriptOnce("/hls.min.js");
+  }
+
+  function ensureDash() {
+    if (window.dashjs) return Promise.resolve();
+    return loadScriptOnce("/dash.all.min.js");
+  }
+
+  function destroyEngines() {
+    if (hlsEngine) {
+      try { hlsEngine.destroy(); } catch (e) {}
+      hlsEngine = null;
+    }
+    if (dashEngine) {
+      try { dashEngine.reset(); } catch (e) {}
+      dashEngine = null;
+    }
+  }
+
+  function engineUrl(format, q, ref) {
+    var path = format === "hls" ? "/hls" : (format === "dash" ? "/dash" : "/stream");
+    return withToken(path + "?url=" + enc(q.url) + "&ref=" + enc(ref || ""));
+  }
+
+  function tryNextQuality(reason) {
+    var pb = S.playback;
+    if (!pb) return false;
+    var cur = pb.quality;
+    if (cur && !pb.tried[cur.id]) pb.tried[cur.id] = 1;
+    var next = (pb.qualities || []).filter(function (q) {
+      return q && q.id !== (cur && cur.id) && !pb.tried[q.id];
+    })[0];
+    if (!next && pb.failCount === 0) {
+      next = (pb.qualities || []).filter(function (q) { return q && q.id !== (cur && cur.id); })[0];
+    }
+    if (!next) return false;
+    pb.failCount = (pb.failCount || 0) + 1;
+    if (pb.failCount > 6) return false;
+    pb.quality = next;
+    toast(reason || ("Trying " + qualityLabel(next)));
+    updatePlayerLabels();
+    loadStream(num(video.currentTime, 0), true);
+    return true;
   }
 
   function qualityList(d) {
@@ -772,13 +934,13 @@
       if (typeof x === "string") {
         arr.push({
           id: x, url: x, height: 0,
-          format: /\.m3u8/i.test(x) ? "HLS" : (fallbackFormat || "MP4"),
+          format: /\.m3u8/i.test(x) ? "HLS" : (/\.mpd/i.test(x) ? "DASH" : (fallbackFormat || "MP4")),
           size: 0, duration: 0
         });
         return;
       }
       if (!x.url || x.vipLocked) return;
-      var format = String(x.format || fallbackFormat || (/\.m3u8/i.test(x.url) ? "HLS" : "MP4")).toUpperCase();
+      var format = String(x.format || fallbackFormat || (/\.mpd/i.test(x.url) ? "DASH" : (/\.m3u8/i.test(x.url) ? "HLS" : "MP4"))).toUpperCase();
       var raw = String(x.resolutions || x.resolution || x.height || "").split(",")[0];
       var h = parseInt(raw, 10);
       arr.push({
@@ -792,12 +954,8 @@
       });
     }
     (d.streams || []).forEach(function (x) { push(x, "MP4"); });
-    // WebView plays progressive MP4 natively but has no HLS/DASH engine.
-    // HLS is only used as a last resort when no MP4 ladder was returned.
-    if (!arr.length) {
-      (d.hls || []).forEach(function (x) { push(x, "HLS"); });
-      (d.dash || []).forEach(function (x) { push(x, "DASH"); });
-    }
+    (d.hls || []).forEach(function (x) { push(x, "HLS"); });
+    (d.dash || []).forEach(function (x) { push(x, "DASH"); });
     var seen = {};
     arr = arr.filter(function (q) {
       if (!q.url || seen[q.url]) return false;
@@ -946,23 +1104,128 @@
     }
     var q = pb.quality;
     var ref = pb.waRef || (pb.subject ? detailUrl((pb.audio && pb.audio.detailPath) || pb.subject.detailPath) : "");
-    var isHls = /hls/i.test(q.format || "") || /\.m3u8(?:[?#]|$)/i.test(q.url);
-    var src = (isHls ? "/hls?url=" : "/stream?url=") + enc(q.url) + "&ref=" + enc(ref);
+    var format = streamFormat(q);
+    var src = engineUrl(format, q, ref);
     pb.streamSrc = src;
+    pb.format = format;
     pb.pendingSeek = num(at, 0);
     pb.wantPlay = wantPlay !== false;
     pb.failCount = pb.failCount || 0;
+    pb._mediaFix = 0;
+    pb._netFix = 0;
+    pb._dashFix = 0;
     hidePlayerError();
     showSpinner(true);
     updatePlayIcon();
     updatePlayerLabels();
+    destroyEngines();
+
+    function nativePlay() {
+      try {
+        video.src = src;
+        video.load();
+      } catch (e) {
+        showPlayerError("The player could not open this stream.");
+      }
+    }
+
+    function failed(msg) {
+      if (S.playback !== pb) return;
+      if (!tryNextQuality(msg || "This source failed — trying another")) {
+        showPlayerError("This stream could not be played. Try another quality or episode.");
+      }
+    }
+
     try {
       video.pause();
-      video.src = src;
+      video.removeAttribute("src");
       video.load();
-    } catch (e) {
-      showPlayerError("The player could not open this stream.");
+    } catch (e) {}
+
+    if (format === "mp4") { nativePlay(); return; }
+
+    if (format === "hls") {
+      var nativeHls = video.canPlayType("application/vnd.apple.mpegurl");
+      if (!(window.Hls && window.Hls.isSupported()) && (nativeHls === "probably" || nativeHls === "maybe")) {
+        nativePlay();
+        return;
+      }
+      ensureHls().then(function () {
+        if (S.playback !== pb) return;
+        if (!window.Hls || !window.Hls.isSupported()) { nativePlay(); return; }
+        try {
+          hlsEngine = new window.Hls({
+            debug: false,
+            enableWorker: true,
+            lowLatencyMode: false,
+            backBufferLength: 60,
+            maxBufferLength: 40,
+            maxMaxBufferLength: 120,
+            manifestLoadingTimeOut: 20000,
+            manifestLoadingMaxRetry: 4,
+            levelLoadingMaxRetry: 4,
+            fragLoadingMaxRetry: 6,
+            startLevel: -1,
+            capLevelToPlayerSize: true,
+            testBandwidth: true
+          });
+          hlsEngine.on(window.Hls.Events.MANIFEST_PARSED, function () {
+            if (S.playback !== pb) return;
+            showSpinner(false);
+            if (pb.wantPlay) tryPlay();
+          });
+          hlsEngine.on(window.Hls.Events.ERROR, function (evt, data) {
+            if (S.playback !== pb || !data || !data.fatal) return;
+            var type = String(data.type || "");
+            if (type.indexOf("media") >= 0 && !pb._mediaFix) {
+              pb._mediaFix = 1;
+              try { hlsEngine.recoverMediaError(); return; } catch (e) {}
+            }
+            if (type.indexOf("network") >= 0 && !pb._netFix) {
+              pb._netFix = 1;
+              try { hlsEngine.startLoad(); return; } catch (e) {}
+            }
+            failed("This stream stopped responding — trying another");
+          });
+          hlsEngine.attachMedia(video);
+          hlsEngine.loadSource(src);
+        } catch (e) {
+          failed("The HLS engine could not start");
+        }
+      }).catch(function () {
+        if (nativeHls === "probably" || nativeHls === "maybe") nativePlay();
+        else failed("The HLS engine could not load");
+      });
+      return;
     }
+
+    ensureDash().then(function () {
+      if (S.playback !== pb) return;
+      if (!window.dashjs) { failed("The DASH engine could not load"); return; }
+      try {
+        dashEngine = window.dashjs.MediaPlayer().create();
+        dashEngine.updateSettings({
+          streaming: {
+            abr: { initialBitrate: { audio: -1, video: -1 }, autoSwitchBitrate: { audio: true, video: true } },
+            buffer: { fastSwitchEnabled: true, stableBufferTime: 20, bufferTimeAtTopQuality: 30 },
+            delay: { liveDelay: 8 }
+          }
+        });
+        dashEngine.on("error", function () {
+          if (S.playback !== pb) return;
+          if (!pb._dashFix) {
+            pb._dashFix = 1;
+            try { dashEngine.reset(); dashEngine.initialize(video, src, pb.wantPlay); return; } catch (e) {}
+          }
+          failed("This DASH stream failed — trying another");
+        });
+        dashEngine.initialize(video, src, pb.wantPlay);
+      } catch (e) {
+        failed("The DASH engine could not start");
+      }
+    }).catch(function () {
+      failed("The DASH engine could not load");
+    });
   }
 
   function showPlayerError(msg) {
@@ -1072,6 +1335,7 @@
     S.playerOpen = false;
     clearTimeout(S.autoNextTimer);
     clearTimeout(S.controlsTimer);
+    destroyEngines();
     try {
       video.pause();
       video.removeAttribute("src");
@@ -1091,14 +1355,14 @@
     } catch (e) {}
   }
 
-  /* Native playback for a Vault stream that is already a real media
-     URL (direct MP4 / HLS). The SuperBox player surface and gestures are
+  /* Native/engine playback for a stream that is already a real media URL
+     (direct MP4 / HLS / DASH). The SuperBox player surface and gestures are
      reused, so touch controls, speed, rotate and seek behave identically. */
   function playDirect(url, title, opts) {
     opts = opts || {};
     if (!url) { toast("No playable stream was returned"); return; }
-    var hls = !!opts.hls || /\.m3u8(?:[?#]|$)/i.test(url);
-    var q = { id: "wa", url: url, format: hls ? "hls" : "mp4", height: num(opts.height, 0) };
+    var fmt = opts.format || (/\.mpd(?:[?#]|$)/i.test(url) ? "dash" : (/\.m3u8(?:[?#]|$)/i.test(url) ? "hls" : "mp4"));
+    var q = { id: "wa", url: url, format: fmt, height: num(opts.height, 0) };
     var pb = {
       subject: { detailPath: "" },
       item: {},
@@ -1426,7 +1690,7 @@
   }
 
   function openAboutSheet() {
-    var version = "1.0.0";
+    var version = "1.1.0";
     try { if (window.SBAndroid && window.SBAndroid.version) version = window.SBAndroid.version(); } catch (e) {}
     var html = '<div class="sheet-title">About SuperBox</div><div class="sheet-sub">Mobile ' + esc(version) + "</div>" +
       '<div style="padding:8px 20px 10px;color:#b6b6c1;font-size:12.5px;line-height:1.7;user-select:text">' +
@@ -1475,6 +1739,8 @@
 
   function renderSearch(q) {
     S.searchQuery = q;
+    S.searchToken++;
+    var token = S.searchToken;
     if (!q) {
       searchResults.innerHTML = "";
       renderSearchHint();
@@ -1493,11 +1759,26 @@
       return num(b.rating, 0) - num(a.rating, 0);
     });
     matches = matches.slice(0, 60);
-    if (!matches.length) {
-      searchResults.innerHTML = '<div class="empty" style="grid-column:1/-1"><b>No results</b>Try a shorter title or a genre like “action”.</div>';
-    } else {
-      searchResults.innerHTML = cards(matches);
-    }
+    var html = matches.length ? cards(matches) :
+      (q.length < 2 ? '<div class="empty" style="grid-column:1/-1"><b>Keep typing</b>Search the whole SuperBox library.</div>' : "");
+    searchResults.innerHTML = html + '<div id="libSearchBlock" class="lib-search-block"></div>';
+    if (q.length < 2 || !window.LIB || !window.LIB.searchAll) return;
+    var block = document.getElementById("libSearchBlock");
+    if (!block) return;
+    block.innerHTML = '<div class="lib-search-head"><i class="lib-spin"></i> Searching the full library…</div>';
+    window.LIB.searchAll(q).then(function (list) {
+      if (token !== S.searchToken || !block.isConnected) return;
+      list = (list || []).slice(0, 60);
+      if (!list.length) {
+        block.innerHTML = matches.length ? "" : '<div class="empty"><b>No results</b>Try a shorter title or a different spelling.</div>';
+        return;
+      }
+      var libCards = window.LIB.cards ? window.LIB.cards(list) : "";
+      block.innerHTML = '<div class="section-head"><h2>From the library <em>' + list.length + '</em></h2></div>' +
+        '<div class="grid">' + libCards + '</div>';
+    }).catch(function () {
+      if (token === S.searchToken && block.isConnected) block.innerHTML = "";
+    });
   }
 
   // ---------------------------------------------------------------- events
@@ -1530,7 +1811,11 @@
     if (go) {
       var g = go.getAttribute("data-go");
       if (g === "movies" || g === "series" || g === "anime") switchTab(g);
-      else {
+      else if (g === "live") {
+        if (window.LIB && window.LIB.openLive) window.LIB.openLive();
+      } else if (g === "adult") {
+        if (window.LIB && window.LIB.openAdult) window.LIB.openAdult();
+      } else {
         var targetTitle = g === "trending" ? "Trending" : "Cinema";
         var idx = -1;
         S.homeRows.forEach(function (row, i) { if (idx < 0 && row.title.toLowerCase().indexOf(targetTitle.toLowerCase()) >= 0) idx = i; });
@@ -1589,7 +1874,7 @@
       } else if (what === "about") {
         openAboutSheet();
       } else if (what === "sources") {
-        if (window.WA && window.WA.openSources) window.WA.openSources();
+        if (window.LIB && window.LIB.openSources) window.LIB.openSources();
         else openAboutSheet();
       } else if (what === "refresh") {
         toast("Refreshing catalogue...");
@@ -1732,32 +2017,12 @@
       showPlayerError("The trailer could not be played.");
       return;
     }
+    if (hlsEngine && pb.format === "hls" && !pb._mediaFix) {
+      pb._mediaFix = 1;
+      try { hlsEngine.recoverMediaError(); return; } catch (e) {}
+    }
     pb.failCount = (pb.failCount || 0) + 1;
-    var cur = pb.quality;
-    var lower = [];
-    (pb.qualities || []).forEach(function (q) {
-      if (!cur || q.id === cur.id) return;
-      if (!pb.tried[q.id] && num(q.height, 0) < num(cur.height, 99999)) lower.push(q);
-    });
-    lower.sort(function (a, b) { return num(b.height, 0) - num(a.height, 0); });
-    if (lower.length && pb.failCount <= 3) {
-      if (cur) pb.tried[cur.id] = 1;
-      pb.quality = lower[0];
-      var at = num(video.currentTime, 0);
-      toast("Switched to " + qualityLabel(pb.quality) + " for smooth playback");
-      updatePlayerLabels();
-      loadStream(at, true);
-      return;
-    }
-    var other = (pb.qualities || []).filter(function (q) { return !cur || q.id !== cur.id; })[0];
-    if (other && pb.failCount <= 3) {
-      if (cur) pb.tried[cur.id] = 1;
-      pb.quality = other;
-      toast("Trying " + qualityLabel(other));
-      updatePlayerLabels();
-      loadStream(0, true);
-      return;
-    }
+    if (pb.failCount <= 6 && tryNextQuality("This quality failed — trying another")) return;
     var code = video.error ? video.error.code : 0;
     var msg = "This stream could not be played.";
     if (code === 2) msg = "The stream stopped responding. Try another quality or episode.";
@@ -1885,8 +2150,7 @@
 
   function switchTab(tab) {
     if (!tab) tab = "home";
-    var isWa = String(tab).indexOf("wa:") === 0;
-    if (!isWa && ["home", "movies", "series", "anime", "me"].indexOf(tab) < 0) tab = "home";
+    if (["home", "movies", "series", "anime", "me"].indexOf(tab) < 0) tab = "home";
     if (S.playerOpen) closePlayer();
     closeSheet();
     if (S.searchOpen) closeSearch(true);
@@ -1899,10 +2163,6 @@
       else b.removeAttribute("aria-current");
     });
     window.scrollTo(0, 0);
-    if (isWa) {
-      if (window.WA) window.WA.render(String(tab).slice(3));
-      return;
-    }
     if (tab === "home") renderHome();
     else if (tab === "me") renderMe();
     else renderLibrary(tab);
@@ -1916,7 +2176,7 @@
   }
 
   window.sbBack = function () {
-    if (window.WA && window.WA.back && window.WA.back()) return true;
+    if (window.LIB && window.LIB.back && window.LIB.back()) return true;
     if (S.sheetOpen) { closeSheet(); return true; }
     if (S.playerOpen) { closePlayer(); return true; }
     if (S.searchOpen) { closeSearch(); return true; }

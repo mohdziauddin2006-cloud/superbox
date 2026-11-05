@@ -11,20 +11,63 @@
     <a href="https://github.com/mohdziauddin2006-cloud/superbox/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/mohdziauddin2006-cloud/superbox/total?style=flat-square&color=ffc105&labelColor=0b0b0f"></a>
     <a href="https://github.com/mohdziauddin2006-cloud/superbox/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/mohdziauddin2006-cloud/superbox?style=flat-square&color=ffc105&labelColor=0b0b0f"></a>
   </p>
-  <p><sub>SPOTLIGHT &nbsp;·&nbsp; SUPERBOX VAULT &nbsp;·&nbsp; NATIVE PLAYER &nbsp;·&nbsp; LIVE TV &nbsp;·&nbsp; ZERO ADS</sub></p>
+  <p>
+    <a href="https://github.com/mohdziauddin2006-cloud/superbox/releases/download/v1.1.0/SuperBox-Setup-1.1.0.exe"><img alt="Download for Windows" src="https://img.shields.io/badge/Download_for_Windows-ffc105?style=for-the-badge&amp;labelColor=0b0b0f&amp;logo=windows&amp;logoColor=0b0b0f"></a>
+    &nbsp;
+    <a href="https://github.com/mohdziauddin2006-cloud/superbox/releases/download/v1.1.0/SuperBox-1.1.0.apk"><img alt="Download the APK" src="https://img.shields.io/badge/Download_APK-ffc105?style=for-the-badge&amp;labelColor=0b0b0f&amp;logo=android&amp;logoColor=0b0b0f"></a>
+  </p>
+  <p><sub>Windows 10/11 x64 &nbsp;·&nbsp; Android 6.0+ &nbsp;·&nbsp; Setup 121.5 MB &nbsp;·&nbsp; Portable 110.3 MB &nbsp;·&nbsp; APK 2.4 MB</sub></p>
+  <p><sub>ONE LIBRARY &nbsp;·&nbsp; NATIVE HLS / DASH / MP4 &nbsp;·&nbsp; LIVE TV &nbsp;·&nbsp; ZERO ADS</sub></p>
 </div>
 
+<p align="center">
+  <a href="#screens">Screens</a> &nbsp;·&nbsp;
+  <a href="#download">Download</a> &nbsp;·&nbsp;
+  <a href="#whats-new-in-110">What's new</a> &nbsp;·&nbsp;
+  <a href="#two-apps-one-library">Features</a> &nbsp;·&nbsp;
+  <a href="#one-library-every-source">Sources</a> &nbsp;·&nbsp;
+  <a href="#build-from-source">Build</a>
+</p>
+
 ---
+
+## Screens
+
+Real captures from the 1.1.0 builds on Android 14 and Windows 11.
+
+<table>
+  <tr>
+    <td align="center" valign="top" width="34%">
+      <img src="docs/screenshots/android-spotlight.png" alt="SuperBox APK home screen" width="280"><br>
+      <sub><b>Android APK</b> · Home</sub>
+    </td>
+    <td align="center" valign="top" width="66%">
+      <img src="docs/screenshots/windows-app.png" alt="SuperBox Windows EXE home screen" width="100%"><br>
+      <sub><b>Windows EXE</b> · Home</sub>
+      <br><br>
+      <img src="docs/screenshots/windows-installer.png" alt="SuperBox Windows Setup — choose install folder" width="360"><br>
+      <sub><b>Windows Setup</b> · install anywhere</sub>
+    </td>
+  </tr>
+</table>
+
+<table>
+  <tr>
+    <td align="center"><img src="docs/screenshots/android-library.png" alt="SuperBox unified library on Android" width="200"><br><sub><b>One Library</b></sub></td>
+    <td align="center"><img src="docs/screenshots/android-live.png" alt="Live TV on Android" width="200"><br><sub><b>Live TV</b></sub></td>
+    <td align="center"><img src="docs/screenshots/android-playback.png" alt="Native playback on Android" width="200"><br><sub><b>Native playback</b></sub></td>
+  </tr>
+</table>
 
 ## Download
 
 | Build | Best for | Size | Get it |
 |---|---|---:|---|
-| **SuperBox Setup** `.exe` | Windows 10/11 x64 — normal wizard, any folder or drive | 120.7 MB | [Download](https://github.com/mohdziauddin2006-cloud/superbox/releases/download/v1.0.0/SuperBox-Setup-1.0.0.exe) |
-| **SuperBox Portable** `.exe` | Windows 10/11 x64 — no install, run from anywhere | 109.6 MB | [Download](https://github.com/mohdziauddin2006-cloud/superbox/releases/download/v1.0.0/SuperBox-Portable-1.0.0.exe) |
-| **SuperBox APK** | Android 6.0+ — universal, every ABI | 145 KB | [Download](https://github.com/mohdziauddin2006-cloud/superbox/releases/download/v1.0.0/SuperBox-1.0.0.apk) |
+| **SuperBox Setup** `.exe` | Windows 10/11 x64 — normal wizard, any folder or drive | 121.5 MB | [Download](https://github.com/mohdziauddin2006-cloud/superbox/releases/download/v1.1.0/SuperBox-Setup-1.1.0.exe) |
+| **SuperBox Portable** `.exe` | Windows 10/11 x64 — no install, run from anywhere | 110.3 MB | [Download](https://github.com/mohdziauddin2006-cloud/superbox/releases/download/v1.1.0/SuperBox-Portable-1.1.0.exe) |
+| **SuperBox APK** | Android 6.0+ — universal, every ABI | 2.4 MB | [Download](https://github.com/mohdziauddin2006-cloud/superbox/releases/download/v1.1.0/SuperBox-1.1.0.apk) |
 
-Everything is attached to the **[v1.0.0 release](https://github.com/mohdziauddin2006-cloud/superbox/releases/tag/v1.0.0)**,
+Everything is attached to the **[v1.1.0 release](https://github.com/mohdziauddin2006-cloud/superbox/releases/tag/v1.1.0)**,
 together with `SHA256SUMS.txt`. Checksums and the signing certificate are
 recorded in [docs/VERIFY.md](docs/VERIFY.md).
 
@@ -35,59 +78,36 @@ recorded in [docs/VERIFY.md](docs/VERIFY.md).
 > **Android:** allow “Install unknown apps” for your browser or file manager,
 > open the APK, and install. Play Protect may offer to scan the sideloaded app.
 
-## Screens
+## What's new in 1.1.0
 
-<table>
-  <tr>
-    <td width="72%"><img src="docs/screenshots/windows-app.png" alt="SuperBox for Windows"></td>
-    <td width="28%"><img src="docs/screenshots/windows-installer.png" alt="SuperBox Setup — choose install folder"></td>
-  </tr>
-  <tr>
-    <td colspan="2" align="center"><sub><b>Windows</b> — full catalogue, native playback, and a wizard that installs wherever you want.</sub></td>
-  </tr>
-</table>
-
-<table>
-  <tr>
-    <td align="center"><img src="docs/screenshots/android-spotlight.png" alt="SuperBox Spotlight on Android" width="210"><br><sub><b>Spotlight</b></sub></td>
-    <td align="center"><img src="docs/screenshots/android-vault.png" alt="SuperBox Vault on Android" width="210"><br><sub><b>The Vault ∞</b></sub></td>
-    <td align="center"><img src="docs/screenshots/android-vault-drawer.png" alt="SuperBox drawer" width="210"><br><sub><b>One brand, two worlds</b></sub></td>
-    <td align="center"><img src="docs/screenshots/android-sources.png" alt="Library sources sheet" width="210"><br><sub><b>Named sources</b></sub></td>
-  </tr>
-</table>
-
-<details>
-<summary><b>More screens — Vault detail and playback</b></summary>
-<br>
-<table>
-  <tr>
-    <td align="center"><img src="docs/screenshots/android-vault-detail.png" alt="Vault detail" width="260"><br><sub>Vault detail with Play now and Sources</sub></td>
-    <td align="center"><img src="docs/screenshots/android-playback.png" alt="Native playback" width="260"><br><sub>Native provider playback, 1080p</sub></td>
-  </tr>
-</table>
-</details>
+> [!NOTE]
+> **1.1.0 is the unification release.** The separate Vault is gone and its
+> catalogue now lives inside the normal Library. HLS/DASH playback is native,
+> MP4 start time dropped from ~45 s to ~9 s, and the new infinity icon ships on
+> both platforms. [Read the release notes →](docs/RELEASE_NOTES_v1.1.0.md)
 
 ## Two apps. One library.
 
-SuperBox is a catalogue browser, not a media host. It brings two catalogues
-together and plays what the sources return.
+SuperBox is a catalogue browser, not a media host. It brings several catalogues
+together into one library and plays what the sources return.
 
 | | |
 |---|---|
 | **Spotlight** | The front page: trending, cinema, series, anime, free-to-watch rows, hero carousel and search. |
-| **SuperBox Vault** | A separate library with ten sections: Movies, Series, Web Series, K-Drama, Anime, Kids, 18+, Cartoons, Live TV and Tube. Its own drawer group, its own hero, its own aura. |
-| **Native player** | Real MP4/HLS streams play in the native SuperBox player with quality, audio, speed, seek, rotation and hardware Back handled. |
+| **One Library** | Every source now lives inside the normal Library. Movies, Series, Anime, Web Series, K-Drama, Kids, 18+, Cartoons, Live TV and Tube appear as rows and filter chips — no separate Vault section. |
+| **Native player** | MP4 plays natively; HLS and DASH use bundled engines with recovery and fallback chains. Quality, audio, speed, seek, rotation and hardware Back are handled. |
 | **Provider ladder** | When a provider shell never delivers media, SuperBox probes, retries once, then advances to the next source. |
 | **Live TV** | Country, news, sports, movies, music and kids channels from public IPTV playlists. |
-| **Sources, named** | A Library sources sheet lists every catalogue behind the Vault — no mystery boxes. |
+| **Sources, named** | A Library sources sheet lists every catalogue behind the app — no mystery boxes. |
 | **Quiet by design** | No account, no ads, no telemetry, no watch history. Only internet and network-state permissions on Android. |
 | **Touch-first** | Five-tab mobile navigation, oversized targets, bottom sheets and a layout built for one hand. |
 
-## The Vault ∞
+## One library, every source
 
-The Vault is deliberately not a sixth bottom tab. It is a separate universe
-inside the same app: a gold-lit drawer group, an infinity hero, and a source
-strip that tells you exactly where the library comes from.
+The old separate **SuperBox Vault** section is gone. Its catalogue, hero rows and
+sources are merged into the Library tabs, so Movies, Series and Anime each mix
+the Spotlight catalogue with the extra library rows. The chips on each tab
+filter the combined set, and search covers both catalogues at once.
 
 | Source | What it powers |
 |---|---|
@@ -97,14 +117,14 @@ strip that tells you exactly where the library comes from.
 | **YouTube** | The ad-free Tube section |
 | **iptv-org · Free-TV** | Live TV channel playlists |
 | **XMaal · KatMovieHD · KDramasMaza · HindiDrama** | Web series, Indian cinema and K-drama |
-| **Eporner · 123av · Rule34 · Hentaicity · Hentai.tv** | The opt-in 18+ Vault |
+| **Eporner · 123av · Rule34 · Hentaicity · Hentai.tv** | The opt-in 18+ filter |
 | **Public embed providers** | Streams that cannot be extracted play in the in-app web player |
 
 SuperBox does not host media. Titles, artwork and streams stay with their
 sources. Availability depends on the source, your region and your network.
 
-> **18+:** the adult Vault is clearly separated. It is intended only for adults
-> who are legally allowed to view such material in their jurisdiction.
+> **18+:** the adult filter is opt-in and clearly labelled. It is intended only
+> for adults who are legally allowed to view such material in their jurisdiction.
 
 ## Install
 
@@ -120,10 +140,11 @@ The Windows build targets x64. Windows 11 on ARM runs it through x64 emulation.
 
 ### Android 6.0+
 
-1. Download **SuperBox-1.0.0.apk**.
+1. Download **SuperBox-1.1.0.apk**.
 2. Allow installs from unknown apps for the browser or file manager you use.
 3. Open the APK and install.
-4. The APK has no native libraries, so it works on ARM, ARM64, x86 and x86_64.
+4. The APK has no native libraries, so the single universal build works on ARM,
+   ARM64, x86 and x86_64.
 
 ## Under the hood
 
@@ -132,17 +153,17 @@ flowchart LR
     UI["Android WebView / Electron renderer"]
     LS["Loopback server<br/>127.0.0.1 only"]
     SPOT["Spotlight catalogue"]
-    VAULT["SuperBox Vault<br/>TMDB · AniList · archive.org · YouTube · IPTV · scrapers"]
-    PLAYER["Native player<br/>MP4 / HLS"]
+    LIB["Unified library<br/>TMDB · AniList · archive.org · YouTube · IPTV · scrapers"]
+    PLAYER["Native player<br/>MP4 / HLS / DASH"]
     WEB["In-app web player<br/>provider shells"]
 
     UI --> LS
     LS --> SPOT
-    LS --> VAULT
+    LS --> LIB
     UI --> PLAYER
     UI --> WEB
-    VAULT -. extracted stream .-> PLAYER
-    VAULT -. unresolved shell .-> WEB
+    LIB -. extracted stream .-> PLAYER
+    LIB -. unresolved shell .-> WEB
 ```
 
 Both apps keep the UI away from CORS and signing problems with a loopback-only
@@ -150,6 +171,10 @@ server. On Android that is `LocalServer.java` (ports 47821–47832); on Windows
 it is `srv2.js` (ports 46901–46903). Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 for the full picture, including the parallel range reader that makes large MP4
 indexes arrive quickly.
+
+On Android, privileged endpoints require a per-session token, first-party
+scripts are obfuscated, and every `.js` asset is stored as AES-256-GCM
+ciphertext and decrypted in memory by the local server.
 
 ## Build from source
 
@@ -177,41 +202,50 @@ and `apksigner`, no Gradle.
 ## Repository map
 
 ```
-android/            Kotlin-free Java shell + WebView UI + Vault assets
-  assets/           app.js, vault.js, sources.js, libraries.js, style.css
+android/            Kotlin-free Java shell + WebView UI + library assets
+  assets/           app.js, library.js, sources.js, libraries.js, style.css
   src/              MainActivity, LocalServer, native player overlay
   res/              launcher icon, strings, theme
 desktop/            Electron app
   main.js           window and lifecycle
   renderer.js       desktop UI and views
   srv2.js           proxy, resolver, stream extractor
-  sources.js        Vault catalogue data
-  libraries.js      Vault scrapers
+  sources.js        library catalogue data
+  libraries.js      library scrapers
 build-resources/    app icons
 docs/               banner, screenshots, architecture, verification
-tools/              CDP smoke checks (development only)
+tools/              asset pipeline, icon generator, CDP smoke checks
 ```
 
 ## Verified, not vibes
 
-The v1.0.0 artifacts were installed and tested, not just compiled:
+The v1.1.0 artifacts were installed and tested, not just compiled:
 
-- Spotlight: **226** cards on Home; Movies **103**, Series **115**, Anime **26**.
-- Vault: **5 rows / 104 cards** on Home; Web Series **9 rows / 193 titles**;
-  Live TV **17 groups / 200 channels**.
-- Vault detail, Library sources and native 1080p playback verified on an
-  Android 14 emulator.
-- Windows installer wizard, custom install folder and installed app verified.
-- APK signature verified with `apksigner`; zero old brand strings in the APK's
-  text assets.
+- Home loads from the local snapshot immediately; cold app start measured
+  **1.39 s** on the Android 14 emulator.
+- Movies tab renders the merged library: **102 titles**, Live TV / 18+ /
+  Sources chips, and library rows from every source.
+- Live TV loads the full India playlist (**845 channels**) and a channel plays
+  in the native player.
+- Poster images retry automatically while the disk cache warms, so cards no
+  longer stay stuck on their initials placeholder.
+- YouTube/library fetches go through the local proxy; the CORS error spam is
+  gone and the page renders without repeated direct requests.
+- MP4 episode playback started in about **9 s** (previously ~45 s) after the
+  first-byte window was reduced; HLS live TV and a 480p episode both played in
+  the native player.
+- Windows installer and portable builds launch, load the catalogue and report
+  version **1.1.0**; the new infinity icon is embedded in both executables.
+- APK signature verified with `apksigner`; `versionCode=2`, `versionName=1.1.0`,
+  one `classes.dex`, no plain `.js` assets.
 
 <details>
 <summary><b>SHA-256 checksums</b></summary>
 
 ```
-SuperBox-Setup-1.0.0.exe      1865CB030E1B8C3B207D03E6DD47D93DC80E23F6C68E7E3E71CE3F0BFCBD6F42
-SuperBox-Portable-1.0.0.exe   2A017D45C16E7DD6D5C921725B3B6827DD230B1EBED36FAC100DBFE0D1739716
-SuperBox-1.0.0.apk            A64E87A4668552FBBFFD3A26A8B50DCD6165C1E5E3728ECB7EF3D59C79971FF6
+SuperBox-Setup-1.1.0.exe      53bb7baf06584e9777c54307af34480fefe2638ee76251c48c440269359c12cc
+SuperBox-Portable-1.1.0.exe   ceea6ff4d7f0a9c7447f25a400313779a6349cf4e51b433938bef390cad14f19
+SuperBox-1.1.0.apk            b9e4ce69a264223f3ee13cda456db01c3c543a25e9fa04b8901a6fd32274d0f4
 ```
 
 APK signing certificate SHA-256:
@@ -224,6 +258,8 @@ Full details: [docs/VERIFY.md](docs/VERIFY.md).
 
 - No account, no ads, no trackers, no watch history.
 - Local proxies bind to `127.0.0.1` and die with the app.
+- Privileged Android endpoints require a token generated for the current
+  process; the token is injected into the page at load time.
 - SuperBox does not host or re-host media. It indexes public catalogues and
   plays streams from third parties; rights remain with their owners.
 - Use SuperBox for personal, lawful access only, and respect the laws and
@@ -243,9 +279,9 @@ third-party catalogues are not covered by that license.
   <p>
     <a href="https://github.com/mohdziauddin2006-cloud/superbox/stargazers"><b>⭐ Star SuperBox</b></a>
     &nbsp;·&nbsp;
-    <a href="https://github.com/mohdziauddin2006-cloud/superbox/releases/latest"><b>Download v1.0.0</b></a>
+    <a href="https://github.com/mohdziauddin2006-cloud/superbox/releases/latest"><b>Download v1.1.0</b></a>
     &nbsp;·&nbsp;
     <a href="CHANGELOG.md"><b>Changelog</b></a>
   </p>
-  <sub>One box. Infinite aura. Built for touch.</sub>
+  <sub>One box. Infinite library. Built for touch.</sub>
 </div>

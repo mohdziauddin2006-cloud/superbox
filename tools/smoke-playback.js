@@ -1,20 +1,21 @@
-/* SuperBox Vault playback smoke test.
-   Opens the first Vault title and presses Play. The stream resolves in the
-   native provider overlay, so verify it with inspect-provider-video.mjs:
+/* SuperBox playback smoke test.
+   Switches to the Movies library tab and opens the first title. The stream
+   resolves in the native provider overlay, so verify it with
+   inspect-provider-video.mjs:
      node tools/cdp-run.mjs 9223 tools/smoke-playback.js
      node tools/inspect-provider-video.mjs 9223
    Press the ✕ in the overlay to return to the app. */
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-SBApp.switchTab('wa:home');
+SBApp.switchTab('movies');
 let t0 = Date.now();
 while (Date.now() - t0 < 60000) {
   await sleep(1200);
-  if (document.querySelectorAll('#view .wa-row .card').length >= 5) break;
+  if (document.querySelectorAll('#view .card').length >= 5) break;
 }
 
-const card = document.querySelector('#view .wa-row .card');
-if (!card) return JSON.stringify({ error: 'no Vault card found' });
+const card = document.querySelector('#view .card');
+if (!card) return JSON.stringify({ error: 'no library card found' });
 const name = card.getAttribute('aria-label') || '';
 card.click();
 

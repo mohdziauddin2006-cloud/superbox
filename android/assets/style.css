@@ -590,25 +590,6 @@ svg { display: block; width: 1em; height: 1em; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
 }
-
-/* ============================================================ SuperBox Vault */
-.menu-btn { margin-right: 2px; }
-.wa-head { padding-bottom: 6px; }
-.wa-searchwrap { padding: 12px 16px 2px; }
-.wa-search {
-  display: flex; align-items: center; gap: 9px;
-  height: 42px; padding: 0 6px 0 13px; border-radius: 12px;
-  background: var(--surface); border: 1px solid var(--line);
-}
-.wa-search svg { width: 17px; height: 17px; color: var(--muted); flex: none; }
-.wa-search input { flex: 1; min-width: 0; background: none; border: 0; outline: 0; color: var(--text); font-size: 14px; }
-.wa-search input::placeholder { color: var(--muted-2); }
-.wa-search button {
-  flex: none; height: 32px; padding: 0 14px; border-radius: 9px;
-  background: var(--gold); color: #15110a; font-size: 12px; font-weight: 800;
-}
-.wa-search-head, .wa-searchhead { padding: 14px 16px 8px; font-size: 13px; color: var(--muted); }
-.wa-searchhead b { color: var(--text); font-size: 15px; }
 .wa-count { color: var(--muted-2); font-size: 10px; font-weight: 600; letter-spacing: .4px; margin-left: 2px; }
 .wa-row { padding-top: 4px; }
 .wa-row .row-track { min-height: 40px; }
@@ -621,57 +602,11 @@ svg { display: block; width: 1em; height: 1em; }
   background: rgba(5,5,8,.82); border: 1px solid rgba(255,255,255,.18);
   color: #fff; font-size: 7.5px; font-weight: 800; letter-spacing: .8px;
 }
-.wa-grid { padding-top: 4px; }
 .wa-pill {
   display: inline-flex; align-items: center; height: 26px; padding: 0 9px;
   border-radius: 999px; background: var(--surface-2); color: var(--muted);
   font-size: 10px; font-weight: 700; letter-spacing: .6px;
 }
-.wa-vaultchips { padding-top: 0; padding-bottom: 4px; overflow-x: auto; flex-wrap: nowrap; }
-.wa-vaultchips .chip { flex: none; }
-
-/* drawer */
-.wa-drawer { position: fixed; inset: 0; z-index: 90; }
-.wa-drawer-back { position: absolute; inset: 0; background: rgba(0,0,0,.6); opacity: 0; transition: opacity .22s ease; }
-.wa-drawer-panel {
-  position: absolute; top: 0; left: 0; bottom: 0; width: min(86vw, 340px);
-  background: #0c0c11; border-right: 1px solid var(--line);
-  transform: translateX(-102%); transition: transform .26s cubic-bezier(.2,.85,.2,1);
-  overflow-y: auto; padding-bottom: 26px;
-}
-.wa-drawer.open .wa-drawer-back { opacity: 1; }
-.wa-drawer.open .wa-drawer-panel { transform: translateX(0); }
-.wa-drawer-head { display: flex; align-items: center; gap: 11px; padding: calc(18px + var(--safe-top)) 18px 16px; }
-.wa-drawer-logo {
-  width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center;
-  background: linear-gradient(145deg, #ffd94f, #ffb300); color: #171207;
-  font-size: 23px; font-weight: 900;
-}
-.wa-drawer-head b { display: block; font-size: 15px; letter-spacing: 1.6px; }
-.wa-drawer-head span { display: block; color: var(--muted); font-size: 10px; letter-spacing: 1px; text-transform: uppercase; margin-top: 2px; }
-.wa-x { margin-left: auto; width: 34px; height: 34px; border-radius: 10px; background: var(--surface); color: var(--muted); font-size: 15px; }
-.wa-drawer-group { padding: 8px 10px 4px; }
-.wa-drawer-title {
-  padding: 8px 10px 6px; color: var(--muted-2);
-  font-size: 10px; font-weight: 800; letter-spacing: 1.6px; text-transform: uppercase;
-}
-.wa-nav {
-  display: flex; align-items: center; gap: 12px; width: 100%;
-  padding: 10px; border-radius: 11px; text-align: left; color: var(--text);
-}
-.wa-nav.on { background: rgba(255,193,5,.1); }
-.wa-nav:active { background: var(--surface); }
-.wa-nav-ic {
-  width: 31px; height: 31px; flex: none; border-radius: 9px;
-  display: grid; place-items: center; background: var(--surface);
-  color: var(--gold); font-size: 14px; font-weight: 800;
-}
-.wa-nav.on .wa-nav-ic { background: var(--gold); color: #171207; }
-.wa-nav-tx { flex: 1; min-width: 0; }
-.wa-nav-tx b { display: block; font-size: 13.5px; font-weight: 700; }
-.wa-nav-tx em { display: block; color: var(--muted-2); font-size: 10.5px; font-style: normal; margin-top: 1px; }
-.wa-nav-arrow { color: var(--muted-2); font-size: 17px; }
-.wa-drawer-foot { padding: 18px 20px 0; color: var(--muted-2); font-size: 10px; letter-spacing: .5px; }
 
 /* live tv */
 .wa-livebar { display: flex; gap: 8px; padding: 6px 16px 12px; }
@@ -768,14 +703,8 @@ body.wa-modal { overflow: hidden; }
   .wad-info h1 { font-size: 34px; }
   .wad-body { padding-left: 30px; padding-right: 30px; }
 }
-.wa-more {
-  display: block; width: calc(100% - 32px); margin: 10px 16px 26px;
-  height: 44px; border-radius: 11px; background: var(--surface);
-  border: 1px solid var(--line-2); color: var(--gold);
-  font-size: 12px; font-weight: 800; letter-spacing: .4px;
-}
 
-/* ==================================================== SuperBox aura & Vault */
+/* ============================================================ SuperBox aura */
 /* One brand, one light source: a warm gold aura that stays behind the mark. */
 .brand { position: relative; }
 .brand::before {
@@ -792,151 +721,6 @@ body.wa-modal { overflow: hidden; }
   border: 1px solid rgba(255,193,5,.22); pointer-events: none;
   animation: auraRing 5.5s ease-in-out infinite;
 }
-
-/* drawer: a dark room with a single warm light */
-.wa-drawer-panel {
-  width: min(88vw, 360px);
-  background:
-    radial-gradient(120% 55% at 0% 0%, rgba(255,193,5,.14), transparent 58%),
-    radial-gradient(90% 55% at 100% 100%, rgba(255,193,5,.05), transparent 62%),
-    linear-gradient(180deg, #0d0d12 0%, #09090c 58%, #08080b 100%);
-  border-right: 1px solid rgba(255,193,5,.16);
-  box-shadow: 34px 0 90px rgba(0,0,0,.65);
-}
-.wa-drawer-head { position: relative; padding: calc(20px + var(--safe-top)) 18px 18px; }
-.wa-drawer-head::after {
-  content: ""; position: absolute; left: 18px; right: 18px; bottom: 0; height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(255,193,5,.34), transparent);
-}
-.wa-drawer-logo {
-  position: relative; width: 46px; height: 46px; border-radius: 14px; font-size: 26px;
-  box-shadow: 0 10px 30px rgba(255,193,5,.3), inset 0 1px 0 rgba(255,255,255,.55);
-}
-.wa-drawer-logo::after {
-  content: ""; position: absolute; inset: -8px; border-radius: 19px;
-  border: 1px solid rgba(255,193,5,.25); pointer-events: none;
-  animation: auraRing 6.5s ease-in-out infinite;
-}
-.wa-drawer-id { min-width: 0; }
-.wa-drawer-id b { font-size: 16px; letter-spacing: 1.9px; }
-.wa-drawer-id span { color: var(--gold-2); opacity: .72; letter-spacing: 1.5px; font-size: 9px; }
-.wa-x { background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.08); }
-
-.wa-drawer-group { padding: 10px 10px 2px; }
-.wa-drawer-title { padding: 8px 10px 7px; }
-.wa-drawer-vaultgroup {
-  position: relative; margin: 8px 10px 4px; padding: 12px 6px 7px;
-  border-radius: 18px; border: 1px solid rgba(255,193,5,.13);
-  background: linear-gradient(180deg, rgba(255,193,5,.065), rgba(255,193,5,.012));
-  box-shadow: inset 0 1px 0 rgba(255,255,255,.035);
-}
-.wa-vault-group { display: flex; align-items: center; gap: 7px; color: var(--gold); padding-top: 2px; letter-spacing: 1.9px; }
-.wa-vault-group .wa-vault-inf {
-  display: inline-grid; place-items: center; width: 18px; height: 18px; flex: none;
-  border-radius: 50%; border: 1px solid rgba(255,193,5,.42);
-  color: var(--gold); font-size: 11px; line-height: 1; letter-spacing: 0;
-  box-shadow: 0 0 12px rgba(255,193,5,.14);
-}
-.wa-vault-sub { padding: 0 10px 9px; color: var(--muted-2); font-size: 10px; letter-spacing: .15px; }
-.wa-drawer-vaultgroup .wa-nav { padding: 9px 10px; }
-.wa-drawer-vaultgroup .wa-nav-ic { background: rgba(255,193,5,.075); color: var(--gold-2); }
-.wa-nav { position: relative; transition: background .18s ease, transform .18s ease; }
-.wa-nav:active { transform: scale(.985); }
-.wa-nav.on {
-  background: linear-gradient(90deg, rgba(255,193,5,.16), rgba(255,193,5,.035));
-  box-shadow: inset 0 0 0 1px rgba(255,193,5,.08);
-}
-.wa-nav.on::before {
-  content: ""; position: absolute; left: 0; top: 9px; bottom: 9px; width: 2.5px;
-  border-radius: 3px; background: var(--gold); box-shadow: 0 0 10px rgba(255,193,5,.7);
-}
-.wa-nav-ic { transition: background .18s ease, color .18s ease, box-shadow .18s ease; }
-.wa-nav.on .wa-nav-ic { box-shadow: 0 0 16px rgba(255,193,5,.24); }
-.wa-src-link {
-  display: flex; align-items: center; gap: 12px; width: 100%; margin-top: 6px;
-  padding: 10px; border-radius: 12px; text-align: left; color: var(--text);
-  background: rgba(5,5,8,.28); border: 1px dashed rgba(255,193,5,.2);
-}
-.wa-src-link:active { background: rgba(255,193,5,.07); }
-.wa-src-link-ic {
-  width: 31px; height: 31px; flex: none; border-radius: 9px; display: grid; place-items: center;
-  color: var(--gold); background: rgba(255,193,5,.09); font-size: 14px; font-weight: 800;
-}
-.wa-src-link .wa-nav-tx em { color: var(--muted-2); }
-.wa-drawer-foot {
-  display: flex; flex-direction: column; gap: 5px;
-  padding: 20px 22px 0; color: var(--muted-2); font-size: 10px;
-}
-.wa-drawer-foot span { color: var(--muted); letter-spacing: .55px; }
-.wa-drawer-foot em { color: var(--muted-2); font-style: normal; font-size: 9.5px; letter-spacing: .2px; }
-
-/* Vault landing: a single lit card, an infinity mark, and the source line */
-.wa-vault-hero {
-  position: relative; overflow: hidden; margin: 10px 12px 8px;
-  padding: 22px 18px 14px; border-radius: 22px;
-  background:
-    radial-gradient(115% 90% at 88% 0%, rgba(255,193,5,.19), transparent 58%),
-    radial-gradient(80% 80% at 0% 100%, rgba(255,193,5,.05), transparent 62%),
-    linear-gradient(160deg, #17151a 0%, #0e0e12 55%, #0a0a0d 100%);
-  border: 1px solid rgba(255,193,5,.16);
-  box-shadow: 0 26px 70px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.055);
-}
-.wa-vault-hero::before {
-  content: "∞"; position: absolute; right: -6px; top: -58px; pointer-events: none;
-  font-size: 190px; line-height: 1; font-weight: 800; letter-spacing: -10px;
-  color: rgba(255,193,5,.045); transform: rotate(-6deg);
-}
-.wa-vault-glow {
-  position: absolute; width: 240px; height: 240px; right: -76px; top: -118px;
-  border-radius: 50%; pointer-events: none;
-  background: radial-gradient(circle, rgba(255,193,5,.22), transparent 68%);
-  filter: blur(12px); animation: vaultBreathe 7s ease-in-out infinite;
-}
-.wa-vault-kicker {
-  position: relative; display: flex; align-items: center; gap: 7px;
-  color: var(--gold); font-size: 10px; font-weight: 800; letter-spacing: 2.2px;
-  text-transform: uppercase;
-}
-.wa-aura-dot {
-  width: 5px; height: 5px; border-radius: 50%; background: var(--gold);
-  box-shadow: 0 0 10px rgba(255,193,5,.9);
-}
-.wa-vault-title {
-  position: relative; margin: 8px 0 0; font-size: 33px; line-height: 1;
-  letter-spacing: -1px; font-weight: 900;
-}
-.wa-vault-inf {
-  display: inline-grid; place-items: center; width: 25px; height: 25px;
-  margin-left: 9px; vertical-align: 7px; border-radius: 50%;
-  border: 1px solid rgba(255,193,5,.35); font-size: 13px;
-  color: var(--gold); opacity: .9; letter-spacing: 0;
-}
-.wa-vault-sub {
-  position: relative; max-width: 292px; margin-top: 8px;
-  color: var(--muted); font-size: 12.5px; line-height: 1.5;
-}
-.wa-srcbar {
-  position: relative; display: flex; align-items: center; gap: 6px;
-  margin-top: 15px; padding-bottom: 1px; overflow-x: auto;
-}
-.wa-srcbar-label {
-  flex: none; padding-right: 2px; color: var(--muted-2);
-  font-size: 8.5px; font-weight: 800; letter-spacing: 1.2px; text-transform: uppercase;
-}
-.wa-srcbar > span:not(.wa-srcbar-label) {
-  flex: none; height: 23px; display: inline-flex; align-items: center; padding: 0 8px;
-  border-radius: 7px; background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.075);
-  color: var(--muted); font-size: 8.5px; font-weight: 700; letter-spacing: .7px; text-transform: uppercase;
-}
-.wa-srcbar button {
-  flex: none; height: 23px; padding: 0 8px; border-radius: 7px;
-  color: var(--gold); font-size: 8.5px; font-weight: 800; letter-spacing: .7px; text-transform: uppercase;
-  border: 1px solid rgba(255,193,5,.28); background: rgba(255,193,5,.06);
-}
-.wa-srcbar button:active { background: rgba(255,193,5,.14); }
-.wa-vault-search { padding: 14px 0 0; }
-.wa-vault-hero .wa-search { background: rgba(5,5,8,.42); border-color: rgba(255,255,255,.1); }
-.wa-vault-hero .wa-search input { font-size: 13px; }
 
 /* sources sheet */
 .wa-src-list { padding: 4px 16px 2px; }
@@ -963,12 +747,33 @@ body.wa-modal { overflow: hidden; }
   0%, 100% { opacity: .35; transform: scale(.96); }
   50% { opacity: .8; transform: scale(1.06); }
 }
-@keyframes vaultBreathe {
-  0%, 100% { opacity: .65; transform: scale(.92); }
-  50% { opacity: 1; transform: scale(1.08); }
+
+/* ---------------------------------------------------------------- unified library */
+.lib-rows { display: flex; flex-direction: column; gap: 6px; }
+.lib-rows .section { margin-top: 18px; }
+.lib-group {
+  display: inline-block; margin-right: 8px; padding: 2px 7px;
+  border: 1px solid rgba(255,193,5,.28); border-radius: 999px;
+  color: #ffc105; font-size: 9px; font-weight: 800;
+  letter-spacing: .12em; text-transform: uppercase; vertical-align: 2px;
 }
-@media (min-width: 620px) {
-  .wa-vault-hero { margin-left: 20px; margin-right: 20px; padding: 28px 26px 18px; }
-  .wa-vault-title { font-size: 40px; }
-  .wa-vault-sub { max-width: 420px; font-size: 14px; }
+.lib-links { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.lib-links .chip { height: 32px; }
+.lib-search-block { grid-column: 1 / -1; min-height: 0; }
+.lib-search-block .grid { padding: 4px 0 8px; }
+.lib-search-head {
+  display: flex; align-items: center; gap: 10px;
+  padding: 22px 2px 10px; color: #8d8d98; font-size: 12.5px;
 }
+.lib-spin {
+  width: 14px; height: 14px; border-radius: 50%;
+  border: 2px solid rgba(255,193,5,.22); border-top-color: #ffc105;
+  animation: libspin .8s linear infinite;
+}
+@keyframes libspin { to { transform: rotate(360deg); } }
+.footer-link {
+  margin-top: 14px; background: transparent; border: 0;
+  color: #777782; font-size: 11px; text-decoration: underline;
+}
+.wa-card .card-poster img { background: #14141a; }
+@media (prefers-reduced-motion: reduce) { .lib-spin { animation: none; } }

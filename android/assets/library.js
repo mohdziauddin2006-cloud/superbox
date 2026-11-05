@@ -1,20 +1,19 @@
-/* vault.js - the SuperBox Vault catalogue layer for the Android app.
+/* library.js - the unified SuperBox library data layer.
    ---------------------------------------------------------------------------
-   The Windows build ships two catalogues: the Spotlight catalogue and the
-   extended Vault library (TMDB/AniList rows, XMaal web series, KatMovieHD,
-   KDramasMaza, archive.org cartoons, the 18+ vault, live TV and the ad-free
-   Tube). This file mounts the Vault in the mobile UI, reusing the packaged
-   sources.js/libraries.js data and scrapers.
-   Streams that resolve to a real MP4/HLS play in the native SuperBox player;
+   Every catalogue lives here: TMDB/AniList rows, XMaal web series,
+   KatMovieHD, KDramasMaza, archive.org cartoons, live TV, the ad-free Tube
+   and the opt-in 18+ section. The app renders these rows inside the normal
+   Home / Movies / Series / Anime library - there is no separate screen.
+   Streams that resolve to a real MP4/HLS/DASH play in the SuperBox player;
    provider shells that cannot be extracted open in the in-app web player. */
 (function () {
   'use strict';
-  if (window.WA) return;
+  if (window.LIB) return;
 
   var App = window.SBApp;
+  var S = (App && App.state) || {};
   var Z = window.ZAI || {};
   var SC = window.SC || {};
-  var S = (App && App.state) || {};
   var $ = function (sel, root) { return (root || document).querySelector(sel); };
   var $$ = function (sel, root) { return Array.prototype.slice.call((root || document).querySelectorAll(sel)); };
   var enc = function (v) { return encodeURIComponent(String(v == null ? '' : v)); };
@@ -23,48 +22,60 @@
   var items = {};
   var seq = 0;
   var st = {
-    section: 'home', sub: 'jav', token: 0, current: null, tmdb: null,
+    sub: 'jav', token: 0, current: null, tmdb: null,
     season: 1, ep: 1, parts: [], partIdx: 0, loading: false
   };
   var liveChs = [];
   var liveGroup = 0;
-  var drawer, detailEl;
+  var detailEl, liveEl;
 
-  var SECTIONS = {
-    home: { t: 'The Vault', s: 'Cinema, series, anime and live TV — one infinite library.', kicker: 'SuperBox Vault' },
-    movie: { t: 'Movies', s: 'Blockbusters, Indian cinema and world films', kicker: 'SuperBox Vault' },
-    tv: { t: 'Series', s: 'Bingeable dramas, sitcoms and short series', kicker: 'SuperBox Vault' },
-    webseries: { t: 'Web Series', s: 'Desi and Indian web series, A-Z', kicker: 'SuperBox Vault' },
-    kdrama: { t: 'K-Drama', s: 'Korean drama, Hindi-dubbed and more', kicker: 'SuperBox Vault' },
-    anime: { t: 'Anime', s: 'Trending, top rated and anime movies', kicker: 'SuperBox Vault' },
-    kids: { t: 'Kids', s: 'Family films, animation and kids TV', kicker: 'SuperBox Vault' },
-    adult: { t: '18+ Vault', s: 'JAV, Eporner, Rule34, MMS, hentai and more', kicker: 'Adults only' },
-    cartoons: { t: 'Cartoons', s: 'Classic animation from archive.org', kicker: 'SuperBox Vault' },
-    livetv: { t: 'Live TV', s: 'Free channels from around the world', kicker: 'SuperBox Vault' },
-    tube: { t: 'Tube', s: 'Ad-free YouTube: music, tech, comedy and more', kicker: 'SuperBox Vault' }
+  var TITLES = {
+    movie: { t: 'Movies', s: 'Blockbusters, Indian cinema and world films' },
+    tv: { t: 'Series', s: 'Bingeable dramas, sitcoms and short series' },
+    webseries: { t: 'Web Series', s: 'Desi and Indian web series, A-Z' },
+    kdrama: { t: 'K-Drama', s: 'Korean drama, Hindi-dubbed and more' },
+    anime: { t: 'Anime', s: 'Trending, top rated and anime movies' },
+    kids: { t: 'Kids', s: 'Family films, animation and kids TV' },
+    cartoons: { t: 'Cartoons', s: 'Classic animation from archive.org' },
+    livetv: { t: 'Live TV', s: 'Free channels from around the world' },
+    tube: { t: 'Tube', s: 'Ad-free YouTube: music, tech, comedy and more' },
+    adult: { t: '18+', s: 'Adults only. Opt in from this screen.' }
   };
 
-  var DRAWER = [
-    { title: 'SuperBox', items: [
-      { id: 'home', label: 'Spotlight', note: 'SuperBox picks', icon: '✦' },
-      { id: 'movies', label: 'Movies', note: 'Cinema', icon: '▤' },
-      { id: 'series', label: 'Series', note: 'Episodic', icon: '▥' },
-      { id: 'anime', label: 'Anime', note: 'Animation', icon: '✧' },
-      { id: 'me', label: 'Me', note: 'Settings', icon: '◉' }
-    ] },
-    { title: 'SuperBox Vault', vault: true, items: [
-      { id: 'wa:home', label: 'Home', note: 'The infinite library', icon: '∞' },
-      { id: 'wa:movie', label: 'Movies', note: 'TMDB', icon: '▤' },
-      { id: 'wa:tv', label: 'Series', note: 'TMDB', icon: '▥' },
-      { id: 'wa:webseries', label: 'Web Series', note: 'XMaal · KatMovieHD', icon: '▦' },
-      { id: 'wa:kdrama', label: 'K-Drama', note: 'KDramasMaza', icon: '◈' },
-      { id: 'wa:kids', label: 'Kids', note: 'Family + animation', icon: '☺' },
-      { id: 'wa:adult', label: '18+', note: 'The vault', icon: '!' },
-      { id: 'wa:cartoons', label: 'Cartoons', note: 'archive.org', icon: '◐' },
-      { id: 'wa:livetv', label: 'Live TV', note: 'iptv-org · Free-TV', icon: '◉' },
-      { id: 'wa:tube', label: 'Tube', note: 'YouTube, ad-free', icon: '▶' }
-    ] }
-  ];
+  /* Every row is tagged with the catalogue group it came from, so the
+     unified Home/library views can show one continuous shelf. */
+  function tagged(sec, rows, group) {
+    return (rows || []).map(function (r) {
+      var o = {};
+      for (var k in r) o[k] = r[k];
+      o.group = group;
+      return o;
+    });
+  }
+
+  function rowsForTab(tab) {
+    var T = Z.TMDB_ROWS || {};
+    if (tab === 'home') {
+      return tagged('home', T.home || [], 'Spotlight')
+        .concat(tagged('webseries', (T.webseries || []).slice(0, 1), 'Web Series'))
+        .concat(tagged('kdrama', (T.kdrama || []).slice(0, 1), 'K-Drama'))
+        .concat(tagged('cartoons', ((Z.ARCHIVE_ROWS || {}).cartoons || []).slice(0, 1), 'Cartoons'))
+        .concat(tagged('tube', (Z.YT_ROWS || []).slice(0, 1), 'Tube'));
+    }
+    if (tab === 'movies') {
+      return tagged('movie', T.movie || [], 'Movies')
+        .concat(tagged('webseries', (T.webseries || []).slice(0, 2), 'Web Series'))
+        .concat(tagged('cartoons', ((Z.ARCHIVE_ROWS || {}).cartoons || []).slice(0, 2), 'Cartoons'))
+        .concat(tagged('tube', (Z.YT_ROWS || []).slice(0, 1), 'Tube'));
+    }
+    if (tab === 'series') {
+      return tagged('tv', T.tv || [], 'Series')
+        .concat(tagged('webseries', (T.webseries || []).slice(0, 2), 'Web Series'))
+        .concat(tagged('kdrama', (T.kdrama || []).slice(0, 2), 'K-Drama'));
+    }
+    if (tab === 'anime') return tagged('anime', T.anime || [], 'Anime');
+    return [];
+  }
 
   // ---------------------------------------------------------------- helpers
   function getJson(url) {
@@ -106,10 +117,10 @@
     items[id] = it;
     var badge = it.badge || (it.kind === 'tmdb' ? 'TMDB' : '');
     var series = it.isSeries || it.parts > 0;
-    return '<button class="card wa-card" data-wa="' + id + '" aria-label="' + esc(it.t) + '">' +
+    return '<button class="card wa-card" data-lib="' + id + '" aria-label="' + esc(it.t) + '">' +
       '<div class="card-poster">' +
       '<span class="ph">' + esc(initials(it.t)) + '</span>' +
-      (it.poster ? '<img src="' + esc(img(it.poster)) + '" alt="' + esc(it.t) + '" loading="lazy" onerror="this.remove()">' : '') +
+      (it.poster ? '<img src="' + esc(img(it.poster)) + '" alt="' + esc(it.t) + '" loading="lazy" decoding="async" onerror="SBIMG(this)">' : '') +
       (badge ? '<span class="card-tag wa-badge">' + esc(badge) + '</span>' : '') +
       (it.rating ? '<span class="card-rate">★ ' + esc(it.rating) + '</span>' : '') +
       (series ? '<span class="wa-series">SERIES</span>' : '') +
@@ -377,36 +388,12 @@
     return [];
   }
 
-  // ---------------------------------------------------------------- section view
-  function headerHtml(sec) {
-    var d = SECTIONS[sec] || SECTIONS.home;
-    var search = '<div class="wa-searchwrap"><div class="wa-search">' +
-      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.2-3.2"></path></svg>' +
-      '<input id="waSearchInput" type="search" autocomplete="off" placeholder="Search in ' + esc(d.t) + '...">' +
-      '<button id="waSearchGo" aria-label="Search">Go</button>' +
-      '</div></div>';
-    if (sec === 'home') {
-      return '<div class="page-head wa-head wa-vault-hero">' +
-        '<div class="wa-vault-glow"></div>' +
-        '<div class="wa-vault-kicker"><span class="wa-aura-dot"></span>SuperBox Vault</div>' +
-        '<h1 class="page-title wa-vault-title">The Vault<span class="wa-vault-inf">∞</span></h1>' +
-        '<div class="page-sub wa-vault-sub">Cinema, series, anime and live TV — one infinite library.</div>' +
-        '<div class="wa-srcbar"><span class="wa-srcbar-label">Sources</span>' +
-        '<span>TMDB</span><span>AniList</span><span>archive.org</span>' +
-        '<button data-wa-sources>All sources</button></div>' +
-        search.replace('wa-searchwrap', 'wa-searchwrap wa-vault-search') +
-        '</div>';
-    }
-    return '<div class="page-head wa-head">' +
-      '<div class="page-kicker">' + esc(d.kicker) + '</div>' +
-      '<h1 class="page-title">' + esc(d.t) + '</h1>' +
-      '<div class="page-sub">' + esc(d.s) + '</div>' +
-      search + '</div>';
-  }
-
-  function rowShell(label, n) {
+  // ---------------------------------------------------------------- rows
+  function rowShell(row, n) {
+    var label = row.t || 'Featured';
+    var group = row.group ? '<span class="lib-group">' + esc(row.group) + '</span>' : '';
     return '<section class="section wa-row" data-row="' + n + '">' +
-      '<div class="section-head"><h2>' + esc(label) + '</h2><span class="wa-count">…</span></div>' +
+      '<div class="section-head"><h2>' + group + esc(label) + '</h2><span class="wa-count">…</span></div>' +
       '<div class="row-track wa-track">' + skeletonCards(5) + '</div></section>';
   }
 
@@ -416,39 +403,11 @@
     return s;
   }
 
-  /* Desktop sections can hold 60 rows (Eporner). A phone only needs the first
-     dozen to feel rich, so paint in batches with an explicit "show more". */
-  var ROW_BATCH = 12;
-  function paintBatched(host, rows, token) {
-    var shown = 0;
-    function more() {
-      var old = document.getElementById('waMoreRows');
-      if (old) old.remove();
-      var next = rows.slice(shown, shown + ROW_BATCH);
-      shown += next.length;
-      if (next.length) paintRows(host, next, token);
-      var left = rows.length - shown;
-      if (left > 0) {
-        var b = document.createElement('button');
-        b.id = 'waMoreRows';
-        b.className = 'wa-more';
-        b.textContent = 'Show more (' + left + ' rows)';
-        b.onclick = more;
-        host.appendChild(b);
-      }
-    }
-    more();
-  }
-
   function paintRows(host, rows, token) {
-    if (!rows.length) {
-      host.innerHTML += '<div class="empty"><b>Nothing here yet</b>This section has no rows configured.</div>';
-      return;
-    }
     var queue = [];
     rows.forEach(function (row, i) {
       var wrap = document.createElement('div');
-      wrap.innerHTML = rowShell(row.t || 'Featured', i);
+      wrap.innerHTML = rowShell(row, i);
       var el = wrap.firstChild;
       host.appendChild(el);
       queue.push({ row: row, el: el });
@@ -456,13 +415,23 @@
     var idx = 0, active = 0;
     function pump() {
       if (token !== st.token) return;
-      while (active < 3 && idx < queue.length) {
+      while (active < 4 && idx < queue.length) {
         var q = queue[idx++];
         active++;
         loadOne(q, token).then(function () { active--; pump(); });
       }
     }
     pump();
+  }
+
+  /* Called by app.js after the Spotlight rows are on screen. One token per
+     view keeps late responses from painting into a tab the user left. */
+  function appendRows(host, tab) {
+    if (!host) return;
+    var rows = rowsForTab(tab);
+    if (!rows.length) return;
+    st.token++;
+    paintRows(host, rows, st.token);
   }
 
   async function loadOne(q, token) {
@@ -498,88 +467,86 @@
     });
   }
 
-  function render(sec) {
-    sec = sec || 'home';
-    st.section = sec;
+  // ------------------------------------------------------------ live TV view
+  function openLive() {
     st.token++;
-    closeDrawer();
     closeDetail(true);
-    if (S.playerOpen) { /* keep playback if the user opened the drawer */ }
-    var token = st.token;
     var view = document.getElementById('view');
-    view.innerHTML = headerHtml(sec) + '<div id="waBody"></div>';
-    var body = document.getElementById('waBody');
-    bindHeader(sec, token);
-    if (sec === 'livetv') {
-      renderLive(body, token);
-      if (window.scrollTo) window.scrollTo(0, 0);
-      return;
-    }
-    if (sec === 'adult') {
-      body.innerHTML = vaultChips() + '<div id="waRows"></div>';
-      $$('#waBody .chip').forEach(function (b) {
-        b.onclick = function () {
-          st.sub = b.getAttribute('data-vsub');
-          var top = document.getElementById('waRows');
-          if (top) top.innerHTML = '';
-          $$('#waBody .chip').forEach(function (x) { x.classList.toggle('on', x === b); });
-          paintBatched(top, rowsFor('adult', st.sub), token);
-          window.scrollTo(0, 0);
-        };
-      });
-      paintBatched(document.getElementById('waRows'), rowsFor('adult', st.sub), token);
-    } else {
-      body.innerHTML = '<div id="waRows"></div>';
-      paintBatched(document.getElementById('waRows'), rowsFor(sec), token);
-    }
-    if (window.scrollTo) window.scrollTo(0, 0);
+    if (!view) return;
+    view.innerHTML = '<div class="page-head">' +
+      '<button class="lib-back" data-lib-home aria-label="Back to Home">‹ Back</button>' +
+      '<div class="page-kicker">SuperBox library</div>' +
+      '<h1 class="page-title">Live TV</h1>' +
+      '<div class="page-sub">Free channels from around the world</div></div>' +
+      '<div id="libLiveBody"></div>';
+    renderLive(document.getElementById('libLiveBody'), st.token);
+    window.scrollTo(0, 0);
   }
 
-  function vaultChips() {
-    return '<div class="chips wa-vaultchips">' + (Z.VAULT_GROUPS || []).map(function (g) {
-      return '<button class="chip' + (g.id === st.sub ? ' on' : '') + '" data-vsub="' + esc(g.id) + '">' + esc(g.t) + '</button>';
-    }).join('') + '</div>';
-  }
-
-  function bindHeader(sec, token) {
-    var input = document.getElementById('waSearchInput');
-    var go = document.getElementById('waSearchGo');
-    if (!input) return;
-    function run() {
-      var q = input.value.trim();
-      if (!q) return;
-      search(q, sec, token);
-    }
-    if (go) go.onclick = run;
-    input.addEventListener('keydown', function (e) {
-      if (e.key === 'Enter') { e.preventDefault(); run(); input.blur(); }
+  // ------------------------------------------------------------ 18+ view
+  function openAdult() {
+    var html = '<div class="sheet-title">18+ library</div>' +
+      '<div class="sheet-sub">This section contains adult material. It is hidden from the main rows until you opt in.</div>' +
+      '<div class="wa-src-note" style="padding:4px 16px 16px">Only continue if you are legally an adult where you live.</div>' +
+      '<div style="display:flex;gap:10px;padding:0 16px 20px">' +
+      '<button class="btn-primary" data-adult-yes style="flex:1">I am 18 or older</button>' +
+      '<button class="btn-ghost" data-adult-no style="flex:1">Cancel</button></div>';
+    App.openSheet(html, function (root) {
+      var yes = root.querySelector('[data-adult-yes]');
+      var no = root.querySelector('[data-adult-no]');
+      if (yes) yes.onclick = function () { App.closeSheet(); renderAdult(); };
+      if (no) no.onclick = function () { App.closeSheet(); };
     });
   }
 
+  function renderAdult() {
+    st.token++;
+    closeDetail(true);
+    var view = document.getElementById('view');
+    if (!view) return;
+    view.innerHTML = '<div class="page-head">' +
+      '<button class="lib-back" data-lib-home aria-label="Back to Home">‹ Back</button>' +
+      '<div class="page-kicker">SuperBox library</div>' +
+      '<h1 class="page-title">18+</h1>' +
+      '<div class="page-sub">Adults only</div>' +
+      '<div class="chips" id="libAdultChips">' + vaultChips() + '</div></div>' +
+      '<div id="libAdultRows"></div>';
+    var token = st.token;
+    var top = document.getElementById('libAdultRows');
+    paintRows(top, rowsFor('adult', st.sub), token);
+    $$('#libAdultChips .chip').forEach(function (b) {
+      b.onclick = function () {
+        st.sub = b.getAttribute('data-vsub');
+        top.innerHTML = '';
+        $$('#libAdultChips .chip').forEach(function (x) { x.classList.toggle('on', x === b); });
+        st.token++;
+        paintRows(top, rowsFor('adult', st.sub), st.token);
+      };
+    });
+    window.scrollTo(0, 0);
+  }
+
+  function vaultChips() {
+    return (Z.VAULT_GROUPS || []).map(function (g) {
+      return '<button class="chip' + (g.id === st.sub ? ' on' : '') + '" data-vsub="' + esc(g.id) + '">' + esc(g.t) + '</button>';
+    }).join('');
+  }
+
   // ---------------------------------------------------------------- search
-  async function search(q, sec, token) {
-    var body = document.getElementById('waBody');
-    if (!body) return;
-    body.innerHTML = '<div class="wa-searchhead"><b>Searching “' + esc(q) + '”…</b></div><div class="grid wa-grid">' + skeletonCards(8) + '</div>';
+  async function searchAll(q) {
+    var jobs = [
+      tmdbSearch(q),
+      SC.search(q, 'webseries').catch(function () { return []; }),
+      SC.search(q, 'kdrama').catch(function () { return []; })
+    ];
     var out = [];
-    try {
-      if (sec === 'tube') {
-        out = await ytRow({ q: q, badge: 'RESULT' });
-      } else if (sec === 'adult') {
-        out = await SC.search(q, 'adult', st.sub);
-      } else if (sec === 'webseries' || sec === 'kdrama') {
-        out = await SC.search(q, sec);
-      }
-      var t = await tmdbSearch(q);
-      out = t.concat(out);
-    } catch (e) {}
-    if (token !== st.token) return;
-    if (!out.length) {
-      body.innerHTML = '<div class="wa-searchhead"><b>No matches for “' + esc(q) + '”</b></div><div class="empty">Try a shorter title or a different spelling.</div>';
-      return;
+    for (var i = 0; i < jobs.length; i++) {
+      try {
+        var part = await jobs[i];
+        if (part && part.length) out = out.concat(part);
+      } catch (e) {}
     }
-    body.innerHTML = '<div class="wa-searchhead"><b>' + out.length + ' results for “' + esc(q) + '”</b></div>' +
-      '<div class="grid wa-grid">' + cards(out) + '</div>';
+    return dedupe(out).slice(0, 60);
   }
 
   async function tmdbSearch(q) {
@@ -620,7 +587,7 @@
       }
       grid.innerHTML = list.slice(0, 200).map(function (c, i) {
         return '<button class="wa-ch" data-live="' + i + '">' +
-          '<span class="wa-ch-logo">' + (c.logo ? '<img src="' + esc(img(c.logo)) + '" loading="lazy" onerror="this.remove()">' : '') + '</span>' +
+          '<span class="wa-ch-logo">' + (c.logo ? '<img src="' + esc(img(c.logo)) + '" loading="lazy" onerror="SBIMG(this)">' : '') + '</span>' +
           '<span class="wa-ch-name">' + esc(c.name || 'Channel') + '</span>' +
           '<span class="wa-ch-group">' + esc(c.group || 'Live') + '</span></button>';
       }).join('');
@@ -654,7 +621,7 @@
     App.playDirect(ch.url, ch.name || 'Live TV', { hls: true, ref: ch.ref || '' });
   }
 
-  // ---------------------------------------------------------------- drawer
+  // ---------------------------------------------------------------- sources
   function openLibrarySources() {
     var rows = [
       ['✦', 'Metadata & discovery', 'TMDB · AniList'],
@@ -662,11 +629,11 @@
       ['◐', 'Classic animation', 'Internet Archive (archive.org)'],
       ['▶', 'Tube', 'YouTube'],
       ['◉', 'Live TV', 'iptv-org · Free-TV'],
-      ['!', '18+ Vault', 'Eporner · 123av · Rule34 · Hentaicity · Hentai.tv'],
+      ['!', '18+ library', 'Eporner · 123av · Rule34 · Hentaicity · Hentai.tv'],
       ['∞', 'Streams', 'Public embed providers, resolved at play time']
     ];
     var html = '<div class="sheet-title">Library sources</div>' +
-      '<div class="sheet-sub">Every catalogue behind SuperBox Vault.</div>' +
+      '<div class="sheet-sub">Every catalogue that powers this library.</div>' +
       '<div class="wa-src-list">' + rows.map(function (r) {
         return '<div class="wa-src-item"><span class="wa-src-ic">' + r[0] + '</span>' +
           '<div><b>' + esc(r[1]) + '</b><span>' + esc(r[2]) + '</span></div></div>';
@@ -675,92 +642,23 @@
     App.openSheet(html);
   }
 
-  function buildDrawer() {
-    drawer = document.createElement('div');
-    drawer.id = 'waDrawer';
-    drawer.className = 'wa-drawer hidden';
-    drawer.setAttribute('aria-hidden', 'true');
-    var html = '<div class="wa-drawer-back"></div><aside class="wa-drawer-panel">' +
-      '<div class="wa-drawer-head"><div class="wa-drawer-logo">S</div><div class="wa-drawer-id"><b>SUPERBOX</b><span>Infinite library</span></div>' +
-      '<button id="waDrawerClose" class="wa-x" aria-label="Close">✕</button></div>';
-    DRAWER.forEach(function (g) {
-      html += '<div class="wa-drawer-group' + (g.vault ? ' wa-drawer-vaultgroup' : '') + '">' +
-        '<div class="wa-drawer-title' + (g.vault ? ' wa-vault-group' : '') + '">' +
-        (g.vault ? '<span class="wa-vault-inf">∞</span>' : '') + esc(g.title) + '</div>' +
-        (g.vault ? '<div class="wa-vault-sub">A separate universe, inside the box</div>' : '');
-      g.items.forEach(function (it) {
-        html += '<button class="wa-nav" data-nav="' + esc(it.id) + '">' +
-          '<span class="wa-nav-ic">' + esc(it.icon) + '</span>' +
-          '<span class="wa-nav-tx"><b>' + esc(it.label) + '</b><em>' + esc(it.note) + '</em></span>' +
-          '<span class="wa-nav-arrow">›</span></button>';
-      });
-      if (g.vault) {
-        html += '<button class="wa-src-link" data-wa-sources><span class="wa-src-link-ic">✧</span>' +
-          '<span class="wa-nav-tx"><b>Library sources</b><em>Where every title comes from</em></span>' +
-          '<span class="wa-nav-arrow">›</span></button>';
-      }
-      html += '</div>';
-    });
-    html += '<div class="wa-drawer-foot"><span>TMDB · AniList · archive.org · YouTube · IPTV</span><em>SuperBox does not host media.</em></div></aside>';
-    drawer.innerHTML = html;
-    document.body.appendChild(drawer);
-    $('#waDrawerClose', drawer).onclick = closeDrawer;
-    $('.wa-drawer-back', drawer).onclick = closeDrawer;
-    $$('.wa-nav', drawer).forEach(function (b) {
-      b.onclick = function () {
-        var id = b.getAttribute('data-nav');
-        closeDrawer();
-        if (id.indexOf('wa:') === 0) App.switchTab(id);
-        else App.switchTab(id);
-      };
-    });
-    var src = $('.wa-src-link', drawer);
-    if (src) src.onclick = function () {
-      closeDrawer();
-      setTimeout(openLibrarySources, 200);
-    };
-  }
-
-  function openDrawer() {
-    if (!drawer) buildDrawer();
-    highlightDrawer();
-    drawer.classList.remove('hidden');
-    drawer.setAttribute('aria-hidden', 'false');
-    var panel = $('.wa-drawer-panel', drawer);
-    requestAnimationFrame(function () {
-      if (panel) panel.scrollTop = 0;
-      drawer.classList.add('open');
-    });
-  }
-  function closeDrawer() {
-    if (!drawer) return;
-    drawer.classList.remove('open');
-    drawer.setAttribute('aria-hidden', 'true');
-    setTimeout(function () { if (drawer && !drawer.classList.contains('open')) drawer.classList.add('hidden'); }, 220);
-  }
-  function highlightDrawer() {
-    if (!drawer) return;
-    var active = S.tab || 'home';
-    $$('.wa-nav', drawer).forEach(function (b) {
-      b.classList.toggle('on', b.getAttribute('data-nav') === active);
-    });
-  }
-
   // ---------------------------------------------------------------- boot
   function boot() {
-    buildDrawer();
-    var menu = document.getElementById('menuBtn');
-    if (menu) menu.onclick = openDrawer;
     buildDetail();
-    document.getElementById('view').addEventListener('click', function (e) {
-      if (e.target.closest('[data-wa-sources]')) {
+    document.addEventListener('click', function (e) {
+      if (e.target.closest('[data-lib-sources]')) {
+        e.preventDefault();
         openLibrarySources();
         return;
       }
-      var c = e.target.closest('[data-wa]');
+      var lv = e.target.closest('[data-lib-live]');
+      if (lv) { e.preventDefault(); openLive(); return; }
+      var ad = e.target.closest('[data-lib-adult]');
+      if (ad) { e.preventDefault(); openAdult(); return; }
+      var c = e.target.closest('[data-lib]');
       if (c) {
-        var it = items[c.getAttribute('data-wa')];
-        if (it) openItem(it);
+        var it = items[c.getAttribute('data-lib')];
+        if (it) { e.preventDefault(); openItem(it); }
       }
     });
   }
@@ -891,7 +789,7 @@
       '<button class="wad-back" data-wad-back aria-label="Back">' + iconBack() + '</button>' +
       '<button class="wad-x" data-wad-back aria-label="Close">✕</button>' +
       '<div class="wad-heroin">' +
-      '<div class="wad-poster">' + (poster ? '<img src="' + esc(img(poster)) + '" alt="" onerror="this.remove()">' : '') + '</div>' +
+      '<div class="wad-poster">' + (poster ? '<img src="' + esc(img(poster)) + '" alt="" onerror="SBIMG(this)">' : '') + '</div>' +
       '<div class="wad-info">' +
       (badge ? '<span class="wad-kicker">' + esc(badge) + '</span>' : '') +
       '<h1>' + esc(title) + '</h1>' +
@@ -1053,7 +951,7 @@
     var hero = detailEl.querySelector('.wad-hero');
     if (hero) hero.style.backgroundImage = "url('" + img(it.poster) + "')";
     var box = detailEl.querySelector('.wad-heroin .wad-poster');
-    if (box) box.innerHTML = '<img src="' + esc(img(it.poster)) + '" alt="" onerror="this.remove()">';
+    if (box) box.innerHTML = '<img src="' + esc(img(it.poster)) + '" alt="" onerror="SBIMG(this)">';
   }
 
   async function loadParts(it) {
@@ -1256,14 +1154,16 @@
     }
   }
 
-  window.WA = {
-    render: render,
-    openDrawer: openDrawer,
-    closeDrawer: closeDrawer,
+  window.LIB = {
+    appendRows: appendRows,
     openItem: openItem,
+    openLive: openLive,
+    openAdult: openAdult,
     openSources: openLibrarySources,
+    searchAll: searchAll,
+    rowsForTab: rowsForTab,
+    cards: cards,
     back: function () {
-      if (drawer && drawer.classList.contains('open')) { closeDrawer(); return true; }
       if (detailEl && !detailEl.classList.contains('hidden')) { closeDetail(); return true; }
       return false;
     }

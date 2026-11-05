@@ -18,16 +18,14 @@ Recreate the forward after every reinstall or relaunch.
 
 ```powershell
 node tools/cdp-run.mjs 9223 tools/smoke-spotlight.js
-node tools/cdp-run.mjs 9223 tools/smoke-vault.js
 node tools/cdp-run.mjs 9223 tools/smoke-playback.js
 node tools/inspect-provider-video.mjs 9223
 ```
 
 | Script | What it proves |
 |---|---|
-| `smoke-spotlight.js` | All four content tabs + Me load, card counts, no old brand text |
-| `smoke-vault.js` | Drawer groups, Vault hero, source sheet, section nav |
-| `smoke-playback.js` | Opens a Vault title and starts the provider ladder |
+| `smoke-spotlight.js` | Home, the three library tabs and Me load, with card counts and no old brand text |
+| `smoke-playback.js` | Opens a library title and starts the provider or native player |
 | `inspect-provider-video.mjs` | Reads the provider overlay's `<video>` state (resolution, duration, playback) |
 
 `cdp-run.mjs` evaluates any JS file in the WebView; `cdp-shot.mjs` captures a

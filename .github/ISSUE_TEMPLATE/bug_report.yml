@@ -17,7 +17,7 @@ body:
     id: version
     attributes:
       label: SuperBox version
-      placeholder: "1.0.0"
+      placeholder: "1.1.0"
   - type: input
     id: device
     attributes:
@@ -35,9 +35,8 @@ body:
     attributes:
       label: Steps to reproduce
       placeholder: |
-        1. Open SuperBox Vault
-        2. Tap Movies
-        3. Open a title and press Play
+        1. Open SuperBox and switch to Movies
+        2. Open a title and press Play
   - type: textarea
     id: context
     attributes:

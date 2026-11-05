@@ -7,6 +7,9 @@ import android.util.Log;
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -19,6 +22,7 @@ import java.net.URL;
 import java.net.URLDecoder;
 import java.net.URLEncoder;
 import java.security.MessageDigest;
+import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -32,6 +36,10 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+
+import javax.crypto.Cipher;
+import javax.crypto.spec.GCMParameterSpec;
+import javax.crypto.spec.SecretKeySpec;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -53,27 +61,55 @@ public class LocalServer {
             + "(KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36";
     private static final int START_PORT = 47821;
     private static final int END_PORT = 47832;
-    private static final long WINDOW = 12L * 1024L * 1024L;
-    private static final int CHUNK = 512 * 1024;
+    private static final long WINDOW = 8L * 1024L * 1024L;
+    // Small chunks matter more than total window size: the renderer cannot
+    // decode anything until the first chunk is flushed, so 512 KB pieces kept
+    // the spinner up for the whole first download.
+    private static final int CHUNK = 128 * 1024;
     // The CDN throttles each TCP connection to roughly 20-100 KB/s. More
     // sockets are the only way to fill a mobile pipe: measured 8 sockets
     // ~= 286 KB/s, 16 ~= 788 KB/s, 24 ~= 1.0 MB/s on the reference stream.
     private static final int PARALLEL = 24;
     private static final long CHUNK_CACHE_LIMIT = 56L * 1024L * 1024L;
-    private static final long API_CACHE_MS = 5L * 60L * 1000L;
+    private static final long API_CACHE_MS = 8L * 60L * 1000L;
+    private static final long IMAGE_CACHE_MS = 7L * 24L * 60L * 60L * 1000L;
+    private static final long PAGE_CACHE_MS = 15L * 60L * 1000L;
+    private static final long HLS_CACHE_MS = 20L * 1000L;
+    private static final long TMDB_CACHE_MS = 12L * 60L * 60L * 1000L;
 
     private final Context context;
     private final ExecutorService clients = Executors.newCachedThreadPool();
     private final Map<String, Meta> metaCache = new HashMap<>();
     private final Map<String, CacheEntry> apiCache = new HashMap<>();
+    private final Map<String, byte[]> assetCache = new HashMap<>();
     private final LinkedHashMap<String, byte[]> chunkCache =
             new LinkedHashMap<>(64, 0.75f, true);
+    private final String token;
+    private final File diskDir;
+    private final SecureRandom random = new SecureRandom();
     private ServerSocket socket;
     private volatile boolean running;
     private long chunkCacheBytes;
+    private int diskWrites;
 
     public LocalServer(Context context) {
         this.context = context.getApplicationContext();
+        this.token = newToken();
+        this.diskDir = new File(this.context.getCacheDir(), "sb-cache");
+        if (!diskDir.exists()) diskDir.mkdirs();
+    }
+
+    /** Session token injected into index.html; every privileged route needs it. */
+    public String getToken() {
+        return token;
+    }
+
+    private String newToken() {
+        byte[] raw = new byte[24];
+        random.nextBytes(raw);
+        StringBuilder sb = new StringBuilder(raw.length * 2);
+        for (byte b : raw) sb.append(String.format("%02x", b & 0xff));
+        return sb.toString();
     }
 
     public int start() throws IOException {
@@ -100,7 +136,29 @@ public class LocalServer {
         }, "superbox-http");
         accept.setDaemon(true);
         accept.start();
+        Thread warm = new Thread(new Runnable() {
+            @Override public void run() { warmUp(); }
+        }, "superbox-warm");
+        warm.setDaemon(true);
+        warm.start();
         return ss.getLocalPort();
+    }
+
+    /* First paint should never wait on the network. Fetch the home payload
+       into the persistent cache as soon as the bridge starts. */
+    private void warmUp() {
+        try {
+            String cacheKey = "api:/api/home?|" + SITE + "/";
+            if (diskGet(cacheKey, API_CACHE_MS) == null && apiCacheGet(cacheKey, API_CACHE_MS) == null) {
+                byte[] body = httpGetBytes(API_BASE + "/home", SITE + "/", 12000);
+                if (body != null && body.length > 0) {
+                    apiCachePut(cacheKey, body);
+                    Log.i(TAG, "warm-up cached home (" + body.length + " bytes)");
+                }
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "warm-up: " + e.getMessage());
+        }
     }
 
     public void stop() {
@@ -165,6 +223,17 @@ public class LocalServer {
             }
             Map<String, String> qs = parseQuery(query);
 
+            boolean guarded = needsToken(path);
+            if (guarded) {
+                String supplied = qs.get("t");
+                if (supplied == null || supplied.isEmpty()) supplied = headers.get("x-superbox-token");
+                if (!token.equals(supplied)) {
+                    send(out, 403, "application/json", bytes("{\"error\":\"forbidden\"}"),
+                            "Cache-Control: no-store\r\n");
+                    return;
+                }
+            }
+
             if ("/health".equals(path)) {
                 send(out, 200, "application/json", bytes("{\"ok\":true,\"server\":\"SuperBox\"}"),
                         "Cache-Control: no-store\r\n");
@@ -189,7 +258,7 @@ public class LocalServer {
                 return;
             }
             if (path.startsWith("/tmdb/3/")) {
-                handleTmdb(out, path, query);
+                handleTmdb(out, path, stripToken(query));
                 return;
             }
             if ("/stream".equals(path) || "/raw".equals(path)) {
@@ -201,7 +270,15 @@ public class LocalServer {
                 return;
             }
             if ("/hlsseg".equals(path)) {
-                handleSegment(out, headers, qs.get("url"), qs.get("ref"));
+                handleSegment(out, headers, qs.get("url"), qs.get("ref"), null);
+                return;
+            }
+            if ("/dash".equals(path)) {
+                handleDash(out, qs.get("url"), qs.get("ref"));
+                return;
+            }
+            if ("/dashseg".equals(path)) {
+                handleSegment(out, headers, qs.get("url"), qs.get("ref"), "video/mp4");
                 return;
             }
             if (path.startsWith("/api/")) {
@@ -248,10 +325,14 @@ public class LocalServer {
         }
 
         String cacheKey = "api:" + path + "?" + keyQuery + "|" + ref;
-        CacheEntry hit = apiCacheGet(cacheKey);
+        CacheEntry hit = apiCacheGet(cacheKey, API_CACHE_MS);
+        if (hit == null) {
+            byte[] disk = diskGet(cacheKey, API_CACHE_MS);
+            if (disk != null) hit = new CacheEntry(disk, "application/json; charset=utf-8");
+        }
         if (hit != null) {
             send(out, 200, "application/json; charset=utf-8", hit.body,
-                    "Cache-Control: no-store\r\nX-SuperBox-Cache: HIT\r\n");
+                    "Cache-Control: private, max-age=60\r\nX-SuperBox-Cache: HIT\r\n");
             return;
         }
 
@@ -277,7 +358,7 @@ public class LocalServer {
         }
         apiCachePut(cacheKey, body);
         send(out, 200, "application/json; charset=utf-8", body,
-                "Cache-Control: no-store\r\nX-SuperBox-Cache: MISS\r\n");
+                "Cache-Control: private, max-age=60\r\nX-SuperBox-Cache: MISS\r\n");
     }
 
     private String buildQuery(Map<String, String> qs, String... keys) {
@@ -352,37 +433,110 @@ public class LocalServer {
     // ------------------------------------------------------------- images
 
     private void handleImage(OutputStream out, String url) throws IOException {
-        if (url == null || url.isEmpty()) {
+        url = normalizeUrl(url);
+        if (url == null || url.isEmpty() || !isSafeUrl(url)) {
             send(out, 404, "text/plain", bytes("missing image"), null);
             return;
         }
         String key = "img:" + url;
-        CacheEntry hit = apiCacheGet(key);
+        CacheEntry hit = apiCacheGet(key, IMAGE_CACHE_MS);
+        if (hit == null) {
+            byte[] disk = diskGet(key, IMAGE_CACHE_MS);
+            if (disk != null) hit = new CacheEntry(disk, sniffImageType(disk));
+        }
         if (hit != null) {
-            send(out, 200, hit.type, hit.body, "Cache-Control: public, max-age=86400\r\n");
+            send(out, 200, hit.type, hit.body,
+                    "Cache-Control: public, max-age=604800, immutable\r\nX-SuperBox-Cache: HIT\r\n");
             return;
         }
-        HttpURLConnection c = null;
-        try {
-            c = open(url, SITE + "/", null, 8000, 16000);
-            int code = c.getResponseCode();
-            if (code < 200 || code >= 300) {
-                send(out, 404, "text/plain", bytes("image unavailable"), null);
-                return;
-            }
-            InputStream is = c.getInputStream();
-            byte[] body = readAll(is, 8 * 1024 * 1024);
-            String type = c.getContentType();
-            if (type == null || !type.startsWith("image/")) type = "image/jpeg";
-            if (body.length > 0 && body.length < 4 * 1024 * 1024) {
+        String referer = imageReferer(url);
+        String[] refs = referer == null ? new String[]{null, SITE + "/"} : new String[]{referer, null, SITE + "/"};
+        for (String ref : refs) {
+            HttpURLConnection c = null;
+            try {
+                c = openImage(url, ref);
+                int code = c.getResponseCode();
+                if (code < 200 || code >= 300) {
+                    if (code == 404 || code == 410) break;
+                    continue;
+                }
+                InputStream is = c.getInputStream();
+                byte[] body = readAll(is, 8 * 1024 * 1024);
+                if (body.length == 0) continue;
+                String type = c.getContentType();
+                if (type == null || !type.startsWith("image/")) type = sniffImageType(body);
                 apiCachePut(key, body, type);
+                send(out, 200, type, body,
+                        "Cache-Control: public, max-age=604800, immutable\r\nX-SuperBox-Cache: MISS\r\n");
+                return;
+            } catch (IOException e) {
+                // try the next referer policy
+            } finally {
+                if (c != null) c.disconnect();
             }
-            send(out, 200, type, body, "Cache-Control: public, max-age=86400\r\n");
-        } catch (IOException e) {
-            send(out, 404, "text/plain", bytes("image unavailable"), null);
-        } finally {
-            if (c != null) c.disconnect();
         }
+        send(out, 404, "text/plain", bytes("image unavailable"), null);
+    }
+
+    private static String normalizeUrl(String url) {
+        if (url == null) return null;
+        String u = url.trim().replace("&amp;", "&");
+        if (u.startsWith("//")) u = "https:" + u;
+        if (u.startsWith("http%3A")) {
+            try { u = URLDecoder.decode(u, "UTF-8"); } catch (Exception ignored) {}
+        }
+        return u;
+    }
+
+    private static String imageReferer(String url) {
+        String host = hostOf(url);
+        if (host == null) return null;
+        if (host.contains("tmdb") || host.contains("themoviedb")) return "https://www.themoviedb.org/";
+        if (host.contains("archive.org")) return "https://archive.org/";
+        if (host.contains("ytimg") || host.contains("youtube") || host.contains("ggpht")) return "https://www.youtube.com/";
+        if (host.contains("iptv-org")) return "https://iptv-org.github.io/";
+        if (host.contains("aoneroom") || host.contains("moviebox")) return SITE + "/";
+        if (host.contains("anilist")) return "https://anilist.co/";
+        if (host.contains("wikipedia") || host.contains("wikimedia")) return "https://en.wikipedia.org/";
+        return originOf(url);
+    }
+
+    private static String hostOf(String url) {
+        try { return new URL(url).getHost().toLowerCase(Locale.US); } catch (Exception e) { return null; }
+    }
+
+    private static String originOf(String url) {
+        try {
+            URL u = new URL(url);
+            return u.getProtocol() + "://" + u.getHost() + "/";
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static String sniffImageType(byte[] b) {
+        if (b == null || b.length < 12) return "image/jpeg";
+        if ((b[0] & 0xff) == 0x89 && b[1] == 'P' && b[2] == 'N' && b[3] == 'G') return "image/png";
+        if (b[0] == 'G' && b[1] == 'I' && b[2] == 'F') return "image/gif";
+        if (b[0] == 'R' && b[1] == 'I' && b[2] == 'F' && b[3] == 'F'
+                && b[8] == 'W' && b[9] == 'E' && b[10] == 'B' && b[11] == 'P') return "image/webp";
+        if (b[0] == '<') return "image/svg+xml";
+        return "image/jpeg";
+    }
+
+    private HttpURLConnection openImage(String url, String ref) throws IOException {
+        HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
+        c.setConnectTimeout(9000);
+        c.setReadTimeout(18000);
+        c.setInstanceFollowRedirects(true);
+        c.setUseCaches(false);
+        c.setRequestProperty("User-Agent", UA);
+        c.setRequestProperty("Accept", "image/avif,image/webp,image/apng,image/*,*/*;q=0.8");
+        c.setRequestProperty("Accept-Language", "en-US,en;q=0.9");
+        c.setRequestProperty("Accept-Encoding", "identity");
+        c.setRequestProperty("Connection", "close");
+        if (ref != null && !ref.isEmpty()) c.setRequestProperty("Referer", ref);
+        return c;
     }
 
     // ------------------------------------------------------------- web proxy
@@ -392,8 +546,19 @@ public class LocalServer {
        arrive intact; the WebView cannot read most of these hosts directly
        because of CORS/Cloudflare. */
     private void handlePage(OutputStream out, String url, String ref) throws IOException {
-        if (url == null || url.isEmpty() || !HTTP_RE.matcher(url).find()) {
+        url = normalizeUrl(url);
+        if (url == null || url.isEmpty() || !isSafeUrl(url)) {
             send(out, 400, "text/plain", bytes("missing url"), null);
+            return;
+        }
+        String key = "page:" + url + "|" + (ref == null ? "" : ref);
+        CacheEntry hit = apiCacheGet(key, PAGE_CACHE_MS);
+        if (hit == null) {
+            byte[] disk = diskGet(key, PAGE_CACHE_MS);
+            if (disk != null) hit = new CacheEntry(disk, "text/plain; charset=utf-8");
+        }
+        if (hit != null) {
+            send(out, 200, hit.type, hit.body, "Cache-Control: private, max-age=120\r\nX-SuperBox-Cache: HIT\r\n");
             return;
         }
         HttpURLConnection c = null;
@@ -408,7 +573,8 @@ public class LocalServer {
                 return;
             }
             if (type == null) type = "text/html; charset=utf-8";
-            send(out, 200, type, body, "Cache-Control: no-store\r\n");
+            if (body.length < 8 * 1024 * 1024) apiCachePut(key, body, type);
+            send(out, 200, type, body, "Cache-Control: private, max-age=120\r\nX-SuperBox-Cache: MISS\r\n");
         } catch (Exception e) {
             Log.w(TAG, "page " + url + ": " + e.getMessage());
             send(out, 502, "text/plain", bytes("PROXY_ERROR " + e.getMessage()), null);
@@ -424,6 +590,17 @@ public class LocalServer {
         u.append('?');
         if (query != null && !query.isEmpty()) u.append(query).append('&');
         u.append("api_key=").append(TMDB_KEY).append("&language=en-US");
+        String key = "tmdb:" + rest + "|" + (query == null ? "" : query);
+        CacheEntry hit = apiCacheGet(key, TMDB_CACHE_MS);
+        if (hit == null) {
+            byte[] disk = diskGet(key, TMDB_CACHE_MS);
+            if (disk != null) hit = new CacheEntry(disk, "application/json; charset=utf-8");
+        }
+        if (hit != null) {
+            send(out, 200, "application/json; charset=utf-8", hit.body,
+                    "Cache-Control: private, max-age=3600\r\nX-SuperBox-Cache: HIT\r\n");
+            return;
+        }
         HttpURLConnection c = null;
         try {
             c = openWeb(u.toString(), "https://www.themoviedb.org/");
@@ -434,7 +611,9 @@ public class LocalServer {
                 send(out, 502, "application/json", bytes("{\"error\":\"tmdb " + code + "\"}"), null);
                 return;
             }
-            send(out, 200, "application/json; charset=utf-8", body, "Cache-Control: no-store\r\n");
+            apiCachePut(key, body, "application/json; charset=utf-8");
+            send(out, 200, "application/json; charset=utf-8", body,
+                    "Cache-Control: private, max-age=3600\r\nX-SuperBox-Cache: MISS\r\n");
         } catch (Exception e) {
             send(out, 502, "application/json", bytes("{\"error\":\"tmdb unavailable\"}"), null);
         } finally {
@@ -449,7 +628,7 @@ public class LocalServer {
         JSONObject res = new JSONObject();
         try {
             res.put("ok", false);
-            if (url == null || url.isEmpty()) {
+            if (url == null || url.isEmpty() || !isSafeUrl(url)) {
                 sendJson(out, 200, res.toString());
                 return;
             }
@@ -465,7 +644,7 @@ public class LocalServer {
     }
 
     private JSONObject sniff(String url, String ref, int depth) {
-        if (depth > 2) return null;
+        if (depth > 2 || !isSafeUrl(url)) return null;
         String html;
         String type;
         HttpURLConnection c = null;
@@ -572,7 +751,8 @@ public class LocalServer {
 
     private void handleStream(OutputStream out, Map<String, String> headers,
                               String url, String ref) throws IOException {
-        if (url == null || url.isEmpty()) {
+        url = normalizeUrl(url);
+        if (url == null || url.isEmpty() || !isSafeUrl(url)) {
             send(out, 400, "text/plain", bytes("missing url"), null);
             return;
         }
@@ -621,8 +801,14 @@ public class LocalServer {
         }
         if (end >= total) end = total - 1;
         if (end < start) end = start;
-        if (end - start + 1 > WINDOW) {
-            end = Math.min(total - 1, start + WINDOW - 1);
+        /* Startup latency is dominated by the first window: the CDN serves
+           roughly 1 MB/s, so a 12 MB first read keeps the spinner up for ~12s
+           before the decoder can even open the moov atom. Small first window,
+           larger follow-up windows (Chromium requests the next range as soon
+           as it needs it). */
+        long window = start == 0 ? 2L * 1024L * 1024L : WINDOW;
+        if (end - start + 1 > window) {
+            end = Math.min(total - 1, start + window - 1);
         }
         long len = end - start + 1;
         Log.i(TAG, "stream " + start + "-" + end + "/" + total + " (" + (len / 1024) + "KB) after "
@@ -774,11 +960,22 @@ public class LocalServer {
     // ----------------------------------------------------------------- HLS
 
     private void handleHls(OutputStream out, String url, String ref) throws IOException {
-        if (url == null || url.isEmpty()) {
+        url = normalizeUrl(url);
+        if (url == null || url.isEmpty() || !isSafeUrl(url)) {
             send(out, 400, "text/plain", bytes("missing playlist"), null);
             return;
         }
         String referer = ref == null || ref.isEmpty() ? SITE + "/" : ref;
+        String key = "hls:" + url + "|" + referer;
+        CacheEntry hit = apiCacheGet(key, HLS_CACHE_MS);
+        if (hit == null) {
+            byte[] disk = diskGet(key, HLS_CACHE_MS);
+            if (disk != null) hit = new CacheEntry(disk, "application/vnd.apple.mpegurl; charset=utf-8");
+        }
+        if (hit != null) {
+            send(out, 200, hit.type, hit.body, "Cache-Control: private, max-age=10\r\nX-SuperBox-Cache: HIT\r\n");
+            return;
+        }
         byte[] body = httpGetBytes(url, referer, 18000);
         if (body == null) {
             send(out, 502, "text/plain", bytes("playlist unavailable"), null);
@@ -810,13 +1007,16 @@ public class LocalServer {
                 sb.append(proxied).append('\n');
             }
         }
-        send(out, 200, "application/vnd.apple.mpegurl; charset=utf-8",
-                sb.toString().getBytes("UTF-8"), "Cache-Control: no-store\r\n");
+        byte[] rewritten = sb.toString().getBytes("UTF-8");
+        apiCachePut(key, rewritten, "application/vnd.apple.mpegurl; charset=utf-8");
+        send(out, 200, "application/vnd.apple.mpegurl; charset=utf-8", rewritten,
+                "Cache-Control: private, max-age=10\r\nX-SuperBox-Cache: MISS\r\n");
     }
 
     private void handleSegment(OutputStream out, Map<String, String> headers,
-                               String url, String ref) throws IOException {
-        if (url == null || url.isEmpty()) {
+                               String url, String ref, String defaultType) throws IOException {
+        url = normalizeUrl(url);
+        if (url == null || url.isEmpty() || !isSafeUrl(url)) {
             send(out, 400, "text/plain", bytes("missing segment"), null);
             return;
         }
@@ -831,11 +1031,11 @@ public class LocalServer {
             }
             long len = parseLong(c.getHeaderField("Content-Length"), -1);
             String type = c.getContentType();
-            if (type == null) type = "application/octet-stream";
+            if (type == null || type.contains("octet-stream")) type = defaultType == null ? "application/octet-stream" : defaultType;
             StringBuilder h = new StringBuilder();
             String cr = c.getHeaderField("Content-Range");
             if (cr != null) h.append("Content-Range: ").append(cr).append("\r\n");
-            h.append("Accept-Ranges: bytes\r\nCache-Control: no-store\r\n");
+            h.append("Accept-Ranges: bytes\r\nCache-Control: private, max-age=60\r\n");
             writeHeaders(out, code, type, len, h.toString());
             InputStream is = c.getInputStream();
             byte[] buf = new byte[65536];
@@ -861,7 +1061,101 @@ public class LocalServer {
     }
 
     private String localHls(String path, String url, String ref) {
-        return path + "?url=" + enc(url) + "&ref=" + enc(ref);
+        return path + "?url=" + enc(url) + "&ref=" + enc(ref) + "&t=" + enc(token);
+    }
+
+    // ----------------------------------------------------------------- DASH
+
+    private void handleDash(OutputStream out, String url, String ref) throws IOException {
+        url = normalizeUrl(url);
+        if (url == null || url.isEmpty() || !isSafeUrl(url)) {
+            send(out, 400, "text/plain", bytes("missing manifest"), null);
+            return;
+        }
+        String referer = ref == null || ref.isEmpty() ? SITE + "/" : ref;
+        String key = "dash:" + url + "|" + referer;
+        CacheEntry hit = apiCacheGet(key, HLS_CACHE_MS);
+        if (hit == null) {
+            byte[] disk = diskGet(key, HLS_CACHE_MS);
+            if (disk != null) hit = new CacheEntry(disk, "application/dash+xml; charset=utf-8");
+        }
+        if (hit != null) {
+            send(out, 200, hit.type, hit.body, "Cache-Control: private, max-age=10\r\nX-SuperBox-Cache: HIT\r\n");
+            return;
+        }
+        byte[] body = httpGetBytes(url, referer, 18000);
+        if (body == null) {
+            send(out, 502, "text/plain", bytes("manifest unavailable"), null);
+            return;
+        }
+        String xml = new String(body, "UTF-8");
+        if (xml.indexOf("<MPD") < 0) {
+            send(out, 200, "application/octet-stream", body, "Cache-Control: no-store\r\n");
+            return;
+        }
+        String rewritten = rewriteDash(xml, url);
+        byte[] outBody = rewritten.getBytes("UTF-8");
+        apiCachePut(key, outBody, "application/dash+xml; charset=utf-8");
+        send(out, 200, "application/dash+xml; charset=utf-8", outBody,
+                "Cache-Control: private, max-age=10\r\nX-SuperBox-Cache: MISS\r\n");
+    }
+
+    /* dash.js resolves relative segment URLs against the manifest URL, which
+       is loopback here. Rewrite every media-bearing attribute to an absolute
+       local proxy URL, preserving $Number$/$Time$/$RepresentationID$ tokens
+       so dash.js can still expand them. */
+    private String rewriteDash(String xml, String base) {
+        xml = xml.replaceAll("(?is)<BaseURL>\\s*</BaseURL>", "");
+        String attrBase = base;
+        Pattern baseTag = Pattern.compile("(?is)<BaseURL>([^<]+)</BaseURL>");
+        Matcher bm = baseTag.matcher(xml);
+        StringBuffer bsb = new StringBuffer();
+        while (bm.find()) {
+            String value = bm.group(1).trim();
+            if (value.isEmpty()) {
+                bm.appendReplacement(bsb, "");
+                continue;
+            }
+            String abs = resolve(base, value);
+            boolean file = abs.matches("(?i).+\\.(mp4|m4s|m4v|m4a|webm|ts)(\\?.*)?$");
+            if (file) {
+                bm.appendReplacement(bsb, Matcher.quoteReplacement(
+                        "<BaseURL>" + xmlEscape(localDashSeg(abs)) + "</BaseURL>"));
+            } else {
+                attrBase = abs;
+                bm.appendReplacement(bsb, "");
+            }
+        }
+        bm.appendTail(bsb);
+        xml = bsb.toString();
+
+        Pattern attr = Pattern.compile("(?i)(media|initialization|sourceURL|index)\\s*=\\s*([\"'])([^\"']+)\\2");
+        Matcher m = attr.matcher(xml);
+        StringBuffer sb = new StringBuffer();
+        while (m.find()) {
+            String name = m.group(1);
+            String quote = m.group(2);
+            String value = xmlUnescape(m.group(3));
+            String abs = resolve(attrBase, value);
+            String replacement = name + "=" + quote + xmlEscape(localDashSeg(abs)) + quote;
+            m.appendReplacement(sb, Matcher.quoteReplacement(replacement));
+        }
+        m.appendTail(sb);
+        return sb.toString();
+    }
+
+    private String localDashSeg(String url) {
+        // encodeURIComponent leaves $ alone, so $Number$ survives for dash.js.
+        String encoded = enc(url).replace("%24", "$");
+        return "/dashseg?url=" + encoded + "&t=" + enc(token);
+    }
+
+    private static String xmlEscape(String s) {
+        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;");
+    }
+
+    private static String xmlUnescape(String s) {
+        return s.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"");
     }
 
     private static String resolve(String base, String value) {
@@ -883,14 +1177,81 @@ public class LocalServer {
         String type = mime(file);
         try {
             AssetManager am = context.getAssets();
-            InputStream is = am.open(file);
-            byte[] body = readAll(is, 20 * 1024 * 1024);
+            byte[] body;
+            if (file.endsWith(".js")) {
+                synchronized (assetCache) {
+                    body = assetCache.get(file);
+                }
+                if (body == null) {
+                    try {
+                        byte[] enc = readAll(am.open(file + ".enc"), 32 * 1024 * 1024);
+                        body = decryptAsset(enc);
+                    } catch (IOException missingEnc) {
+                        body = readAll(am.open(file), 32 * 1024 * 1024);
+                    }
+                    synchronized (assetCache) {
+                        if (assetCache.size() > 40) assetCache.clear();
+                        assetCache.put(file, body);
+                    }
+                }
+            } else {
+                body = readAll(am.open(file), 24 * 1024 * 1024);
+                if ("index.html".equals(file)) {
+                    String html = new String(body, "UTF-8").replace("__SB_TOKEN_VALUE__", token);
+                    body = html.getBytes("UTF-8");
+                }
+            }
             String cache = (file.endsWith(".html") || file.endsWith(".js") || file.endsWith(".css"))
                     ? "no-cache" : "public, max-age=86400";
-            send(out, 200, type, body, "Cache-Control: " + cache + "\r\n");
+            StringBuilder h = new StringBuilder();
+            h.append("Cache-Control: ").append(cache).append("\r\n");
+            h.append("X-Content-Type-Options: nosniff\r\n");
+            h.append("Referrer-Policy: no-referrer\r\n");
+            if ("index.html".equals(file)) {
+                h.append("Content-Security-Policy: default-src 'self' http://127.0.0.1:*; ")
+                        .append("script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; ")
+                        .append("style-src 'self' 'unsafe-inline'; img-src * data: blob:; ")
+                        .append("media-src * blob: data:; connect-src *; font-src * data:; ")
+                        .append("worker-src blob: 'self'; frame-src *\r\n");
+            }
+            send(out, 200, type, body, h.toString());
         } catch (IOException e) {
             send(out, 404, "text/plain", bytes("not found"), null);
         }
+    }
+
+    private static byte[] decryptAsset(byte[] data) throws IOException {
+        if (data == null || data.length < 29 || data[0] != 'S' || data[1] != 'B' || data[2] != 'X' || data[3] != '1') {
+            return data;
+        }
+        try {
+            byte[] key = hexBytes(BuildSecrets.AES_KEY_HEX);
+            byte[] iv = new byte[12];
+            System.arraycopy(data, 4, iv, 0, 12);
+            int ctLen = data.length - 4 - 12 - 16;
+            byte[] ct = new byte[ctLen];
+            System.arraycopy(data, 16, ct, 0, ctLen);
+            byte[] tag = new byte[16];
+            System.arraycopy(data, data.length - 16, tag, 0, 16);
+            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+            cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(key, "AES"), new GCMParameterSpec(128, iv));
+            byte[] plain = new byte[ctLen + 16];
+            System.arraycopy(ct, 0, plain, 0, ctLen);
+            System.arraycopy(tag, 0, plain, ctLen, 16);
+            return cipher.doFinal(plain);
+        } catch (Exception e) {
+            throw new IOException("asset decrypt failed", e);
+        }
+    }
+
+    private static byte[] hexBytes(String hex) {
+        if (hex == null || hex.length() < 2) return new byte[0];
+        int n = hex.length() / 2;
+        byte[] out = new byte[n];
+        for (int i = 0; i < n; i++) {
+            out[i] = (byte) Integer.parseInt(hex.substring(i * 2, i * 2 + 2), 16);
+        }
+        return out;
     }
 
     private static String mime(String file) {
@@ -921,10 +1282,13 @@ public class LocalServer {
         c.setRequestProperty("Accept-Encoding", "identity");
         c.setRequestProperty("Connection", "close");
         c.setRequestProperty("Referer", ref == null || ref.isEmpty() ? SITE + "/" : ref);
-        c.setRequestProperty("Origin", SITE);
-        c.setRequestProperty("X-Client-Info", "{\"timezone\":\"Asia/Calcutta\"}");
-        c.setRequestProperty("X-Request-Lang", "en");
-        c.setRequestProperty("X-Client-Token", mbToken());
+        String h = hostOf(url);
+        if (h != null && (h.contains("aoneroom") || h.contains("moviebox"))) {
+            c.setRequestProperty("Origin", SITE);
+            c.setRequestProperty("X-Client-Info", "{\"timezone\":\"Asia/Calcutta\"}");
+            c.setRequestProperty("X-Request-Lang", "en");
+            c.setRequestProperty("X-Client-Token", mbToken());
+        }
         if (range != null) c.setRequestProperty("Range", range);
         return c;
     }
@@ -1055,10 +1419,43 @@ public class LocalServer {
 
     // ---------------------------------------------------------------- caches
 
-    private synchronized CacheEntry apiCacheGet(String key) {
+    private static boolean needsToken(String path) {
+        return path.startsWith("/api/")
+                || "/page".equals(path) || "/extract".equals(path)
+                || path.startsWith("/tmdb/3/")
+                || "/img".equals(path) || "/stream".equals(path) || "/raw".equals(path)
+                || "/hls".equals(path) || "/hlsseg".equals(path)
+                || "/dash".equals(path) || "/dashseg".equals(path);
+    }
+
+    private static String stripToken(String query) {
+        if (query == null) return "";
+        return query.replaceAll("(^|&)t=[^&]*", "").replaceAll("^&", "");
+    }
+
+    private static boolean isSafeUrl(String url) {
+        try {
+            URL u = new URL(url);
+            String proto = u.getProtocol();
+            if (!"http".equalsIgnoreCase(proto) && !"https".equalsIgnoreCase(proto)) return false;
+            String host = u.getHost();
+            if (host == null || host.isEmpty()) return false;
+            String h = host.toLowerCase(Locale.US);
+            if (h.equals("localhost") || h.endsWith(".local") || h.equals("0.0.0.0")) return false;
+            if (h.startsWith("127.") || h.startsWith("10.") || h.startsWith("192.168.")
+                    || h.startsWith("169.254.") || h.startsWith("0.")) return false;
+            if (h.matches("172\\.(1[6-9]|2[0-9]|3[01])\\..*")) return false;
+            if (h.equals("[::1]") || h.equals("::1")) return false;
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private synchronized CacheEntry apiCacheGet(String key, long ttl) {
         CacheEntry e = apiCache.get(key);
         if (e == null) return null;
-        if (System.currentTimeMillis() - e.at > API_CACHE_MS) {
+        if (System.currentTimeMillis() - e.at > ttl) {
             apiCache.remove(key);
             return null;
         }
@@ -1070,8 +1467,91 @@ public class LocalServer {
     }
 
     private synchronized void apiCachePut(String key, byte[] body, String type) {
-        if (apiCache.size() > 140) apiCache.clear();
+        if (body == null || body.length == 0) return;
+        if (apiCache.size() > 180) apiCache.clear();
         apiCache.put(key, new CacheEntry(body, type));
+        diskPut(key, body);
+    }
+
+    private static String sha256(String s) {
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] d = md.digest(s.getBytes("UTF-8"));
+            StringBuilder sb = new StringBuilder(d.length * 2);
+            for (byte b : d) sb.append(String.format("%02x", b & 0xff));
+            return sb.toString();
+        } catch (Exception e) {
+            return String.valueOf(s.hashCode());
+        }
+    }
+
+    private byte[] diskGet(String key, long ttl) {
+        try {
+            File f = new File(diskDir, sha256(key) + ".bin");
+            if (!f.isFile()) return null;
+            if (ttl > 0 && System.currentTimeMillis() - f.lastModified() > ttl) {
+                f.delete();
+                return null;
+            }
+            if (f.length() > 24L * 1024L * 1024L) return null;
+            FileInputStream in = new FileInputStream(f);
+            try {
+                return readAll(in, 24 * 1024 * 1024);
+            } finally {
+                try { in.close(); } catch (IOException ignored) {}
+            }
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private void diskPut(String key, byte[] body) {
+        if (body == null || body.length == 0) return;
+        try {
+            File f = new File(diskDir, sha256(key) + ".bin");
+            File tmp = new File(diskDir, f.getName() + ".tmp");
+            FileOutputStream out = new FileOutputStream(tmp);
+            try {
+                out.write(body);
+                out.flush();
+            } finally {
+                try { out.close(); } catch (IOException ignored) {}
+            }
+            if (f.exists()) f.delete();
+            if (!tmp.renameTo(f)) tmp.delete();
+            if (++diskWrites % 40 == 0) trimDisk();
+        } catch (Exception e) {
+            Log.w(TAG, "disk cache: " + e.getMessage());
+        }
+    }
+
+    private void trimDisk() {
+        try {
+            File[] files = diskDir.listFiles();
+            if (files == null) return;
+            long now = System.currentTimeMillis();
+            long total = 0;
+            for (File f : files) {
+                if (!f.isFile()) continue;
+                if (now - f.lastModified() > 10L * 24L * 60L * 60L * 1000L) {
+                    f.delete();
+                    continue;
+                }
+                total += f.length();
+            }
+            if (total > 384L * 1024L * 1024L) {
+                java.util.Arrays.sort(files, new java.util.Comparator<File>() {
+                    @Override public int compare(File a, File b) {
+                        return Long.compare(a.lastModified(), b.lastModified());
+                    }
+                });
+                for (File f : files) {
+                    if (total <= 256L * 1024L * 1024L) break;
+                    total -= f.length();
+                    f.delete();
+                }
+            }
+        } catch (Exception ignored) {}
     }
 
     private synchronized byte[] chunkGet(String key) {

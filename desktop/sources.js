@@ -1,4 +1,4 @@
-/* sources.js - the SuperBox Vault data catalog v4 (pure data, no DOM).
+/* sources.js - the SuperBox unified-library data catalog v4 (pure data, no DOM).
    ---------------------------------------------------------------------------
    Extracted and cleaned from the reference build:
      - TMDB/Bollywood provider ladder (dead hosts purged: VidBinge invalid-cert,
@@ -465,7 +465,6 @@
   })();
 
   window.ZAI = {
-    TMDB_KEY: '3104601db7b49ab8140edd482412445a',
     PROVIDERS: PROVIDERS,
     LANGS: LANGS,
     TMDB_ROWS: TMDB_ROWS,

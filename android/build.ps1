@@ -2,7 +2,7 @@ param(
     [string]$BuildTools = "34.0.0"
 )
 
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "Continue"
 
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $workspace = Split-Path -Parent $root
@@ -47,14 +47,23 @@ $build = Join-Path $root "build"
 $gen = Join-Path $build "gen"
 $classes = Join-Path $build "classes"
 $dexDir = Join-Path $build "dex"
+$stagingAssets = Join-Path $build "assets"
 $dist = Join-Path $workspace "dist"
 
 $python = (Get-Command python -ErrorAction SilentlyContinue).Source
 if (-not $python) { $python = (Get-Command py -ErrorAction SilentlyContinue).Source }
 if (-not $python) { throw "Python 3 is required to add classes.dex." }
+$node = (Get-Command node -ErrorAction SilentlyContinue).Source
+if (-not $node) { throw "Node.js is required to obfuscate and encrypt assets." }
 
 if (Test-Path $build) { Remove-Item $build -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $gen, $classes, $dexDir, $dist | Out-Null
+
+Write-Host "== stage + obfuscate + encrypt assets =="
+& $node (Join-Path $workspace "tools\build-assets.mjs") `
+    (Join-Path $root "assets") $stagingAssets `
+    (Join-Path $root "src\com\superbox\mobile\BuildSecrets.java")
+if ($LASTEXITCODE -ne 0) { throw "asset staging failed" }
 
 Write-Host "== aapt2 compile =="
 & $aapt2 compile --dir (Join-Path $root "res") -o (Join-Path $build "res.zip")
@@ -63,7 +72,7 @@ if ($LASTEXITCODE -ne 0) { throw "aapt2 compile failed" }
 Write-Host "== aapt2 link =="
 & $aapt2 link -o (Join-Path $build "base.apk") -I $androidJar `
     --manifest (Join-Path $root "AndroidManifest.xml") `
-    -A (Join-Path $root "assets") `
+    -A $stagingAssets `
     --java $gen `
     (Join-Path $build "res.zip")
 if ($LASTEXITCODE -ne 0) { throw "aapt2 link failed" }
@@ -75,10 +84,13 @@ $sources += (Get-ChildItem $gen -Recurse -Filter *.java).FullName
 & javac -source 8 -target 8 -Xlint:-options -encoding UTF-8 -bootclasspath $androidJar -d $classes $sources
 if ($LASTEXITCODE -ne 0) { throw "javac failed" }
 
-Write-Host "== d8 =="
+Write-Host "== R8 (shrink + optimize + obfuscate) =="
 $classFiles = (Get-ChildItem $classes -Recurse -Filter *.class).FullName
-& $d8 --release --min-api 23 --lib $androidJar --output $dexDir $classFiles
-if ($LASTEXITCODE -ne 0) { throw "d8 failed" }
+$r8Jar = Join-Path $bt "lib\d8.jar"
+& java -cp $r8Jar com.android.tools.r8.R8 --release --min-api 23 `
+    --lib $androidJar --output $dexDir `
+    --pg-conf (Join-Path $root "proguard-rules.pro") $classFiles
+if ($LASTEXITCODE -ne 0) { throw "R8 failed" }
 
 Write-Host "== add classes.dex =="
 & $python (Join-Path $root "tools\add-dex.py") (Join-Path $build "base.apk") (Join-Path $dexDir "classes.dex")
