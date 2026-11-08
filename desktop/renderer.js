@@ -50,10 +50,12 @@
   } catch (e) { store = { key: '', lang: 'en-US' }; }
   var state = { section: 'home', sub: 'jav', current: null, hls: null, next: null, subs: null, audioPicked: false, naturalEnd: false, failed: new Map(), cfDead: new Set(), embedStuck: null, cfChk: null, liveFilter: '', series: null };
 
-  /* One explicit grace period for every source watchdog. A provider that is
-     still buffering must not be silently replaced; only a real fatal media
-     error is allowed to rotate a live player before this window expires. */
-  var SOURCE_GRACE_MS = 45000;
+  /* Grace period for a source that is still fetching its first frame. A
+     live connection that delivers bytes keeps its full window; the
+     progress-aware stall check in playStream rotates a socket that answers
+     nothing after 15s. This floor only prevents a plainly-too-short explicit
+     watchdog from killing a slow-but-working source. */
+  var SOURCE_GRACE_MS = 20000;
   function sourceGrace(ms) { return Math.max(SOURCE_GRACE_MS, Number(ms) || 0); }
 
   /* Cloudflare challenge log, fed by main.js webRequest sniffing: an embed
@@ -567,6 +569,7 @@
     if (wrap.__loaded) return;
     wrap.__loaded = true;
     var strip = wrap.__strip, row = wrap.__row;
+    var hadCache = !!wrap.__cached;
     var timer = 0;
     try {
       /* No catalogue row may sit on "Loading..." forever: the backend already
@@ -576,10 +579,19 @@
         timer = setTimeout(function () { bad(new Error('row timeout')); }, 25000);
       });
       var items = prepareItems(await Promise.race([loadRow(row), guard]));
+      if (!items || !items.length) {
+        /* Keep cached cards on a dead upstream instead of blanking the row. */
+        if (hadCache) return;
+        strip.innerHTML = '';
+        strip.appendChild(el('div', 'empty', 'Nothing available right now.'));
+        return;
+      }
       strip.innerHTML = '';
-      if (!items || !items.length) { strip.appendChild(el('div', 'empty', 'Nothing available right now.')); return; }
       items.slice(0, 40).forEach(function (it) { strip.appendChild(cardNode(it)); });
+      wrap.__cached = false;
+      cachePut(row, items);
     } catch (e) {
+      if (hadCache) return;
       strip.innerHTML = '';
       strip.appendChild(el('div', 'empty', 'Nothing available right now.'));
     } finally {
@@ -592,6 +604,26 @@
     if (!u) return [''];
     if (it.kind === 'tmdb' || it.kind === 'country' || it.kind === 'arc' || it.kind === 'live' || it.kind === 'yt' || it.kind === 'mb' || /^https?:\/\/image\.tmdb\.org/i.test(u)) return [u];
     return SC.imgChain(u);
+  }
+
+  /* Hover-intent prefetch: the moment the viewer pauses on a vault card, the
+     resolver warms the session/extract cache in the background. Clicking then
+     starts in milliseconds even when the upstream is slow, and a card that is
+     merely browsed past costs one bounded request. */
+  var PREFETCHABLE = { ep: 1, jav: 1, r34v: 1, ai: 1 };
+  var prefetchDone = new Set();
+  var prefetchBusy = false;
+  function prefetchItem(it) {
+    if (!it || it.file || state.section !== 'adult') return;
+    if (!PREFETCHABLE[it.kind] || !(it.page || it.url)) return;
+    var key = String(it.page || it.url);
+    if (prefetchDone.has(key) || prefetchBusy) return;
+    prefetchDone.add(key);
+    if (prefetchDone.size > 160) prefetchDone.clear();
+    prefetchBusy = true;
+    try {
+      SC.extract(key, it.t, 20000).catch(function () {}).then(function () { prefetchBusy = false; });
+    } catch (e) { prefetchBusy = false; }
   }
 
   function cardNode(it, wide) {
@@ -611,6 +643,14 @@
     if (sub) meta.appendChild(el('div', 's', sub));
     c.appendChild(meta);
     c.onclick = function () { openItem(it); };
+    var pfTimer = 0;
+    c.onmouseenter = function () {
+      if (pfTimer) return;
+      pfTimer = setTimeout(function () { pfTimer = 0; prefetchItem(it); }, 260);
+    };
+    c.onmouseleave = function () {
+      if (pfTimer) { clearTimeout(pfTimer); pfTimer = 0; }
+    };
     return c;
   }
 
@@ -843,19 +883,105 @@
     return wrap;
   }
 
+  /* ---------------- row cache (stale-while-revalidate) ----------------
+     Every answered row is persisted, so reopening a section paints instantly
+     and then refreshes in the background. A slow or dead upstream keeps the
+     last good cards instead of replacing them with "Nothing available". */
+  var ROW_CACHE_KEY = 'sb.desktop.rows.v2';
+  var rowMem = null;
+  var rowSaveTimer = 0;
+  function loadRowCache() {
+    if (rowMem) return rowMem;
+    rowMem = {};
+    try {
+      var box = JSON.parse(localStorage.getItem(ROW_CACHE_KEY) || 'null');
+      if (box && box.rows && typeof box.rows === 'object') rowMem = box.rows;
+    } catch (e) { rowMem = {}; }
+    return rowMem;
+  }
+  function rowKey(row) {
+    return [row.kind || '', row.p || '', row.q || '', row.u || row.path || '',
+      row.k || '', row.t || '', state.sub || ''].join('|').slice(0, 300);
+  }
+  function cacheTake(row) {
+    var mem = loadRowCache();
+    var e = mem[rowKey(row)];
+    if (!e || !Array.isArray(e.items) || !e.items.length) return null;
+    if (Date.now() - (e.at || 0) > 6 * 3600 * 1000) return null;
+    return e.items;
+  }
+  function cachePut(row, list) {
+    if (!list || !list.length) return;
+    var items = list.slice(0, 40);
+    if (JSON.stringify(items).length > 80000) return;
+    loadRowCache()[rowKey(row)] = { at: Date.now(), items: items };
+    if (rowSaveTimer) clearTimeout(rowSaveTimer);
+    rowSaveTimer = setTimeout(function () {
+      rowSaveTimer = 0;
+      try {
+        var mem = loadRowCache();
+        var keys = Object.keys(mem);
+        if (keys.length > 80) {
+          keys.sort(function (a, b) { return (mem[a].at || 0) - (mem[b].at || 0); });
+          keys.slice(0, keys.length - 80).forEach(function (k) { delete mem[k]; });
+        }
+        localStorage.setItem(ROW_CACHE_KEY, JSON.stringify({ v: 2, rows: mem }));
+      } catch (e) {
+        try { localStorage.removeItem(ROW_CACHE_KEY); } catch (e2) {}
+      }
+    }, 260);
+  }
+
   function paintRows(c, rows) {
     if (!rows.length) { c.appendChild(el('div', 'empty', 'Nothing here yet.')); return; }
     if (rowIO) { try { rowIO.disconnect(); } catch (e) {} }
-    rowIO = new IntersectionObserver(function (es) {
-      es.forEach(function (e) {
-        if (e.isIntersecting) { try { rowIO.unobserve(e.target); } catch (err) {} hydrate(e.target); }
-      });
-    }, { root: c, rootMargin: '900px 0px' });
+    rowIO = null;
+    var queue = [];
     rows.forEach(function (row) {
       var wrap = paintRow(row.t, row);
+      var cached = cacheTake(row);
+      if (cached && cached.length) {
+        wrap.__strip.innerHTML = '';
+        cached.slice(0, 40).forEach(function (it) { wrap.__strip.appendChild(cardNode(it)); });
+        wrap.__cached = true;
+      }
       c.appendChild(wrap);
-      rowIO.observe(wrap);
+      queue.push(wrap);
     });
+    /* Lazy, viewport-driven hydration. The vault exposes dozens of rows per
+       tab (Eporner alone has 60); eagerly hydrating every one of them fired a
+       continuous burst of upstream requests that rate-limited the very API
+       the first click needs. The first rows load immediately, the rest start
+       as they approach the viewport (700px of lead), and cached rows paint
+       from localStorage first - no row ever sits on "Loading..." once seen. */
+    var active = 0, pending = [];
+    function pump() {
+      while (active < 4 && pending.length) {
+        (function (w) {
+          active++;
+          hydrate(w).then(function () { active--; pump(); }, function () { active--; pump(); });
+        })(pending.shift());
+      }
+    }
+    function need(w) {
+      if (w.__queued || w.__loaded) return;
+      w.__queued = true;
+      pending.push(w);
+      pump();
+    }
+    queue.slice(0, 4).forEach(need);
+    if (typeof IntersectionObserver !== 'undefined') {
+      rowIO = new IntersectionObserver(function (ents) {
+        ents.forEach(function (en) {
+          if (!en.isIntersecting) return;
+          try { rowIO.unobserve(en.target); } catch (e) {}
+          need(en.target);
+        });
+      }, { root: c, rootMargin: '700px 0px' });
+      queue.slice(4).forEach(function (w) { rowIO.observe(w); });
+    } else {
+      queue.forEach(need);
+    }
   }
 
   /* 18+ vault: one sidebar entry, sub-nav chips for every adult group. */
@@ -2499,15 +2625,31 @@
     state.audioPicked = false;
     state.naturalEnd = false;
     var dead = false, wd = null, started = false;
+    /* Event listeners live on ONE persistent <video>. Every playStream call
+       used to add three more anonymous listeners that were never removed -
+       after a viewing session that was dozens of live handlers. Each new
+       source now detaches the previous source's handlers first. */
+    if (typeof v.__sbClean === 'function') { try { v.__sbClean(); } catch (e) {} }
+    var vListeners = [];
+    var onV = function (name, fn) { v.addEventListener(name, fn); vListeners.push([name, fn]); };
+    v.__sbClean = function () {
+      for (var li = 0; li < vListeners.length; li++) { try { v.removeEventListener(vListeners[li][0], vListeners[li][1]); } catch (e) {} }
+      vListeners = [];
+    };
     /* Frames successfully rendered (or a buffer at readyState >= 2) are a
        hard "do not rotate" signal. This survives buffering stalls: once a
        viewer has seen the stream, a watchdog may never replace it. */
     var markStarted = function () {
       if (v.readyState >= 2 || (!v.paused && v.currentTime > 0.2)) started = true;
     };
-    v.addEventListener('playing', markStarted);
-    v.addEventListener('loadeddata', markStarted);
-    v.addEventListener('timeupdate', markStarted);
+    var lastProgress = Date.now(), began = Date.now();
+    var noteProgress = function () { lastProgress = Date.now(); markStarted(); };
+    onV('playing', markStarted);
+    onV('loadeddata', markStarted);
+    onV('timeupdate', markStarted);
+    onV('progress', noteProgress);
+    onV('loadedmetadata', noteProgress);
+    onV('canplay', noteProgress);
     var mediaHealthy = function () {
       return started || v.readyState >= 2 || (!v.paused && v.currentTime > 0.2);
     };
@@ -2542,6 +2684,13 @@
       });
       state.hls = h;
       h.on(window.Hls.Events.ERROR, function (_ev, data) { if (data && data.fatal) fail(true); });
+      /* Manifest/level/fragment traffic counts as progress: a slow HLS source
+         keeps its full grace window while a socket that answers nothing is
+         detected and rotated. */
+      h.on(window.Hls.Events.MANIFEST_LOADED, noteProgress);
+      h.on(window.Hls.Events.LEVEL_LOADED, noteProgress);
+      h.on(window.Hls.Events.FRAG_LOADED, noteProgress);
+      h.on(window.Hls.Events.FRAG_BUFFERED, noteProgress);
       /* Levels / renditions only exist after the manifest: refresh the
          settings menu, then force the Hindi -> English -> original
          language priority onto the audio rendition. */
@@ -2582,15 +2731,20 @@
       if (v.readyState >= 1) seekOnce();
     }
     syncVideoUI();
-    /* Dead-source watchdog with a strict state guard: 45s minimum, and it
-       never fires once a frame/buffer exists. A buffering player is healthy. */
-    wd = setTimeout(function () {
-      if (dead) return;
-      if (ep !== playEpoch) return;
-      if (mediaHealthy()) return;
-      if (v.networkState === v.NETWORK_NO_SOURCE) { fail(true); return; }
-      fail(false);
-    }, sourceGrace(opts.watchdog || 45000));
+    /* Dead-source watchdog with a strict state guard. A player that already
+       produced frames/buffer is healthy forever; a source that never produced
+       a first frame is rotated after 15s of ZERO network progress (a dead
+       socket/CDN), and in every case by the explicit grace ceiling. The old
+       implementation waited a flat 45s, which is exactly the "infinite
+       loading" the app used to show when an upstream connection stalled. */
+    var stallTick = function () {
+      if (dead || ep !== playEpoch) return;
+      if (mediaHealthy()) { wd = setTimeout(stallTick, 5000); return; }
+      var now = Date.now();
+      if (now - lastProgress > 15000 || now - began > sourceGrace(opts.watchdog || 45000)) { fail(false); return; }
+      wd = setTimeout(stallTick, 2000);
+    };
+    wd = setTimeout(stallTick, 5000);
   }
 
   var embedTimer = null;
