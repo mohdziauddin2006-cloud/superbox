@@ -108,19 +108,43 @@
   }
   function cssUrl(u) { return u ? "url('" + imgUrl(u) + "')" : "none"; }
 
-  /* Transient image failures are common while the disk cache warms up (the
-     first /img request fetches from a slow CDN). Retry a few times before
-     giving up so cards don't stay stuck on their initials placeholder. */
+  /* Multi-tier image fallback: local /img proxy -> direct origin URL ->
+     images.weserv.nl. The proxy supplies referer/cookies and the disk cache;
+     direct covers proxies that refuse an upstream; weserv rescues CDNs that
+     block the device IP. A card never ends up blank: after the last tier the
+     <img> is removed and the initials placeholder underneath shows. */
   window.SBIMG = function (el) {
-    if (!el) return;
-    var n = parseInt(el.getAttribute("data-retry") || "0", 10) || 0;
-    if (n >= 3) { el.remove(); return; }
-    el.setAttribute("data-retry", String(n + 1));
+    if (!el || !el.isConnected) return;
     var src = el.getAttribute("src") || "";
-    if (!src) { el.remove(); return; }
+    var orig = el.getAttribute("data-u") || "";
+    if (!orig) {
+      try {
+        var abs = new URL(src, location.href);
+        if (abs.pathname === "/img") {
+          orig = abs.searchParams.get("u") || "";
+          if (orig) el.setAttribute("data-u", orig);
+        }
+      } catch (e) {}
+    }
+    var n = parseInt(el.getAttribute("data-retry") || "0", 10) || 0;
+    var chain;
+    if (orig) {
+      chain = [
+        withToken("/img?u=" + encodeURIComponent(orig) + "&cv=2"),
+        orig,
+        "https://images.weserv.nl/?url=" + encodeURIComponent(String(orig).replace(/^https?:\/\//i, ""))
+      ];
+    } else {
+      chain = [src];
+    }
+    var next = n + 1;
+    if (next >= chain.length) { el.remove(); return; }
+    el.setAttribute("data-retry", String(next));
+    el.referrerPolicy = "no-referrer";
+    var url = chain[next];
     setTimeout(function () {
-      el.src = src + (src.indexOf("?") >= 0 ? "&" : "?") + "r=" + (n + 1);
-    }, 500 + n * 1200);
+      if (el.isConnected && url) el.src = url;
+    }, 350 + n * 800);
   };
   function detailUrl(dp) { return "https://movieboxph.org/movies/" + String(dp || "").replace(/^\/+/, ""); }
   function fmtTime(t) {
@@ -1119,9 +1143,24 @@
     updatePlayIcon();
     updatePlayerLabels();
     destroyEngines();
+    /* A new load supersedes every older watchdog. */
+    clearTimeout(pb._watch);
+    var loadGen = (pb._loadGen = (pb._loadGen || 0) + 1);
+    var watchedAt = Date.now();
+    var watch = function () {
+      if (S.playback !== pb || pb._loadGen !== loadGen) return;
+      if (video.readyState >= 2 || (!video.paused && video.currentTime > 0.2)) { pb._watch = null; return; }
+      var idle = Date.now() - watchedAt;
+      if (idle >= 45000 || (idle >= 18000 && video.networkState !== 2)) { failed("This stream is not responding — trying another"); return; }
+      pb._watch = setTimeout(watch, 3000);
+    };
+    pb._watch = setTimeout(watch, 6000);
 
     function nativePlay() {
       try {
+        /* Without this handler a dead direct MP4 / native-HLS URL left the
+           spinner up forever: the <video> fired an error and nobody listened. */
+        video.onerror = function () { failed("This stream failed — trying another"); };
         video.src = src;
         video.load();
       } catch (e) {
@@ -1131,12 +1170,33 @@
 
     function failed(msg) {
       if (S.playback !== pb) return;
+      clearTimeout(pb._watch);
+      pb._watch = null;
       if (!tryNextQuality(msg || "This source failed — trying another")) {
+        /* Nothing in the ladder worked. Before surfacing a dead end, hand the
+           title to the backup stream (the local twin of the same file), then
+           to the source's clean player, then to the source page. */
+        if (pb.fallback && pb.fallback !== pb.quality.url) {
+          var fb = pb.fallback;
+          pb.fallback = "";
+          toast("Trying a backup stream…");
+          playDirect(fb, pb.title, {
+            hls: /\.m3u8(?:[?#]|$)/i.test(fb),
+            ref: pb.waRef || pb.page || "",
+            embed: pb.embed || "",
+            page: pb.page || "",
+            poster: pb.poster || ""
+          });
+          return;
+        }
+        if (pb.embed) { toast("Opening the source player…"); openWeb(pb.embed, pb.title); return; }
+        if (pb.page) { toast("Opening the source page…"); openWeb(pb.page, pb.title); return; }
         showPlayerError("This stream could not be played. Try another quality or episode.");
       }
     }
 
     try {
+      video.onerror = null;
       video.pause();
       video.removeAttribute("src");
       video.load();
@@ -1229,6 +1289,7 @@
   }
 
   function showPlayerError(msg) {
+    if (S.playback) { clearTimeout(S.playback._watch); S.playback._watch = null; }
     pErrorText.textContent = msg || "This stream could not be started.";
     pError.classList.remove("hidden");
     pUi.classList.add("hide");
@@ -1335,6 +1396,7 @@
     S.playerOpen = false;
     clearTimeout(S.autoNextTimer);
     clearTimeout(S.controlsTimer);
+    if (S.playback) { clearTimeout(S.playback._watch); S.playback._watch = null; }
     destroyEngines();
     try {
       video.pause();
@@ -1373,6 +1435,9 @@
       tried: {}, failCount: 0, trailer: false,
       poster: opts.poster || "",
       waRef: opts.ref || "",
+      fallback: opts.fallback || "",
+      embed: opts.embed || "",
+      page: opts.page || "",
       restart: function () { closePlayer(); setTimeout(function () { playDirect(url, title, opts); }, 60); }
     };
     openPlayer(pb);

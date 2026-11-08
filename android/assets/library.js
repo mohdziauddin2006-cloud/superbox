@@ -224,8 +224,16 @@
   }
 
   async function javRow(row) {
+    /* SC.javRow tries the local /jav feed first and falls back to parsing
+       123av directly, so Android gets real JAV cards without a Java route. */
+    try {
+      var list = await SC.javRow(row);
+      if (list && list.length) return list;
+    } catch (e) {}
     var q = { new: 'japanese', hot: 'japanese', recent: 'japanese', today: 'japanese', week: 'japanese', top: 'japanese', uncensored: 'japanese uncensored', leaked: 'japanese uncensored', fc2: 'fc2' }[row.p] || 'japanese';
-    return SC.epRow({ q: q, order: row.p === 'new' ? 'latest' : 'top-weekly', badge: row.badge || 'JAV' });
+    try {
+      return await SC.epRow({ q: q, order: row.p === 'new' ? 'latest' : 'top-weekly', badge: row.badge || 'JAV' });
+    } catch (e) { return []; }
   }
 
   async function ytRow(row) {
@@ -403,22 +411,86 @@
     return s;
   }
 
+  // ------------------------------------------------------------ row cache
+  /* Heavy local state cache: every answered row is persisted so the next
+     launch paints instantly (stale-while-revalidate). Cached rows render
+     synchronously, then refresh in the background - a slow upstream can no
+     longer leave a visible "Loading..." row, and a dead upstream keeps the
+     last good cards instead of blanking the shelf. */
+  var ROW_CACHE_KEY = 'sb.rows.v2';
+  var rowMem = {};
+  var rowCacheLoaded = false;
+  var rowSaveTimer = 0;
+  function loadRowCache() {
+    if (rowCacheLoaded) return;
+    rowCacheLoaded = true;
+    try {
+      var box = JSON.parse(localStorage.getItem(ROW_CACHE_KEY) || 'null');
+      if (box && box.rows && typeof box.rows === 'object') rowMem = box.rows;
+    } catch (e) { rowMem = {}; }
+  }
+  function saveRowCache() {
+    if (rowSaveTimer) clearTimeout(rowSaveTimer);
+    rowSaveTimer = setTimeout(function () {
+      rowSaveTimer = 0;
+      try {
+        var keys = Object.keys(rowMem);
+        if (keys.length > 64) {
+          keys.sort(function (a, b) { return (rowMem[a].at || 0) - (rowMem[b].at || 0); });
+          keys.slice(0, keys.length - 64).forEach(function (k) { delete rowMem[k]; });
+        }
+        localStorage.setItem(ROW_CACHE_KEY, JSON.stringify({ v: 2, rows: rowMem }));
+      } catch (e) {
+        /* Quota exceeded: keep the in-memory cache and clear the disk copy
+           rather than breaking row rendering. */
+        try { localStorage.removeItem(ROW_CACHE_KEY); } catch (e2) {}
+      }
+    }, 240);
+  }
+  function rowKey(row) {
+    return [row.kind || '', row.p || '', row.q || '', row.u || row.path || '',
+      row.k || '', row.t || '', st.sub || ''].join('|').slice(0, 300);
+  }
+  function cacheTake(row) {
+    loadRowCache();
+    var e = rowMem[rowKey(row)];
+    if (!e || !Array.isArray(e.items) || !e.items.length) return null;
+    if (Date.now() - (e.at || 0) > 6 * 3600 * 1000) return null;
+    return e.items;
+  }
+  function cachePut(row, list) {
+    if (!list || !list.length) return;
+    var items = list.slice(0, 32);
+    if (JSON.stringify(items).length > 60000) return;
+    rowMem[rowKey(row)] = { at: Date.now(), items: items };
+    saveRowCache();
+  }
+
   function paintRows(host, rows, token) {
+    loadRowCache();
     var queue = [];
     rows.forEach(function (row, i) {
       var wrap = document.createElement('div');
       wrap.innerHTML = rowShell(row, i);
       var el = wrap.firstChild;
       host.appendChild(el);
+      var cached = cacheTake(row);
+      if (cached) {
+        var track0 = $('.wa-track', el);
+        if (track0) track0.innerHTML = cards(cached.slice(0, 24));
+        var count0 = $('.wa-count', el);
+        if (count0) count0.textContent = cached.length + ' titles';
+        el.setAttribute('data-cached', '1');
+      }
       queue.push({ row: row, el: el });
     });
     var idx = 0, active = 0;
     function pump() {
       if (token !== st.token) return;
-      while (active < 4 && idx < queue.length) {
+      while (active < 6 && idx < queue.length) {
         var q = queue[idx++];
         active++;
-        loadOne(q, token).then(function () { active--; pump(); });
+        loadOne(q, token).then(function () { active--; pump(); }, function () { active--; pump(); });
       }
     }
     pump();
@@ -437,22 +509,44 @@
   async function loadOne(q, token) {
     var track = $('.wa-track', q.el);
     var count = $('.wa-count', q.el);
+    var cached = cacheTake(q.row);
     var list = [];
+    var timer = 0;
     try {
-      list = await loadRow(q.row);
-      list = dedupe(list);
+      /* Hard ceiling per row: no upstream combination may keep a shelf on
+         "Loading..." beyond 22s. The cache is painted first, so the wait is
+         invisible whenever this row answered before. */
+      list = await Promise.race([
+        loadRow(q.row),
+        new Promise(function (res) {
+          timer = setTimeout(function () { res(null); }, 22000);
+        })
+      ]);
+      clearTimeout(timer);
+      list = dedupe(list || []);
     } catch (e) {
+      clearTimeout(timer);
       list = [];
     }
     if (token !== st.token || !q.el.isConnected) return;
     if (!list.length) {
+      if (cached && cached.length) {
+        if (!track) return;
+        track.innerHTML = cards(cached.slice(0, 24));
+        if (count) count.textContent = cached.length + ' cached';
+        q.el.setAttribute('data-cached', '1');
+        return;
+      }
       q.el.classList.add('wa-empty-row');
       if (count) count.textContent = 'unavailable';
       if (track) track.innerHTML = '<div class="wa-note">This source did not answer. Try another row or refresh.</div>';
       return;
     }
+    q.el.classList.remove('wa-empty-row');
+    q.el.removeAttribute('data-cached');
     if (count) count.textContent = list.length + ' titles';
     if (track) track.innerHTML = cards(list.slice(0, 24));
+    cachePut(q.row, list);
   }
 
   function dedupe(list) {
@@ -861,7 +955,7 @@
     var timeBadge = /^\d{1,2}:\d{2}(?::\d{2})?$/.test(badge);
     var meta = [it.year, it.dur || (timeBadge ? badge : ''), it.parts ? it.parts + ' parts' : '', timeBadge ? '' : badge].filter(Boolean).join('   ·   ');
     var desc = it.desc || '';
-    var series = it.isSeries || it.parts > 0 || /^(xs|kat|kd|hd|ai|htv)$/.test(it.kind || '');
+    var series = it.isSeries || it.parts > 0 || /^(xs|kat|kd|hd|jav|ai|htv)$/.test(it.kind || '');
     var body = '<div class="wad-body">' +
       '<div class="wad-actions">' +
       '<button class="btn-primary" data-wad-play>' + iconPlay() + ' ' + (parts && parts.length ? 'Play E1' : 'Play now') + '</button>' +
@@ -954,8 +1048,58 @@
     if (box) box.innerHTML = '<img src="' + esc(img(it.poster)) + '" alt="" onerror="SBIMG(this)">';
   }
 
+  /* JAV / AI rows carry their own episode ladder that the generic page
+     scraper cannot see (player payload / Next.js flight data). These two
+     helpers normalize that map into the same {n,t,url} shape the picker
+     already renders, so one code path drives every episodic surface. */
+  function epParts(list) {
+    return (list || []).map(function (e, i) {
+      var n = Number(e && (e.ep || e.n)) || (i + 1);
+      return {
+        n: n, s: Number(e && e.s) || 0,
+        url: String((e && (e.url || e.file)) || ''),
+        t: String((e && (e.title || e.name)) || ('Episode ' + n)).slice(0, 140),
+        direct: !!(e && e.direct)
+      };
+    }).filter(function (p) { return p.url; }).sort(function (a, b) { return a.n - b.n; });
+  }
+
+  async function loadJavParts(it) {
+    var page = it.page || it.url;
+    var parts = [];
+    try {
+      var res = await SC.javEpisodes(page);
+      parts = epParts(res && res.episodes);
+    } catch (e) { parts = []; }
+    if (!parts.length) parts = [{ n: 1, s: 0, url: page, t: 'Episode 1', direct: false }];
+    if (st.current !== it) return;
+    st.parts = parts;
+    var host = document.getElementById('wadParts');
+    if (host) host.innerHTML = partsHtml(parts);
+    var playBtn = $('[data-wad-play]', detailEl);
+    if (playBtn) playBtn.innerHTML = iconPlay() + ' Play E1';
+  }
+
+  async function loadAiParts(it) {
+    var page = it.page || it.url;
+    var parts = [];
+    try {
+      var res = await SC.aiEpisodes(page);
+      parts = epParts(res && res.episodes);
+    } catch (e) { parts = []; }
+    if (!parts.length) parts = [{ n: 1, s: 0, url: page, t: 'Episode 1', direct: false }];
+    if (st.current !== it) return;
+    st.parts = parts;
+    var host = document.getElementById('wadParts');
+    if (host) host.innerHTML = partsHtml(parts);
+    var playBtn = $('[data-wad-play]', detailEl);
+    if (playBtn && parts.length > 1) playBtn.innerHTML = iconPlay() + ' Play E1';
+  }
+
   async function loadParts(it) {
     if (!it.page && !it.url) return;
+    if (it.kind === 'jav') return loadJavParts(it);
+    if (it.kind === 'ai') return loadAiParts(it);
     var pageUrl = it.page || it.url;
     try {
       var html = await SC.fetchText(pageUrl, 18000);
@@ -1038,7 +1182,10 @@
     if (pb) {
       var idx = Number(pb.getAttribute('data-wad-part')) || 0;
       var part = st.parts[idx];
-      if (part) playCustom(it, part.url, part.t || (it.t + ' · E' + (part.n || idx + 1)));
+      if (part) {
+        if (part.direct) App.playDirect(part.url, part.t || it.t || '', { hls: /\.m3u8/i.test(part.url), ref: it.page || it.url });
+        else playCustom(it, part.url, part.t || (it.t + ' · E' + (part.n || idx + 1)));
+      }
       return;
     }
   }
@@ -1085,21 +1232,42 @@
     var btns = $$('[data-wad-play]', detailEl);
     btns.forEach(function (b) { b.textContent = 'Preparing stream…'; b.disabled = true; });
     try {
+      /* JAV plays through its own resolver BEFORE the generic sniffer: the
+         stream sits behind a player payload + a JSON hop that /extract cannot
+         follow, but the resolver returns a signed native HLS playlist. */
+      if (it.kind === 'jav' || /(?:^|\.)123av\.com$/i.test(hostOf(url) || '') || /\/\/sadie-shop\.site\/e\//i.test(url)) {
+        try {
+          var jr = await SC.javResolve(url);
+          if (jr && jr.file) {
+            App.playDirect(jr.file, title || it.t, { hls: jr.type === 'hls', ref: jr.ref || url, page: url });
+            return;
+          }
+        } catch (e) {}
+      }
+      /* A URL that already names a media file never needs the sniffer: play it
+         natively and let the player's own fallback ladder handle the format. */
+      if (/\.(?:m3u8|mp4|webm|mkv)(?:[?#]|$)/i.test(url)) {
+        App.playDirect(url, title || it.t, { hls: /\.m3u8/i.test(url), ref: it.page || url, page: url });
+        return;
+      }
       if (it.kind === 'htv') {
         try {
           var nh = await SC.nhStream(url);
-          if (nh && nh.url) { App.playDirect(nh.url, title || it.t, { ref: 'https://nhplayer.com/' }); return; }
+          if (nh && nh.url) { App.playDirect(nh.url, title || it.t, { ref: 'https://nhplayer.com/', page: url }); return; }
         } catch (e) {}
       }
       var ex = null;
-      try { ex = await SC.extract(url, title || it.t, 40000); } catch (e) { ex = null; }
+      try { ex = await SC.extract(url, title || it.t, 25000); } catch (e) { ex = null; }
       if (ex && ex.ok !== false) {
+        var alt = (ex.play && ex.play !== ex.file) ? ex.play : "";
         if (ex.type === 'hls' && (ex.play || ex.file)) {
-          App.playDirect(ex.play || ex.file, title || it.t, { hls: true, ref: ex.ref || url });
+          App.playDirect(ex.play || ex.file, title || it.t,
+            { hls: true, ref: ex.ref || url, fallback: (ex.file && ex.file !== (ex.play || ex.file)) ? ex.file : alt, embed: ex.embed || ex.isolated || '', page: url });
           return;
         }
         if (ex.type === 'direct' && (ex.file || ex.play)) {
-          App.playDirect(ex.file || ex.play, title || it.t, { ref: ex.ref || url });
+          App.playDirect(ex.file || ex.play, title || it.t,
+            { ref: ex.ref || url, fallback: alt, embed: ex.embed || ex.isolated || '', page: url });
           return;
         }
         if (ex.type === 'embed' && ex.embed) {
@@ -1110,7 +1278,7 @@
       var html = await SC.fetchText(url, 18000);
       var media = findMedia(html);
       if (media) {
-        App.playDirect(media, title || it.t, { hls: /\.m3u8/i.test(media), ref: url });
+        App.playDirect(media, title || it.t, { hls: /\.m3u8/i.test(media), ref: url, page: url });
         return;
       }
       var frame = findIframe(html, url);
