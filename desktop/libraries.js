@@ -832,33 +832,204 @@
      and one /extract answer per video (native HLS). The renderer never
      scrapes the site itself, so a Cloudflare/CORS dead end cannot stall the
      row. Search falls back to the Eporner JAV shelf when 123av has no hit. */
+  var JAV_BASE = 'https://123av.com';
+  var JAV_PATHS = {
+    new: '/en/new', hot: '/en/hot', recent: '/en/recent',
+    today: '/en/all?sort=today', week: '/en/all?sort=week', top: '/en/all?sort=month',
+    uncensored: '/en/uncensored', leaked: '/en/uncensored-leaked', fc2: '/en/makers/fc2'
+  };
+  var JAV_BADGES = {
+    new: 'JAV-NEW', hot: 'JAV-HOT', recent: 'JAV-REC', today: 'JAV-TRD',
+    week: 'JAV-WK', top: 'JAV-TOP', uncensored: 'JAV-UNC', leaked: 'LEAK', fc2: 'FC2'
+  };
+  function javJsString(src) {
+    return String(src || '').replace(/\\(u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|[\s\S])/g, function (_m, g) {
+      if (g.charAt(0) === 'u' || g.charAt(0) === 'x') return String.fromCharCode(parseInt(g.slice(1), 16));
+      if (g === 'n') return '\n';
+      if (g === 'r') return '\r';
+      if (g === 't') return '\t';
+      return g;
+    });
+  }
+  /* 123av card markup: title anchors carry .card__link, while the thumbnail
+     anchor carries .card__img and .card__dur. Both share /en/v/<slug>, so the
+     maps are joined by href instead of a fragile container regex. */
+  function parseJavCards(html) {
+    var titles = {}, hrefs = [];
+    var tr = /<a[^>]+class=["'][^"']*card__link[^"']*["'][^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi, m;
+    while ((m = tr.exec(html))) {
+      if (/^\/en\/v\//.test(m[1])) titles[m[1]] = strip(m[2]);
+    }
+    var cr = /<a[^>]+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+    while ((m = cr.exec(html))) {
+      var href = m[1], inner = m[2];
+      if (!/^\/en\/v\//.test(href)) continue;
+      var im = inner.match(/<img[^>]+class=["'][^"']*card__img[^"']*["'][^>]*src=["']([^"']+)["']/i) ||
+               inner.match(/<img[^>]+src=["']([^"']+)["'][^>]*class=["'][^"']*card__img/i);
+      if (!im) continue;
+      var title = cleanTitle(titles[href] || '');
+      if (!title || title.length < 2) continue;
+      var dur = strip((inner.match(/<span[^>]+class=["'][^"']*card__dur[^"']*["'][^>]*>([^<]+)</i) || [])[1] || '');
+      hrefs.push({
+        t: title.slice(0, 110), poster: abs(decode(im[1]), JAV_BASE + '/'),
+        page: JAV_BASE + href, dur: dur, kind: 'jav',
+        isSeries: true, type: 'tv', ep: 1, parts: 1
+      });
+      if (hrefs.length >= 40) break;
+    }
+    return hrefs;
+  }
+  async function javCatalogue(row) {
+    var id = (row && row.p) || 'new';
+    var path = JAV_PATHS[id] || JAV_PATHS.new;
+    var badge = (row && row.badge) || JAV_BADGES[id] || 'JAV';
+    var html = await fetchText(JAV_BASE + path, 12000);
+    var items = parseJavCards(html);
+    if (items.length && /\/en\/(?:new|recent)|^\/en\/all/.test(path)) {
+      try {
+        var html2 = await fetchText(JAV_BASE + path + (path.indexOf('?') >= 0 ? '&page=2' : '?page=2'), 10000);
+        var more = parseJavCards(html2);
+        var seen = {}, merged = [];
+        items.concat(more).forEach(function (it) {
+          var k = r34vKey(it.page);
+          if (seen[k]) return;
+          seen[k] = 1; merged.push(it);
+        });
+        items = merged;
+      } catch (e) {}
+    }
+    items.forEach(function (it) { it.badge = badge; });
+    return items.slice(0, 40);
+  }
+  /* Resolve with the first NON-EMPTY list; resolves [] only when every
+     source failed. Slow/losing requests keep running harmlessly. */
+  function firstList(promises) {
+    return new Promise(function (resolve) {
+      var left = promises.length, done = false;
+      if (!left) { resolve([]); return; }
+      promises.forEach(function (p) {
+        Promise.resolve(p).then(function (list) {
+          if (done) return;
+          if (list && list.length) { done = true; resolve(list); return; }
+          if (--left === 0) { done = true; resolve([]); }
+        }, function () {
+          if (done) return;
+          if (--left === 0) { done = true; resolve([]); }
+        });
+      });
+    });
+  }
   async function javRow(row) {
-    var B = await base();
-    var j = await fetchJSON(B + '/jav?row=' + enc(row.p || 'new'), 15000);
-    return ((j && j.items) || []);
+    /* Backend feed and the client-side 123av parser race: whichever answers
+       with cards first paints the row. One slow upstream can no longer hold
+       nine shelves hostage. */
+    var backend = (async function () {
+      try {
+        var B = await base();
+        var j = await fetchJSON(B + '/jav?row=' + enc(row.p || 'new'), 14000);
+        return (j && j.items) || [];
+      } catch (e) { return []; }
+    })();
+    var client = javCatalogue(row).catch(function () { return []; });
+    return firstList([backend, client]);
   }
   async function javSearch(q) {
     var term = String(q || '').trim();
     if (!term) return [];
-    var B = await base();
-    var out = [];
+    var B = null, out = [];
     try {
-      var j = await fetchJSON(B + '/jav?q=' + enc(term), 15000);
+      B = await base();
+      var j = await fetchJSON(B + '/jav?q=' + enc(term), 9000);
       out = ((j && j.items) || []);
     } catch (e) {}
+    if (!out.length) {
+      try {
+        var html = await fetchText(JAV_BASE + '/en/search?keyword=' + enc(term), 12000);
+        out = parseJavCards(html);
+        out.forEach(function (it) { it.badge = 'RES'; });
+      } catch (e) {}
+    }
     if (!out.length) { try { out = await epSearch('japanese ' + term); } catch (e) {} }
     return out.slice(0, 24);
+  }
+  function parseJavEpisodes(html, pageUrl) {
+    var out = [], seen = {};
+    var m = String(html || '').match(/player\(JSON\.parse\('([\s\S]*?)'\)/);
+    if (m) {
+      try {
+        var arr = JSON.parse(javJsString(m[1]));
+        (arr || []).forEach(function (e2, i) {
+          var raw = String((e2 && e2.url) || '');
+          var em = raw.match(/\/e\/([a-z0-9_]+)/i);
+          var n = Number(e2 && (e2.number || e2.n)) || (i + 1);
+          if (!em || n < 1 || n > 999 || seen[n]) return;
+          seen[n] = 1;
+          var host = 'https://sadie-shop.site';
+          try { host = new URL(raw, pageUrl).origin; } catch (e) {}
+          out.push({
+            ep: n, title: String((e2 && (e2.name || e2.title)) || ('Episode ' + n)).slice(0, 120),
+            url: host + '/e/' + em[1], direct: false
+          });
+        });
+      } catch (e) {}
+    }
+    if (String(html || '').length && pageUrl && !out.some(function (x) { return x.ep === 1; })) {
+      out.unshift({ ep: 1, title: 'Episode 1', url: pageUrl, direct: false });
+    }
+    out.sort(function (a, b) { return (a.ep || 0) - (b.ep || 0); });
+    return out.slice(0, 200);
   }
   /* Episode map for one JAV video page. The backend always includes Episode 1
      (the page itself), so even a one-part video opens the picker with a real
      entry instead of skipping straight into playback. */
   async function javEpisodes(pageUrl) {
     if (!pageUrl || !/^https?:\/\/(?:www\.)?123av\.com\/en\/v\//i.test(pageUrl)) return null;
+    var backend = (async function () {
+      try {
+        var B = await base();
+        var j = await fetchJSON(B + '/jav/eps?url=' + enc(pageUrl), 14000);
+        return (j && j.ok && Array.isArray(j.episodes)) ? j.episodes : [];
+      } catch (e) { return []; }
+    })();
+    var client = (async function () {
+      try {
+        var html = await fetchText(pageUrl, 14000);
+        return parseJavEpisodes(html, pageUrl);
+      } catch (e) { return []; }
+    })();
+    var eps = await firstList([backend, client]);
+    if (!eps.length) eps = [{ ep: 1, title: 'Episode 1', url: pageUrl, direct: false }];
+    return { title: '', episodes: eps };
+  }
+  /* Resolve a 123av video page (or one of its /e/<id> player parts) to the
+     signed HLS stream. This is the Android player's native JAV path: the
+     generic /extract sniffer cannot see through the player payload hop. */
+  async function javResolve(pageUrl) {
+    if (!pageUrl) return null;
+    var embed = '';
+    var direct = String(pageUrl).match(/^https?:\/\/(?:[\w-]+\.)*sadie-shop\.site\/e\/([a-z0-9_]+)/i);
+    if (direct) {
+      embed = pageUrl;
+    } else {
+      var html = '';
+      try { html = await fetchText(pageUrl, 15000); } catch (e) { return null; }
+      var m = String(html).match(/player\(JSON\.parse\('([\s\S]*?)'\)/);
+      if (!m) return null;
+      try {
+        var arr = JSON.parse(javJsString(m[1]));
+        for (var i = 0; i < (arr || []).length; i++) {
+          var u = String((arr[i] && arr[i].url) || '');
+          if (/\/e\/[a-z0-9_]+/i.test(u)) { embed = u; break; }
+        }
+      } catch (e) {}
+    }
+    var idm = String(embed).match(/\/e\/([a-z0-9_]+)/i);
+    if (!idm) return null;
     try {
-      var B = await base();
-      var j = await fetchJSON(B + '/jav/eps?url=' + enc(pageUrl), 16000);
-      if (!j || !j.ok || !Array.isArray(j.episodes) || !j.episodes.length) return null;
-      return { title: '', episodes: j.episodes };
+      var j = await fetchJSONProxy('https://sadie-shop.site/stream?id=' + idm[1], 12000);
+      var f = j && j.media && j.media.stream;
+      if (!f || !/\.(?:m3u8|mp4)(?:[?#]|$)/i.test(String(f))) return null;
+      return { ok: true, type: /\.m3u8/i.test(f) ? 'hls' : 'direct', file: String(f), ref: 'https://sadie-shop.site/' };
     } catch (e) { return null; }
   }
 

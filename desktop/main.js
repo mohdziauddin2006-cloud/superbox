@@ -25,11 +25,22 @@ const os = require('os');
 
 /* One instance only: launching the shortcut twice focuses the open window. */
 const gotLock = app.requestSingleInstanceLock();
+/* Headless verification mode: the UI still renders (and CDP works) but no
+   window is ever shown. Used by CI and by the agent's background tests. */
+const HEADLESS = process.env.SB_HEADLESS === '1';
+/* Headless verification must be completely silent: Chromium's audio output is
+   disabled at the process level, and the window is additionally muted below.
+   This applies only to SB_HEADLESS runs - a normal user launch keeps sound. */
+if (HEADLESS) {
+  app.commandLine.appendSwitch('mute-audio');
+  app.commandLine.appendSwitch('disable-audio-output');
+  app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
+}
 if (!gotLock) {
   app.exit(0);
 } else {
   app.on('second-instance', function () {
-    if (!win || win.isDestroyed()) return;
+    if (!win || win.isDestroyed() || HEADLESS) return;
     if (win.isMinimized()) win.restore();
     win.show();
     win.focus();
@@ -253,11 +264,20 @@ function createWindow() {
       spellcheck: false
     }
   });
+  /* Belt and braces: even if a page tries to force audio, the headless
+     verification window is muted at the webContents level. */
+  if (HEADLESS) {
+    try { win.webContents.setAudioMuted(true); } catch (e) {}
+    win.webContents.on('did-frame-finish-load', function () {
+      if (!win || win.isDestroyed()) return;
+      try { win.webContents.setAudioMuted(true); } catch (e) {}
+    });
+  }
   const appUrl = 'file:///' + path.join(__dirname, 'index.html').replace(/\\/g, '/');
   logLine('INFO', 'Creating window for ' + appUrl);
   win.once('ready-to-show', function () {
     if (!win || win.isDestroyed()) return;
-    win.show();
+    if (!HEADLESS) win.show();
     logLine('INFO', 'Window ready-to-show; visible=' + win.isVisible());
   });
   win.loadFile(path.join(__dirname, 'index.html')).catch(function (err) {

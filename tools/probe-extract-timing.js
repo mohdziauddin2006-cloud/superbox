@@ -1,0 +1,15 @@
+var out = {};
+var t0 = Date.now();
+var B = await SC.base();
+out.baseMs = Date.now() - t0;
+t0 = Date.now();
+var ex = await SC.extract('https://www.eporner.com/embed/A6NCzdaefZ0/', 'Japanese Gangbang 842', 45000);
+out.extractMs = Date.now() - t0;
+out.type = ex && ex.type;
+out.ok = ex && ex.ok;
+out.file = String((ex && ex.file) || '').slice(0, 140);
+t0 = Date.now();
+var ex2 = await SC.extract('https://www.eporner.com/embed/A6NCzdaefZ0/', 'Japanese Gangbang 842', 45000);
+out.extract2Ms = Date.now() - t0;
+out.type2 = ex2 && ex2.type;
+return out;

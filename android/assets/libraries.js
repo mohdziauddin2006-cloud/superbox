@@ -662,27 +662,9 @@
        reaches the DOM. The direct fetches below carry the same strict
        dedupe, and stay as the fallback when the backend is unreachable. */
     var wanted = String(row.tags || 'animated');
-    try {
-      var B0 = await base();
-      var jp = await fetchJSON(B0 + '/r34?tags=' + enc(wanted), 14000);
-      if (jp && jp.ok && Array.isArray(jp.posts) && jp.posts.length) {
-        var seenS = new Set(), outS = [];
-        jp.posts.forEach(function (p) {
-          if (!p || !p.file) return;
-          var id = String(p.id || '').trim();
-          var key = id ? ('id:' + id) : ('u:' + normMedia(p.file));
-          var ukey = 'u:' + normMedia(p.file);
-          if (seenS.has(key) || seenS.has(ukey)) return;
-          seenS.add(key); seenS.add(ukey);
-          outS.push({
-            t: 'R34 #' + (id || ''), poster: p.preview || '', file: String(p.file).replace(/\\\//g, '/'),
-            page: p.page || '', badge: row.badge || 'R34', kind: 'r34'
-          });
-          if (outS.length >= 40) return;
-        });
-        if (outS.length) return outS;
-      }
-    } catch (e) {}
+    /* Android has no /r34 route: go straight to the public gelbooru-style
+       JSON endpoints through the /page proxy. The backend probe would only
+       bounce through the proxy back into this same server. */
     var sources = [
       { u: 'https://xbooru.com/index.php?page=dapi&s=post&q=index&json=1&limit=40&tags=', page: 'https://xbooru.com/index.php?page=post&s=view&id=' },
       { u: 'https://api.rule34.xxx/index.php?page=dapi&s=post&q=index&json=1&limit=40&tags=', page: 'https://rule34.xxx/index.php?page=post&s=view&id=' }
@@ -834,33 +816,166 @@
      and one /extract answer per video (native HLS). The renderer never
      scrapes the site itself, so a Cloudflare/CORS dead end cannot stall the
      row. Search falls back to the Eporner JAV shelf when 123av has no hit. */
+  var JAV_BASE = 'https://123av.com';
+  var JAV_PATHS = {
+    new: '/en/new', hot: '/en/hot', recent: '/en/recent',
+    today: '/en/all?sort=today', week: '/en/all?sort=week', top: '/en/all?sort=month',
+    uncensored: '/en/uncensored', leaked: '/en/uncensored-leaked', fc2: '/en/makers/fc2'
+  };
+  var JAV_BADGES = {
+    new: 'JAV-NEW', hot: 'JAV-HOT', recent: 'JAV-REC', today: 'JAV-TRD',
+    week: 'JAV-WK', top: 'JAV-TOP', uncensored: 'JAV-UNC', leaked: 'LEAK', fc2: 'FC2'
+  };
+  function javJsString(src) {
+    return String(src || '').replace(/\\(u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|[\s\S])/g, function (_m, g) {
+      if (g.charAt(0) === 'u' || g.charAt(0) === 'x') return String.fromCharCode(parseInt(g.slice(1), 16));
+      if (g === 'n') return '\n';
+      if (g === 'r') return '\r';
+      if (g === 't') return '\t';
+      return g;
+    });
+  }
+  /* 123av card markup: title anchors carry .card__link, while the thumbnail
+     anchor carries .card__img and .card__dur. Both share /en/v/<slug>, so the
+     maps are joined by href instead of a fragile container regex. */
+  function parseJavCards(html) {
+    var titles = {}, hrefs = [];
+    var tr = /<a[^>]+class=["'][^"']*card__link[^"']*["'][^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi, m;
+    while ((m = tr.exec(html))) {
+      if (/^\/en\/v\//.test(m[1])) titles[m[1]] = strip(m[2]);
+    }
+    var cr = /<a[^>]+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+    while ((m = cr.exec(html))) {
+      var href = m[1], inner = m[2];
+      if (!/^\/en\/v\//.test(href)) continue;
+      var im = inner.match(/<img[^>]+class=["'][^"']*card__img[^"']*["'][^>]*src=["']([^"']+)["']/i) ||
+               inner.match(/<img[^>]+src=["']([^"']+)["'][^>]*class=["'][^"']*card__img/i);
+      if (!im) continue;
+      var title = cleanTitle(titles[href] || '');
+      if (!title || title.length < 2) continue;
+      var dur = strip((inner.match(/<span[^>]+class=["'][^"']*card__dur[^"']*["'][^>]*>([^<]+)</i) || [])[1] || '');
+      hrefs.push({
+        t: title.slice(0, 110), poster: abs(decode(im[1]), JAV_BASE + '/'),
+        page: JAV_BASE + href, dur: dur, kind: 'jav',
+        isSeries: true, type: 'tv', ep: 1, parts: 1
+      });
+      if (hrefs.length >= 40) break;
+    }
+    return hrefs;
+  }
+  async function javCatalogue(row) {
+    var id = (row && row.p) || 'new';
+    var path = JAV_PATHS[id] || JAV_PATHS.new;
+    var badge = (row && row.badge) || JAV_BADGES[id] || 'JAV';
+    /* Fetch page 1 alone first (fast first paint). Page 2 only doubles a row
+       that answered; a failed row never pays for a second request. */
+    var html = await fetchText(JAV_BASE + path, 12000);
+    var items = parseJavCards(html);
+    if (items.length && /\/en\/(?:new|recent)|^\/en\/all/.test(path)) {
+      try {
+        var html2 = await fetchText(JAV_BASE + path + (path.indexOf('?') >= 0 ? '&page=2' : '?page=2'), 10000);
+        var more = parseJavCards(html2);
+        var seen = {}, merged = [];
+        items.concat(more).forEach(function (it) {
+          var k = r34vKey(it.page);
+          if (seen[k]) return;
+          seen[k] = 1; merged.push(it);
+        });
+        items = merged;
+      } catch (e) {}
+    }
+    items.forEach(function (it) { it.badge = badge; });
+    return items.slice(0, 40);
+  }
   async function javRow(row) {
-    var B = await base();
-    var j = await fetchJSON(B + '/jav?row=' + enc(row.p || 'new'), 15000);
-    return ((j && j.items) || []);
+    /* Android has no /jav route: parse 123av through the Java /page proxy
+       directly. No self-referential backend probe is attempted, so a row can
+       never stall on a route this build does not serve. */
+    try { return await javCatalogue(row); } catch (e) { return []; }
   }
   async function javSearch(q) {
     var term = String(q || '').trim();
     if (!term) return [];
-    var B = await base();
     var out = [];
     try {
-      var j = await fetchJSON(B + '/jav?q=' + enc(term), 15000);
-      out = ((j && j.items) || []);
+      var html = await fetchText(JAV_BASE + '/en/search?keyword=' + enc(term), 12000);
+      out = parseJavCards(html);
+      out.forEach(function (it) { it.badge = 'RES'; });
     } catch (e) {}
     if (!out.length) { try { out = await epSearch('japanese ' + term); } catch (e) {} }
     return out.slice(0, 24);
+  }
+  function parseJavEpisodes(html, pageUrl) {
+    var out = [], seen = {};
+    var m = String(html || '').match(/player\(JSON\.parse\('([\s\S]*?)'\)/);
+    if (m) {
+      try {
+        var arr = JSON.parse(javJsString(m[1]));
+        (arr || []).forEach(function (e2, i) {
+          var raw = String((e2 && e2.url) || '');
+          var em = raw.match(/\/e\/([a-z0-9_]+)/i);
+          var n = Number(e2 && (e2.number || e2.n)) || (i + 1);
+          if (!em || n < 1 || n > 999 || seen[n]) return;
+          seen[n] = 1;
+          var host = 'https://sadie-shop.site';
+          try { host = new URL(raw, pageUrl).origin; } catch (e) {}
+          out.push({
+            ep: n, title: String((e2 && (e2.name || e2.title)) || ('Episode ' + n)).slice(0, 120),
+            url: host + '/e/' + em[1], direct: false
+          });
+        });
+      } catch (e) {}
+    }
+    if (String(html || '').length && pageUrl && !out.some(function (x) { return x.ep === 1; })) {
+      out.unshift({ ep: 1, title: 'Episode 1', url: pageUrl, direct: false });
+    }
+    out.sort(function (a, b) { return (a.ep || 0) - (b.ep || 0); });
+    return out.slice(0, 200);
   }
   /* Episode map for one JAV video page. The backend always includes Episode 1
      (the page itself), so even a one-part video opens the picker with a real
      entry instead of skipping straight into playback. */
   async function javEpisodes(pageUrl) {
     if (!pageUrl || !/^https?:\/\/(?:www\.)?123av\.com\/en\/v\//i.test(pageUrl)) return null;
+    var eps = [];
     try {
-      var B = await base();
-      var j = await fetchJSON(B + '/jav/eps?url=' + enc(pageUrl), 16000);
-      if (!j || !j.ok || !Array.isArray(j.episodes) || !j.episodes.length) return null;
-      return { title: '', episodes: j.episodes };
+      var html = await fetchText(pageUrl, 14000);
+      eps = parseJavEpisodes(html, pageUrl);
+    } catch (e) { eps = []; }
+    if (!eps.length) {
+      eps = [{ ep: 1, title: 'Episode 1', url: pageUrl, direct: false }];
+    }
+    return { title: '', episodes: eps };
+  }
+  /* Resolve a 123av video page (or one of its /e/<id> player parts) to the
+     signed HLS stream. This is the Android player's native JAV path: the
+     generic /extract sniffer cannot see through the player payload hop. */
+  async function javResolve(pageUrl) {
+    if (!pageUrl) return null;
+    var embed = '';
+    var direct = String(pageUrl).match(/^https?:\/\/(?:[\w-]+\.)*sadie-shop\.site\/e\/([a-z0-9_]+)/i);
+    if (direct) {
+      embed = pageUrl;
+    } else {
+      var html = '';
+      try { html = await fetchText(pageUrl, 15000); } catch (e) { return null; }
+      var m = String(html).match(/player\(JSON\.parse\('([\s\S]*?)'\)/);
+      if (!m) return null;
+      try {
+        var arr = JSON.parse(javJsString(m[1]));
+        for (var i = 0; i < (arr || []).length; i++) {
+          var u = String((arr[i] && arr[i].url) || '');
+          if (/\/e\/[a-z0-9_]+/i.test(u)) { embed = u; break; }
+        }
+      } catch (e) {}
+    }
+    var idm = String(embed).match(/\/e\/([a-z0-9_]+)/i);
+    if (!idm) return null;
+    try {
+      var j = await fetchJSONProxy('https://sadie-shop.site/stream?id=' + idm[1], 12000);
+      var f = j && j.media && j.media.stream;
+      if (!f || !/\.(?:m3u8|mp4)(?:[?#]|$)/i.test(String(f))) return null;
+      return { ok: true, type: /\.m3u8/i.test(f) ? 'hls' : 'direct', file: String(f), ref: 'https://sadie-shop.site/' };
     } catch (e) { return null; }
   }
 
@@ -1031,17 +1146,63 @@
       return words.every(function (w) { return hay.indexOf(w) >= 0; });
     }).slice(0, 36);
   }
+  /* Parse Huangguo's Next.js flight payload. Every available episode carries
+     its number + direct MP4; paid/locked entries never ship a media URL, so
+     they are skipped. Client-side twin of srv2's hgEpisodes so Android works
+     without an /ai/eps backend route. */
+  function parseHgEpisodes(html) {
+    var raw = String(html || '');
+    if (raw.indexOf('episodeList') < 0) return [];
+    var flight = '', re = /self\.__next_f\.push\(\[1,("(?:[^"\\]|\\.)*")\]\)/g, m;
+    while ((m = re.exec(raw))) { try { flight += JSON.parse(m[1]); } catch (e) {} }
+    if (!flight) return [];
+    var text = flight.replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+    var at = text.indexOf('"episodeList"');
+    if (at < 0) return [];
+    var start = text.indexOf('[', at);
+    if (start < 0) return [];
+    var depth = 0, inStr = false, esc = false, end = -1;
+    for (var i = start; i < text.length; i++) {
+      var c = text.charAt(i);
+      if (inStr) {
+        if (esc) esc = false;
+        else if (c === '\\') esc = true;
+        else if (c === '"') inStr = false;
+        continue;
+      }
+      if (c === '"') { inStr = true; continue; }
+      if (c === '[') depth++;
+      else if (c === ']') { depth--; if (!depth) { end = i; break; } }
+    }
+    if (end < 0) return [];
+    var arr = null;
+    try { arr = JSON.parse(text.slice(start, end + 1)); } catch (e) { return []; }
+    if (!Array.isArray(arr)) return [];
+    var out = [], seen = {};
+    arr.forEach(function (x) {
+      if (!x) return;
+      var n = Number(x.n) || 0;
+      var url = abs(String(x.video || ''), 'https://huangguodrama.ai/');
+      if (!(n >= 1) || !url || !/^https?:/i.test(url) || !/\.(?:mp4|m3u8)(?:[?#]|$)/i.test(url)) return;
+      if (seen[n]) return;
+      seen[n] = 1;
+      out.push({ ep: n, title: decode(String(x.title || ('Episode ' + n))).slice(0, 180), url: url, direct: true });
+    });
+    out.sort(function (a, b) { return a.ep - b.ep; });
+    return out;
+  }
   /* Full episode map for an AI drama, read from the page's embedded list. The
      picker calls this BEFORE playback so Episode 1 (and every available
      episode) is on screen without starting a stream. */
   async function aiEpisodes(pageUrl) {
     if (!pageUrl) return null;
+    var eps = [];
     try {
-      var B = await base();
-      var j = await fetchJSON(B + '/ai/eps?url=' + enc(pageUrl), 17000);
-      if (!j || !j.ok || !Array.isArray(j.episodes) || j.episodes.length < 2) return null;
-      return { title: '', episodes: j.episodes };
-    } catch (e) { return null; }
+      var html = await fetchText(pageUrl, 17000);
+      eps = parseHgEpisodes(html);
+    } catch (e) { eps = []; }
+    if (eps.length < 2) return null;
+    return { title: '', episodes: eps };
   }
 
   /* ---------------- Tube (ad-free YouTube) ---------------- */
@@ -1111,7 +1272,40 @@
   async function eps(tmdbId, ms) {
     if (!tmdbId) return null;
     var B = await base();
-    try { return await fetchJSON(B + '/eps?tmdb=' + enc(tmdbId), ms || 15000); } catch (e) { return null; }
+    /* Android has no /eps route. Build the exact same payload from the
+       key-injecting TMDB proxy so the player's season selector is always
+       populated. */
+    try {
+      var show = await fetchJSON(B + '/tmdb/3/tv/' + enc(tmdbId), 12000);
+      if (!show || !Array.isArray(show.seasons)) return null;
+      var seasons = show.seasons.filter(function (s) {
+        return s && Number(s.season_number) >= 0 && Number(s.episode_count) > 0;
+      }).sort(function (a, b) { return Number(a.season_number) - Number(b.season_number); }).slice(0, 40);
+      var results = new Array(seasons.length);
+      var cursor = 0;
+      async function worker() {
+        while (cursor < seasons.length) {
+          var idx = cursor++;
+          var s = seasons[idx], n = Number(s.season_number);
+          try {
+            var sd = await fetchJSON(B + '/tmdb/3/tv/' + enc(tmdbId) + '/season/' + n, 12000);
+            results[idx] = {
+              n: n, name: String(s.name || ('Season ' + n)),
+              eps: ((sd && sd.episodes) || []).filter(function (e2) { return Number(e2.episode_number) > 0; })
+                .sort(function (a, b) { return Number(a.episode_number) - Number(b.episode_number); })
+                .map(function (e2) { return { n: Number(e2.episode_number), name: String(e2.name || ('Episode ' + e2.episode_number)), air: String(e2.air_date || '') }; })
+            };
+          } catch (e) {
+            results[idx] = { n: n, name: String(s.name || ('Season ' + n)), eps: [] };
+          }
+        }
+      }
+      var workers = [];
+      for (var w = 0; w < Math.min(4, seasons.length); w++) workers.push(worker());
+      await Promise.all(workers);
+      if (!results.some(function (s) { return s.eps.length; })) return null;
+      return { ok: true, id: String(tmdbId), name: String(show.name || ''), seasons: results };
+    } catch (e) { return null; }
   }
 
   /* ---------------- thumbnails ---------------- */
@@ -1224,6 +1418,10 @@
   SC.javRow = javRow;
   SC.javSearch = javSearch;
   SC.javEpisodes = javEpisodes;
+  SC.javResolve = javResolve;
+  SC.parseJavCards = parseJavCards;
+  SC.parseJavEpisodes = parseJavEpisodes;
+  SC.parseHgEpisodes = parseHgEpisodes;
   SC.hcRow = hcRow;
   SC.hcSearch = hcSearch;
   SC.htvRow = htvRow;

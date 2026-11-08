@@ -574,6 +574,12 @@ function katRoute(html, title) {
    clip ("only available on Eporner"). Cookies are captured here and replayed
    on EVERY byte-range request by the local /ep twin below. */
 const EP_SESS = new Map(); // vid -> { cookie, file, t }
+/* /extract answers cost several upstream hops. A successful raw-stream answer
+   (HLS/direct) is safe to reuse for a few minutes even when the signed URL's
+   query ages: the local /ep twin re-signs Eporner, and every other answer is
+   revalidated by the player's own fail -> re-extract path. */
+const EXTRACT_CACHE = new Map(); // targetUrl|title -> { t, body }
+const EXTRACT_TTL = 4 * 60 * 1000;
 const EP_STUB_RE = /(?:static\.eporner\.com\/na\.mp4|\/na\.mp4|(?:^|[\/_.-])(?:stub|dummy|placeholder|not[_-]?available)(?:[\/_.-]|$))/i;
 
 /* True while an Eporner session entry is fresh enough to replay. */
@@ -600,7 +606,9 @@ function epIsStubResponse(r) {
    NEW session, so the local /ep twin always has a live cookie + signed URL. */
 async function epSessionRefresh(vid) {
   try {
-    const got = await epornerSources('https://www.eporner.com/embed/' + encodeURIComponent(String(vid || '')) + '/', '');
+    /* force=true: the normal cache path would hand back the very signed URL
+       that just failed, so the refresh MUST perform a fresh handshake. */
+    const got = await epornerSources('https://www.eporner.com/embed/' + encodeURIComponent(String(vid || '')) + '/', '', true);
     return (got && got.file) ? got.file : '';
   } catch (e) { return ''; }
 }
@@ -649,7 +657,7 @@ async function epFetch(url, referer, cookies, ms, ajax) {
   }
 }
 
-async function epornerSources(pageUrl, html) {
+async function epornerSources(pageUrl, html, force) {
   try {
     const vidM = pageUrl.match(/\/embed\/([A-Za-z0-9]+)/i) || pageUrl.match(/video-([A-Za-z0-9]+)/i) ||
                  String(html || '').match(/EP\.video\.player\.vid\s*=\s*'([^']+)'/);
@@ -661,28 +669,41 @@ async function epornerSources(pageUrl, html) {
     const epBudget = function (cap) { return Math.max(1200, Math.min(cap, epDeadline - Date.now())); };
 
     /* 1. Session continuity: the watch page is what sets the cookies the
-          signed stream CDN checks. A recent session is reused when present. */
-    let cookie = '';
+          signed stream CDN checks. A recent session is reused when present,
+          and a still-valid signed file is returned without ANY network hop -
+          replaying the same episode is instant. */
     const prev = EP_SESS.get(vid);
-    if (prev && Date.now() - prev.t < 1800000) cookie = prev.cookie || '';
+    if (!force && prev && prev.file && Date.now() - prev.t < 15 * 60 * 1000) {
+      return {
+        type: prev.type || (/\.m3u8(?:\?|#|$)/i.test(prev.file) ? 'hls' : 'direct'),
+        file: prev.file, epv: vid, ref: 'https://www.eporner.com/', source: 'eporner-cache'
+      };
+    }
+    let cookie = (prev && Date.now() - prev.t < 1800000) ? (prev.cookie || '') : '';
     let md5 = html ? ((html.match(/EP\.video\.player\.hash\s*=\s*'([0-9a-f]{32})'/i) || [])[1] || '') : '';
-    if (!cookie || !md5) {
-      const w = await epFetch('https://www.eporner.com/video-' + vid + '/', 'https://www.eporner.com/', cookie, epBudget(5500));
+    if (!md5) {
+      /* The card links straight to /embed/<vid>/. Fetching the watch page as
+         well used to add a needless 5.5s stall before the embed was even
+         tried; when the target IS the embed page only that page is fetched.
+         For a watch-page target both are fetched in parallel. */
+      const isEmbed = /\/embed\//i.test(String(pageUrl || ''));
+      const embedP = epFetch('https://www.eporner.com/embed/' + vid + '/', 'https://www.eporner.com/', cookie, epBudget(4200));
+      const watchP = isEmbed ? Promise.resolve(null)
+        : epFetch('https://www.eporner.com/video-' + vid + '/', 'https://www.eporner.com/', cookie, epBudget(4200));
+      const pair = await Promise.all([watchP, embedP]);
+      const w = pair[0], er = pair[1];
       if (w && w.setCookies && w.setCookies.length) cookie = epCookieMerge(cookie, w.setCookies);
-      if (w && w.ok && w.body) {
-        md5 = md5 || ((w.body.match(/EP\.video\.player\.hash\s*=\s*'([0-9a-f]{32})'/i) || [])[1] || '');
-        if (!html) html = w.body;
-      }
+      if (er && er.setCookies && er.setCookies.length) cookie = epCookieMerge(cookie, er.setCookies);
+      md5 = (String((er && er.body) || '').match(/EP\.video\.player\.hash\s*=\s*'([0-9a-f]{32})'/i) || [])[1] ||
+            (String((w && w.body) || '').match(/EP\.video\.player\.hash\s*=\s*'([0-9a-f]{32})'/i) || [])[1] || '';
+      if (!md5 && !html && w && w.ok && w.body) html = w.body;
     }
 
-    /* 2. The embed page also carries the hash (and more Set-Cookie hops).
-          Eporner occasionally squashes one embed request while still serving
-          the next, so two fresh attempts are made. */
-    for (let attempt = 0; !md5 && attempt < 2 && Date.now() < epDeadline - 1000; attempt++) {
-      const r = await epFetch('https://www.eporner.com/embed/' + vid + '/' + (attempt ? '?_=' + Date.now() : ''), 'https://www.eporner.com/', cookie, epBudget(5000));
+    /* 2. One more embed attempt only when the parallel fetch was squashed. */
+    if (!md5 && Date.now() < epDeadline - 1000) {
+      const r = await epFetch('https://www.eporner.com/embed/' + vid + '/?_=' + Date.now(), 'https://www.eporner.com/', cookie, epBudget(3800));
       if (r && r.setCookies && r.setCookies.length) cookie = epCookieMerge(cookie, r.setCookies);
       md5 = (String(r && r.body || '').match(/EP\.video\.player\.hash\s*=\s*'([0-9a-f]{32})'/i) || [])[1] || '';
-      if (!md5) await new Promise((r2) => setTimeout(r2, 200));
     }
     if (!md5 && Date.now() < epDeadline - 2500) {
       try {
@@ -736,13 +757,13 @@ async function epornerSources(pageUrl, html) {
       /* The live session (cookie + its current signed file) is kept so the
          local /ep twin can replay BOTH on every byte-range request - and can
          re-sign once when the CDN decides the signature aged out. */
-      EP_SESS.set(vid, { cookie: cookie, file: pick, t: Date.now() });
+      EP_SESS.set(vid, { cookie: cookie, file: pick, type: 'direct', t: Date.now() });
       return { type: 'direct', file: pick, epv: vid, ref: 'https://www.eporner.com/', source: 'eporner-xhr' };
     }
     const hls = j.sources.hls || {};
     const hv = hls['auto'] || hls[Object.keys(hls)[0]];
     if (hv && hv.src && !EP_STUB_RE.test(hv.src)) {
-      EP_SESS.set(vid, { cookie: cookie, file: hv.src, t: Date.now() });
+      EP_SESS.set(vid, { cookie: cookie, file: hv.src, type: 'hls', t: Date.now() });
       return { type: 'hls', file: hv.src, ref: 'https://www.eporner.com/', source: 'eporner-xhr' };
     }
     return null;
@@ -2759,8 +2780,24 @@ async function handle(req, res){
 
     const jsonOut = function (o) {
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+      try {
+        if (o && o.ok !== false && (o.type === 'direct' || o.type === 'hls') && (o.file || o.play)) {
+          EXTRACT_CACHE.set(cacheKey, { t: Date.now(), body: JSON.stringify(o) });
+          if (EXTRACT_CACHE.size > 240) {
+            const now = Date.now();
+            for (const [k, v] of EXTRACT_CACHE) { if (now - v.t > EXTRACT_TTL) EXTRACT_CACHE.delete(k); }
+            while (EXTRACT_CACHE.size > 240) EXTRACT_CACHE.delete(EXTRACT_CACHE.keys().next().value);
+          }
+        }
+      } catch (e) {}
       return res.end(JSON.stringify(o));
     };
+    const cacheKey = String(targetUrl || '') + '\n' + String(rawTitle || '');
+    const cachedEx = EXTRACT_CACHE.get(cacheKey);
+    if (cachedEx && Date.now() - cachedEx.t < EXTRACT_TTL) {
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Extract-Cache': 'HIT' });
+      return res.end(cachedEx.body);
+    }
     /* Attach a ready-to-play local proxy twin so the native <video> never
        fights upstream Referer / CORS / mixed-content rules. */
     const emit = function (o) {
@@ -2851,6 +2888,21 @@ async function handle(req, res){
     if (/\.(mp4|webm|m4v)(\?|#|$)/i.test(targetUrl)) return emit({ type: 'direct', file: targetUrl });
     if (/\.m3u8(\?|#|$)/i.test(targetUrl)) return emit({ type: 'hls', file: targetUrl });
 
+    /* 1a-ep. Eporner embed/watch URLs are resolved by their own bounded
+       session handshake. Fetching the page once with the generic grabber and
+       then AGAIN inside the resolver doubled the request count; while the
+       vault's rows are hydrating, Eporner rate-limits that burst and the
+       duplicate fetch pushed the first click into a ~20s retry loop. The
+       resolver keeps its own 11s ceiling, so a genuine failure still returns
+       immediately and the client's silent re-extract takes over. */
+    let epHostEarly = '';
+    try { epHostEarly = new URL(targetUrl).hostname; } catch (e) {}
+    if (/^(?:www\.)?eporner\.com$/i.test(epHostEarly)) {
+      const ep = await epornerSources(targetUrl, '');
+      if (ep) return emit(ep);
+      return emit({ ok: false, error: 'eporner-session', page: targetUrl });
+    }
+
     /* 1a-jav. A 123av player part URL (sadie-shop.site/e/<id>) resolves
        straight to the signed HLS: no page scrape needed. */
     if (/^https?:\/\/(?:[\w-]+\.)*sadie-shop\.site\/e\/[a-z0-9_]+/i.test(targetUrl)) {
@@ -2924,12 +2976,8 @@ async function handle(req, res){
            clip, and neither may ever reach the player. */
     let epHost = '';
     try { epHost = new URL(targetUrl).hostname; } catch (e) {}
-    const isEporner = /^(?:www\.)?eporner\.com$/i.test(epHost);
-    if (isEporner) {
-      const ep = await epornerSources(targetUrl, html);
-      if (ep) { if (pageEps.length > 1) ep.eps = pageEps; return emit(ep); }
-      return emit({ ok: false, error: 'eporner-session', page: targetUrl });
-    }
+    /* The Eporner branch above returned before the generic page fetch, so
+       nothing else has to special-case its host here. */
 
     /* 2b-jav. 123av video pages: the plyr embed's /stream endpoint carries the
        signed HLS media. Resolved here so JAV plays in the app's own surface. */
@@ -3153,22 +3201,44 @@ async function handle(req, res){
         if (range) h['Range'] = String(range);
         return h;
       };
-      let r = null;
-      try { r = await fetch(target, { headers: epHdr(req.headers.range), redirect: 'follow' }); } catch (e) { r = null; }
-      if (epIsStubResponse(r)) {
+      /* Every CDN byte-range request is bounded. The old code had NO timeout
+         on this fetch: a socket the CDN silently dropped kept the browser's
+         media request (and the UI spinner) waiting indefinitely. */
+      const epTwinFetch = async function (target2, range) {
+        const ctl = new AbortController();
+        const tm = setTimeout(function () { try { ctl.abort(); } catch (e) {} }, 9000);
+        try {
+          return await fetch(target2, { headers: epHdr(range), redirect: 'follow', signal: ctl.signal });
+        } catch (e) { return null; } finally { clearTimeout(tm); }
+      };
+      let r = await epTwinFetch(target, req.headers.range);
+      if (!r || epIsStubResponse(r)) {
         try { if (r && r.body) r.body.cancel(); } catch (e) {}
         const freshFile = await epSessionRefresh(vid);
         sess = epSession(vid);
         cookie = (sess && sess.cookie) || cookie;
         if (freshFile && freshFile !== target) target = freshFile;
-        r = null;
-        try { r = await fetch(target, { headers: epHdr(req.headers.range), redirect: 'follow' }); } catch (e) { r = null; }
+        r = await epTwinFetch(target, req.headers.range);
       }
-      if (!r) { res.writeHead(502); return res.end(); }
+      if (!r) {
+        /* The cached /extract answer handed the player a URL whose CDN socket
+           is dead. Drop it so the player's silent re-extract performs a REAL
+           handshake instead of replaying the same dead signature. */
+        try {
+          const needle = 'vid=' + encodeURIComponent(vid);
+          for (const [k, v2] of EXTRACT_CACHE) { if (String(v2.body).indexOf(needle) >= 0) EXTRACT_CACHE.delete(k); }
+        } catch (e) {}
+        EP_SESS.delete(String(vid || ''));
+        res.writeHead(502); return res.end();
+      }
       /* The stub itself is never streamed: a clean 502 lets the native player
          fail fast, so the app re-extracts instead of showing the warning clip. */
       if (EP_STUB_RE.test(String(r.url || '')) || r.status === 403 || r.status === 410 || r.status === 451) {
         try { if (r.body) r.body.cancel(); } catch (e) {}
+        try {
+          const needle = 'vid=' + encodeURIComponent(vid);
+          for (const [k, v2] of EXTRACT_CACHE) { if (String(v2.body).indexOf(needle) >= 0) EXTRACT_CACHE.delete(k); }
+        } catch (e) {}
         res.writeHead(502, { 'Content-Type': 'text/plain' });
         return res.end('eporner stub');
       }

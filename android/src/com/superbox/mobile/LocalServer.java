@@ -79,8 +79,14 @@ public class LocalServer {
 
     private final Context context;
     private final ExecutorService clients = Executors.newCachedThreadPool();
-    private final Map<String, Meta> metaCache = new HashMap<>();
-    private final Map<String, CacheEntry> apiCache = new HashMap<>();
+    /* Access-ordered maps are LRU: the oldest entry is evicted first and the
+       byte budget below keeps page/image bodies from growing without bound.
+       The previous plain HashMaps only cleared wholesale at a count limit,
+       which could briefly hold 180 multi-megabyte pages. */
+    private final LinkedHashMap<String, Meta> metaCache =
+            new LinkedHashMap<>(64, 0.75f, true);
+    private final LinkedHashMap<String, CacheEntry> apiCache =
+            new LinkedHashMap<>(128, 0.75f, true);
     private final Map<String, byte[]> assetCache = new HashMap<>();
     private final LinkedHashMap<String, byte[]> chunkCache =
             new LinkedHashMap<>(64, 0.75f, true);
@@ -90,7 +96,12 @@ public class LocalServer {
     private ServerSocket socket;
     private volatile boolean running;
     private long chunkCacheBytes;
+    private long apiCacheBytes;
     private int diskWrites;
+
+    private static final int META_CACHE_MAX = 160;
+    private static final int API_CACHE_MAX = 260;
+    private static final long API_CACHE_BYTES = 48L * 1024L * 1024L;
 
     public LocalServer(Context context) {
         this.context = context.getApplicationContext();
@@ -456,26 +467,71 @@ public class LocalServer {
             try {
                 c = openImage(url, ref);
                 int code = c.getResponseCode();
-                if (code < 200 || code >= 300) {
-                    if (code == 404 || code == 410) break;
-                    continue;
-                }
-                InputStream is = c.getInputStream();
-                byte[] body = readAll(is, 8 * 1024 * 1024);
+                /* 404/410 never becomes a valid image with another referer,
+                   but the weserv tier below CAN still rescue it (the CDN may
+                   only block this IP/UA), so do not break out of the chain. */
+                if (code < 200 || code >= 300) continue;
+                byte[] body = readAll(c.getInputStream(), 8 * 1024 * 1024);
                 if (body.length == 0) continue;
                 String type = c.getContentType();
-                if (type == null || !type.startsWith("image/")) type = sniffImageType(body);
+                boolean trusted = type != null && type.startsWith("image/");
+                if (!trusted) {
+                    type = sniffImageType(body);
+                    trusted = isImageBytes(body);
+                }
+                if (!trusted) continue;
                 apiCachePut(key, body, type);
                 send(out, 200, type, body,
                         "Cache-Control: public, max-age=604800, immutable\r\nX-SuperBox-Cache: MISS\r\n");
                 return;
-            } catch (IOException e) {
+            } catch (Exception e) {
                 // try the next referer policy
             } finally {
                 if (c != null) c.disconnect();
             }
         }
+        /* Final tier: images.weserv.nl re-fetches the image server-side, which
+           rescues hosts that reject the device's IP or serve a hotlink wall.
+           The result is cached exactly like a direct hit. */
+        if (url.indexOf("images.weserv.nl") < 0) {
+            HttpURLConnection wc = null;
+            try {
+                String w = "https://images.weserv.nl/?url=" + URLEncoder.encode(
+                        url.replaceFirst("^https?://", ""), "UTF-8");
+                wc = openImage(w, null);
+                int code = wc.getResponseCode();
+                if (code >= 200 && code < 300) {
+                    byte[] body = readAll(wc.getInputStream(), 8 * 1024 * 1024);
+                    if (body.length > 0 && isImageBytes(body)) {
+                        String type = wc.getContentType();
+                        if (type == null || !type.startsWith("image/")) type = sniffImageType(body);
+                        apiCachePut(key, body, type);
+                        send(out, 200, type, body,
+                                "Cache-Control: public, max-age=604800, immutable\r\n"
+                                        + "X-SuperBox-Cache: MISS\r\nX-SuperBox-Tier: weserv\r\n");
+                        return;
+                    }
+                }
+            } catch (Exception ignored) {
+            } finally {
+                if (wc != null) wc.disconnect();
+            }
+        }
         send(out, 404, "text/plain", bytes("image unavailable"), null);
+    }
+
+    /* Real image magic beats a lying content type: hotlink walls and error
+       pages used to be cached as JPEG and then shown as permanent blanks. */
+    private static boolean isImageBytes(byte[] b) {
+        if (b == null || b.length < 4) return false;
+        int b0 = b[0] & 0xff;
+        if (b0 == 0x89 && b[1] == 'P' && b[2] == 'N' && b[3] == 'G') return true;
+        if (b[0] == 'G' && b[1] == 'I' && b[2] == 'F') return true;
+        if (b[0] == 'R' && b[1] == 'I' && b[2] == 'F' && b[3] == 'F') return true;
+        if (b0 == 0xff && (b[1] & 0xff) == 0xd8) return true;
+        if (b[0] == 'B' && b[1] == 'M') return true;
+        if (b[0] == '<') return true; // SVG
+        return false;
     }
 
     private static String normalizeUrl(String url) {
@@ -951,8 +1007,13 @@ public class LocalServer {
         }
         Meta m = new Meta(total, type, ranges);
         synchronized (metaCache) {
-            if (metaCache.size() > 80) metaCache.clear();
             metaCache.put(url, m);
+            while (metaCache.size() > META_CACHE_MAX) {
+                java.util.Iterator<String> it = metaCache.keySet().iterator();
+                if (!it.hasNext()) break;
+                it.next();
+                it.remove();
+            }
         }
         return m;
     }
@@ -1457,6 +1518,8 @@ public class LocalServer {
         if (e == null) return null;
         if (System.currentTimeMillis() - e.at > ttl) {
             apiCache.remove(key);
+            apiCacheBytes -= e.body.length;
+            if (apiCacheBytes < 0) apiCacheBytes = 0;
             return null;
         }
         return e;
@@ -1468,8 +1531,18 @@ public class LocalServer {
 
     private synchronized void apiCachePut(String key, byte[] body, String type) {
         if (body == null || body.length == 0) return;
-        if (apiCache.size() > 180) apiCache.clear();
-        apiCache.put(key, new CacheEntry(body, type));
+        CacheEntry old = apiCache.put(key, new CacheEntry(body, type));
+        if (old != null) apiCacheBytes -= old.body.length;
+        apiCacheBytes += body.length;
+        /* LRU + hard byte ceiling: page/image/HLS bodies evict the least
+           recently used entries instead of clearing the whole cache. */
+        java.util.Iterator<Map.Entry<String, CacheEntry>> it = apiCache.entrySet().iterator();
+        while ((apiCache.size() > API_CACHE_MAX || apiCacheBytes > API_CACHE_BYTES) && it.hasNext()) {
+            Map.Entry<String, CacheEntry> eldest = it.next();
+            apiCacheBytes -= eldest.getValue().body.length;
+            it.remove();
+        }
+        if (apiCacheBytes < 0) apiCacheBytes = 0;
         diskPut(key, body);
     }
 
