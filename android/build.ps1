@@ -96,8 +96,17 @@ Write-Host "== add classes.dex =="
 & $python (Join-Path $root "tools\add-dex.py") (Join-Path $build "base.apk") (Join-Path $dexDir "classes.dex")
 if ($LASTEXITCODE -ne 0) { throw "adding classes.dex failed" }
 
+# Universal decoder pack: every ABI's FFmpeg libraries ride in the APK
+# uncompressed, and the complete AAR stays on device as a fallback asset.
+# This is what makes the universal build a genuinely self-contained fat APK.
+Write-Host "== bundle FFmpeg native decoders =="
+$ffAar = Join-Path $root "libs\ffmpeg-kit-full-gpl-6.0.LTS.aar"
+if (-not (Test-Path $ffAar)) { throw "FFmpeg decoder pack missing: $ffAar" }
+& $python (Join-Path $root "tools\add-native-libs.py") (Join-Path $build "base.apk") $ffAar
+if ($LASTEXITCODE -ne 0) { throw "bundling FFmpeg native libraries failed" }
+
 Write-Host "== zipalign =="
-& $zipalign -f 4 (Join-Path $build "base.apk") (Join-Path $build "aligned.apk")
+& $zipalign -f -p 4 (Join-Path $build "base.apk") (Join-Path $build "aligned.apk")
 if ($LASTEXITCODE -ne 0) { throw "zipalign failed" }
 
 if (-not (Test-Path $keystore)) {

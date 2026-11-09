@@ -35,6 +35,10 @@ if (HEADLESS) {
   app.commandLine.appendSwitch('mute-audio');
   app.commandLine.appendSwitch('disable-audio-output');
   app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
+  /* Chromium only honours switches that precede the app path, and Electron
+     treats later args as app args. Registering CDP here makes headless
+     probes independent of launch-order quirks. */
+  app.commandLine.appendSwitch('remote-debugging-port', '9333');
 }
 if (!gotLock) {
   app.exit(0);

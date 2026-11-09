@@ -484,16 +484,44 @@
       }
       queue.push({ row: row, el: el });
     });
-    var idx = 0, active = 0;
+    var idx = 0, active = 0, pending = [];
+    var lazyIO = null;
     function pump() {
       if (token !== st.token) return;
-      while (active < 6 && idx < queue.length) {
-        var q = queue[idx++];
+      while (active < 4 && pending.length) {
+        var q = pending.shift();
         active++;
         loadOne(q, token).then(function () { active--; pump(); }, function () { active--; pump(); });
       }
     }
-    pump();
+    /* Viewport-driven hydration, exactly like the desktop vault: the first
+       rows hydrate immediately, the rest start ~700px before they appear.
+       The vault has 60+ Eporner rows; firing every upstream request at launch
+       rate-limited the API and made the first tap wait ~20s. */
+    function need(q) {
+      if (q.queued || q.done) return;
+      q.queued = true;
+      pending.push(q);
+      pump();
+    }
+    queue.slice(0, 4).forEach(need);
+    if (typeof IntersectionObserver !== 'undefined') {
+      try {
+        lazyIO = new IntersectionObserver(function (ents) {
+          ents.forEach(function (en) {
+            if (!en.isIntersecting) return;
+            try { lazyIO.unobserve(en.target); } catch (e) {}
+            var q = queue.filter(function (x) { return x.el === en.target; })[0];
+            if (q) need(q);
+          });
+        }, { rootMargin: '700px 0px' });
+        queue.slice(4).forEach(function (q) { lazyIO.observe(q.el); });
+      } catch (e) {
+        queue.slice(4).forEach(need);
+      }
+    } else {
+      queue.slice(4).forEach(need);
+    }
   }
 
   /* Called by app.js after the Spotlight rows are on screen. One token per
