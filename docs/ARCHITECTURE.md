@@ -49,6 +49,13 @@ as AES-256-GCM ciphertext (`SBX1` magic, 12-byte IV, 16-byte tag); the key lives
 in the generated `BuildSecrets.java`, and `LocalServer` decrypts each file in
 memory when the WebView asks for it.
 
+The 1.2.0 APK is a universal fat build. `android/tools/add-native-libs.py`
+injects 48 uncompressed `lib/<abi>/*.so` entries for `arm64-v8a`,
+`armeabi-v7a`, `x86` and `x86_64`, plus
+`assets/ffmpeg/ffmpeg-kit-full-gpl-6.0.LTS.aar` as an on-device decoder archive.
+Storing the libraries uncompressed keeps the package above 200 MB and lets the
+loader map them without an unpack step.
+
 ## Windows
 
 | Piece | Role |
@@ -65,6 +72,17 @@ roughly 60–120 KB/s, and an 8–9 MB MP4 index would otherwise take minutes to
 arrive. The proxy splits the range into chunks, fetches them concurrently and
 returns a normal `206` in order.
 
+## Rows, artwork and playback
+
+Shelves paint in two stages. A stale-while-revalidate cache
+(`sb.rows.v2` on Android, `sb.desktop.rows.v2` on desktop) renders the previous
+catalogue immediately, then a shared `IntersectionObserver` starts upstream
+work: four rows eagerly, the rest about 700 px before they enter the viewport.
+That keeps a 60-row library from firing every request at launch.
+
+Artwork walks local `/img` → origin → `images.weserv.nl`. A card leaves the
+placeholder only after all three fail, so transient CDN errors self-heal.
+
 ## Playback ladder
 
 1. A library title maps to a provider URL.
@@ -73,6 +91,12 @@ returns a normal `206` in order.
    then advances to the next provider.
 4. A real MP4/HLS/DASH URL plays in the native player. An unresolvable shell
    stays in the in-app web player.
+
+Both players add a progress-aware watchdog. Desktop rotates after 15 s with no
+progress (45 s absolute cap); Android uses 18 s and 45 s and adds native
+`video.onerror` handling. A direct stream that fails hands off to a `fallback`
+URL, then an `embed`, then the provider page. Media listeners and engines are
+destroyed between sources so repeated switches do not leak.
 
 Spotlight streams use the catalogue's signed play payload and play natively.
 

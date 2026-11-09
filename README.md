@@ -12,18 +12,18 @@
     <a href="https://github.com/mohdziauddin2006-cloud/superbox/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/mohdziauddin2006-cloud/superbox?style=flat-square&color=ffc105&labelColor=0b0b0f"></a>
   </p>
   <p>
-    <a href="https://github.com/mohdziauddin2006-cloud/superbox/releases/download/v1.1.0/SuperBox-Setup-1.1.0.exe"><img alt="Download for Windows" src="https://img.shields.io/badge/Download_for_Windows-ffc105?style=for-the-badge&amp;labelColor=0b0b0f&amp;logo=windows&amp;logoColor=0b0b0f"></a>
+    <a href="https://github.com/mohdziauddin2006-cloud/superbox/releases/download/v1.2.0/SuperBox-Setup-1.2.0.exe"><img alt="Download for Windows" src="https://img.shields.io/badge/Download_for_Windows-ffc105?style=for-the-badge&amp;labelColor=0b0b0f&amp;logo=windows&amp;logoColor=0b0b0f"></a>
     &nbsp;
-    <a href="https://github.com/mohdziauddin2006-cloud/superbox/releases/download/v1.1.0/SuperBox-1.1.0.apk"><img alt="Download the APK" src="https://img.shields.io/badge/Download_APK-ffc105?style=for-the-badge&amp;labelColor=0b0b0f&amp;logo=android&amp;logoColor=0b0b0f"></a>
+    <a href="https://github.com/mohdziauddin2006-cloud/superbox/releases/download/v1.2.0/SuperBox-1.2.0.apk"><img alt="Download the APK" src="https://img.shields.io/badge/Download_APK-ffc105?style=for-the-badge&amp;labelColor=0b0b0f&amp;logo=android&amp;logoColor=0b0b0f"></a>
   </p>
-  <p><sub>Windows 10/11 x64 &nbsp;·&nbsp; Android 6.0+ &nbsp;·&nbsp; Setup 121.5 MB &nbsp;·&nbsp; Portable 110.3 MB &nbsp;·&nbsp; APK 2.4 MB</sub></p>
+  <p><sub>Windows 10/11 x64 &nbsp;·&nbsp; Android 6.0+ &nbsp;·&nbsp; Setup 121.5 MB &nbsp;·&nbsp; APK 227.0 MB</sub></p>
   <p><sub>ONE LIBRARY &nbsp;·&nbsp; NATIVE HLS / DASH / MP4 &nbsp;·&nbsp; LIVE TV &nbsp;·&nbsp; ZERO ADS</sub></p>
 </div>
 
 <p align="center">
   <a href="#screens">Screens</a> &nbsp;·&nbsp;
   <a href="#download">Download</a> &nbsp;·&nbsp;
-  <a href="#whats-new-in-110">What's new</a> &nbsp;·&nbsp;
+  <a href="#whats-new-in-120">What's new</a> &nbsp;·&nbsp;
   <a href="#two-apps-one-library">Features</a> &nbsp;·&nbsp;
   <a href="#one-library-every-source">Sources</a> &nbsp;·&nbsp;
   <a href="#build-from-source">Build</a>
@@ -33,7 +33,7 @@
 
 ## Screens
 
-Real captures from the 1.1.0 builds on Android 14 and Windows 11.
+Real captures from the 1.2.0 builds on Android 14 and Windows 11.
 
 <table>
   <tr>
@@ -63,28 +63,28 @@ Real captures from the 1.1.0 builds on Android 14 and Windows 11.
 
 | Build | Best for | Size | Get it |
 |---|---|---:|---|
-| **SuperBox Setup** `.exe` | Windows 10/11 x64 — normal wizard, any folder or drive | 121.5 MB | [Download](https://github.com/mohdziauddin2006-cloud/superbox/releases/download/v1.1.0/SuperBox-Setup-1.1.0.exe) |
-| **SuperBox Portable** `.exe` | Windows 10/11 x64 — no install, run from anywhere | 110.3 MB | [Download](https://github.com/mohdziauddin2006-cloud/superbox/releases/download/v1.1.0/SuperBox-Portable-1.1.0.exe) |
-| **SuperBox APK** | Android 6.0+ — universal, every ABI | 2.4 MB | [Download](https://github.com/mohdziauddin2006-cloud/superbox/releases/download/v1.1.0/SuperBox-1.1.0.apk) |
+| **SuperBox Setup** `.exe` | Windows 10/11 x64 — normal wizard, any folder or drive | 121.5 MB | [Download](https://github.com/mohdziauddin2006-cloud/superbox/releases/download/v1.2.0/SuperBox-Setup-1.2.0.exe) |
+| **SuperBox APK** | Android 6.0+ — universal fat build, every ABI | 227.0 MB | [Download](https://github.com/mohdziauddin2006-cloud/superbox/releases/download/v1.2.0/SuperBox-1.2.0.apk) |
 
-Everything is attached to the **[v1.1.0 release](https://github.com/mohdziauddin2006-cloud/superbox/releases/tag/v1.1.0)**,
+Everything is attached to the **[v1.2.0 release](https://github.com/mohdziauddin2006-cloud/superbox/releases/tag/v1.2.0)**,
 together with `SHA256SUMS.txt`. Checksums and the signing certificate are
 recorded in [docs/VERIFY.md](docs/VERIFY.md).
 
 > [!TIP]
 > **Windows:** the Setup build opens a normal wizard and lets you pick any
-> folder or drive. The Portable build needs no installation. No admin required.
+> folder or drive. No admin required.
 >
 > **Android:** allow “Install unknown apps” for your browser or file manager,
 > open the APK, and install. Play Protect may offer to scan the sideloaded app.
 
-## What's new in 1.1.0
+## What's new in 1.2.0
 
 > [!NOTE]
-> **1.1.0 is the unification release.** The separate Vault is gone and its
-> catalogue now lives inside the normal Library. HLS/DASH playback is native,
-> MP4 start time dropped from ~45 s to ~9 s, and the new infinity icon ships on
-> both platforms. [Read the release notes →](docs/RELEASE_NOTES_v1.1.0.md)
+> **1.2.0 is the hardening release.** Cold starts are measured in milliseconds,
+> shelves hydrate lazily, artwork heals through a three-tier fallback, and both
+> players keep rotating sources until media actually starts. The Android APK is
+> now a 227 MB universal build with every ABI and a bundled decoder archive.
+> [Read the release notes →](docs/RELEASE_NOTES_v1.2.0.md)
 
 ## Two apps. One library.
 
@@ -130,7 +130,7 @@ sources. Availability depends on the source, your region and your network.
 
 ### Windows 10/11
 
-1. Download **SuperBox Setup** or **SuperBox Portable**.
+1. Download **SuperBox Setup**.
 2. Run it. The Setup wizard lets you choose any destination folder or drive.
 3. If SmartScreen appears, choose **More info → Run anyway** — the indie build
    is signed for Android but not with a paid Windows code-signing certificate.
@@ -140,11 +140,11 @@ The Windows build targets x64. Windows 11 on ARM runs it through x64 emulation.
 
 ### Android 6.0+
 
-1. Download **SuperBox-1.1.0.apk**.
+1. Download **SuperBox-1.2.0.apk**.
 2. Allow installs from unknown apps for the browser or file manager you use.
 3. Open the APK and install.
-4. The APK has no native libraries, so the single universal build works on ARM,
-   ARM64, x86 and x86_64.
+4. The APK is a universal fat build with `arm64-v8a`, `armeabi-v7a`, `x86`
+   and `x86_64` libraries, so one file covers phones, tablets and emulators.
 
 ## Under the hood
 
@@ -184,7 +184,7 @@ ciphertext and decrypted in memory by the local server.
 cd desktop
 npm install
 npm start          # run
-npm run dist       # NSIS + portable installers in ..\dist
+npm run dist       # NSIS installer in ..\dist
 ```
 
 **Android**
@@ -219,33 +219,30 @@ tools/              asset pipeline, icon generator, CDP smoke checks
 
 ## Verified, not vibes
 
-The v1.1.0 artifacts were installed and tested, not just compiled:
+The 1.2.0 artifacts were built, installed and exercised, not just compiled:
 
-- Home loads from the local snapshot immediately; cold app start measured
-  **1.39 s** on the Android 14 emulator.
-- Movies tab renders the merged library: **102 titles**, Live TV / 18+ /
-  Sources chips, and library rows from every source.
-- Live TV loads the full India playlist (**845 channels**) and a channel plays
-  in the native player.
-- Poster images retry automatically while the disk cache warms, so cards no
-  longer stay stuck on their initials placeholder.
-- YouTube/library fetches go through the local proxy; the CORS error spam is
-  gone and the page renders without repeated direct requests.
-- MP4 episode playback started in about **9 s** (previously ~45 s) after the
-  first-byte window was reduced; HLS live TV and a 480p episode both played in
-  the native player.
-- Windows installer and portable builds launch, load the catalogue and report
-  version **1.1.0**; the new infinity icon is embedded in both executables.
-- APK signature verified with `apksigner`; `versionCode=2`, `versionName=1.1.0`,
-  one `classes.dex`, no plain `.js` assets.
+- Windows Setup installed to `C:\Program Files\SuperBox` and reports version
+  **1.2.0**; the installed app paints the home catalogue in **276 ms** with
+  **104 cards** and zero stuck rows.
+- Lazy hydration works: the first four shelves load immediately, the rest
+  begin roughly 700 px before entering the viewport.
+- Desktop lane playback was verified headless and muted for Rule34, MMS/JAV,
+  AWS MP4, Hentai and AI; every session was torn down within one second.
+- The Android fat APK installs and launches cold in **4.5 s** on the Android 14
+  emulator; home artwork fills in as the disk cache warms.
+- Android native playback verified end-to-end: a direct MP4 advanced
+  `0 -> 1.0 s -> 2.5 s` and HLS advanced `0 -> 0.9 s -> 2.8 s`, both muted
+  and both stopped after the 10-second test ceiling.
+- APK signature verified with `apksigner`; `versionCode=3`,
+  `versionName=1.2.0`, four ABIs, 48 uncompressed `.so` files and the bundled
+  decoder archive present.
 
 <details>
 <summary><b>SHA-256 checksums</b></summary>
 
 ```
-SuperBox-Setup-1.1.0.exe      53bb7baf06584e9777c54307af34480fefe2638ee76251c48c440269359c12cc
-SuperBox-Portable-1.1.0.exe   ceea6ff4d7f0a9c7447f25a400313779a6349cf4e51b433938bef390cad14f19
-SuperBox-1.1.0.apk            b9e4ce69a264223f3ee13cda456db01c3c543a25e9fa04b8901a6fd32274d0f4
+SuperBox-Setup-1.2.0.exe   95fa0db168bc53e2aa29f1241179a7be691cacad4d04a199e6ca045230b77209
+SuperBox-1.2.0.apk         43e4e24c583b558ea53841d7fc7f2fd309e0f9ad85a40875c87cda0338ce0d49
 ```
 
 APK signing certificate SHA-256:
@@ -279,7 +276,7 @@ third-party catalogues are not covered by that license.
   <p>
     <a href="https://github.com/mohdziauddin2006-cloud/superbox/stargazers"><b>⭐ Star SuperBox</b></a>
     &nbsp;·&nbsp;
-    <a href="https://github.com/mohdziauddin2006-cloud/superbox/releases/latest"><b>Download v1.1.0</b></a>
+    <a href="https://github.com/mohdziauddin2006-cloud/superbox/releases/latest"><b>Download v1.2.0</b></a>
     &nbsp;·&nbsp;
     <a href="CHANGELOG.md"><b>Changelog</b></a>
   </p>

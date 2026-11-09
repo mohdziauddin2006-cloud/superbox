@@ -45,11 +45,16 @@ fat APK and a playback ladder that keeps trying until a source actually plays.
 
 ### Verified
 
+- Windows Setup installed silently, reports 1.2.0, first paint 276 ms with
+  104 cards.
 - Desktop: Rule34, MMS/JAV, AWS MP4, Hentai and AI lanes all started playback
   headless and muted, with teardown within one second.
-- Desktop first paint: 261 ms, 84 cards, lazy rows hydrate on scroll.
-- APK: four ABIs, 48/48 uncompressed native libraries, `classes.dex` present,
-  signature verified with `apksigner`.
+- Android: APK installed on the Android 14 emulator, cold launch 4.5 s, visible
+  artwork resolved through the retry chain.
+- Android player: direct MP4 advanced 0 → 1.0 s → 2.5 s and HLS advanced
+  0 → 0.9 s → 2.8 s, both muted and both stopped inside the 10-second cap.
+- APK: four ABIs, 48/48 uncompressed native libraries, decoder archive and
+  `classes.dex` present, signature verified with `apksigner`.
 
 ## [1.1.0] — 2026-11-05
 
