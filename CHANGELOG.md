@@ -4,6 +4,53 @@ All notable changes to SuperBox are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [1.2.0] — 2026-11-09
+
+The hardening release: faster cold starts, self-healing artwork, a universal
+fat APK and a playback ladder that keeps trying until a source actually plays.
+
+### Added
+
+- Universal fat APK: every ABI (arm64-v8a, armeabi-v7a, x86, x86_64) plus a
+  bundled FFmpeg decoder archive, stored uncompressed for zero-copy loading.
+- Stale-while-revalidate row cache on both platforms (`sb.rows.v2`), so shelves
+  paint from localStorage first and refresh silently.
+- Viewport-driven row hydration: the first four rows load eagerly, the rest
+  start ~700 px before they scroll into view, cutting launch requests sharply.
+- Hover-intent prefetch for 18+ cards on desktop (episode/JAV/Rule34/AI).
+- Three-tier artwork fallback: local `/img` cache → origin → images.weserv.nl.
+- Native Android `video.onerror` handling, 18 s/45 s load watchdogs and a
+  `fallback → embed → page` handoff when a direct stream never starts.
+- Desktop stall watchdog rotates sources only after 15 s of zero progress
+  (45 s absolute cap) and cleans media listeners between sources.
+- Headless verification mode (`SB_HEADLESS=1`) with process-level audio mute,
+  hidden window and CDP on port 9333.
+
+### Changed
+
+- Desktop releases are NSIS-only; the portable target and split builds are gone.
+- Eporner extraction uses an embed-only fast path, a 4-minute resolver cache,
+  15-minute signed-file reuse and automatic re-signing on failure.
+- `/ep` requests carry a 9 s timeout and purge cached URLs on 502 responses.
+- Windows and Android versions bumped to 1.2.0; APK `versionCode=3`.
+
+### Fixed
+
+- Galleries and 18+ lanes that never resolved: JAV now races the backend route
+  against the client parser on desktop, with `/extract` playback.
+- Infinite loading shelves: every row has a hard ceiling and paints cache
+  before any network work starts.
+- Memory/listener leaks in both players when switching sources.
+- Dead-image replay and stuck initials placeholders across all sections.
+
+### Verified
+
+- Desktop: Rule34, MMS/JAV, AWS MP4, Hentai and AI lanes all started playback
+  headless and muted, with teardown within one second.
+- Desktop first paint: 261 ms, 84 cards, lazy rows hydrate on scroll.
+- APK: four ABIs, 48/48 uncompressed native libraries, `classes.dex` present,
+  signature verified with `apksigner`.
+
 ## [1.1.0] — 2026-11-05
 
 The unification release: one library, faster startup, reliable artwork, working
