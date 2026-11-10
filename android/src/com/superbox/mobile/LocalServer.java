@@ -592,7 +592,13 @@ public class LocalServer {
         if (b[0] == 'R' && b[1] == 'I' && b[2] == 'F' && b[3] == 'F') return true;
         if (b0 == 0xff && (b[1] & 0xff) == 0xd8) return true;
         if (b[0] == 'B' && b[1] == 'M') return true;
-        if (b[0] == '<') return true; // SVG
+        if (b[0] == '<') {
+            /* Real SVG only. Anti-bot challenge pages also start with '<'
+               and must never be cached/served as an image. */
+            String head = new String(b, 0, Math.min(b.length, 512),
+                    java.nio.charset.StandardCharsets.UTF_8).toLowerCase();
+            return head.contains("<svg") || head.contains("<?xml");
+        }
         return false;
     }
 
@@ -640,7 +646,11 @@ public class LocalServer {
         if (b[0] == 'G' && b[1] == 'I' && b[2] == 'F') return "image/gif";
         if (b[0] == 'R' && b[1] == 'I' && b[2] == 'F' && b[3] == 'F'
                 && b[8] == 'W' && b[9] == 'E' && b[10] == 'B' && b[11] == 'P') return "image/webp";
-        if (b[0] == '<') return "image/svg+xml";
+        if (b[0] == '<') {
+            String head = new String(b, 0, Math.min(b.length, 512),
+                    java.nio.charset.StandardCharsets.UTF_8).toLowerCase();
+            if (head.contains("<svg") || head.contains("<?xml")) return "image/svg+xml";
+        }
         return "image/jpeg";
     }
 
