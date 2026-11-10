@@ -498,7 +498,7 @@
       (rowsHtml || '<div class="empty"><b>No catalogue rows</b>Pull to refresh from the Me tab.</div>') +
       '<div id="libHomeRows" class="lib-rows"></div>' +
       '<div class="footer"><div class="f-mark">SUPERBOX</div><p>Ad-free movies, series and anime. No account. No trackers.</p>' +
-      '<button class="footer-link" data-lib-sources>Library sources</button></div>';
+      '<button class="footer-link" data-lib-sources>All sources &amp; manga</button></div>';
   }
 
   function renderHome() {
@@ -661,7 +661,7 @@
 
   function renderMe() {
     clearInterval(S.heroTimer);
-    var version = "1.1.0";
+    var version = "1.3.0";
     try { if (window.SBAndroid && window.SBAndroid.version) version = window.SBAndroid.version(); } catch (e) {}
     view.innerHTML =
       '<div class="page-head" style="padding-top:14px"><div class="page-kicker">Your space</div><h1 class="page-title">Me</h1></div>' +
@@ -674,12 +674,166 @@
       "</div></div>" +
       '<div class="me-section"><h3>Catalogue</h3><div class="me-list">' +
       '<button class="me-row" data-setting="refresh"><span class="ic">↻</span><span class="tx"><b>Refresh catalogue</b><span>Fetch the latest SuperBox rows</span></span><span class="rt">Refresh</span></button>' +
+      '<button class="me-row" data-setting="vpn"><span class="ic">?</span><span class="tx"><b>SuperBox Shield</b><span>Embedded VPN status and region</span></span><span class="rt" id="meVpnState">Checking?</span></button>' +
       '<button class="me-row" data-setting="sources"><span class="ic">∞</span><span class="tx"><b>Library sources</b><span>Metadata, archives and live TV</span></span><span class="rt">View</span></button>' +
       '<button class="me-row" data-setting="clear"><span class="ic">×</span><span class="tx"><b>Clear temporary data</b><span>Quality preference and cached UI state</span></span><span class="rt">Clear</span></button>' +
       '<button class="me-row" data-setting="about"><span class="ic">i</span><span class="tx"><b>About SuperBox</b><span>Version ' + esc(version) + " · Mobile</span></span><span class=\"rt\">Info</span></button>" +
       "</div></div>" +
       '<div class="about-note">SuperBox Mobile ' + esc(version) + "<br>Ad-free catalogue browser and player.<br>Built for touch.</div>";
+    if (vpnState) paintVpnGate(vpnState);
     removeBoot();
+  }
+
+  /* ---------------------------------------------------------- Shield VPN */
+  var vpnState = null;
+  var vpnGateTimer = 0;
+  var VPN_REGIONS = [
+    ["auto", "Global"], ["us", "United States"], ["ca", "Canada"], ["uk", "United Kingdom"],
+    ["au", "Australia"], ["in", "India"], ["de", "Germany"], ["jp", "Japan"]
+  ];
+  function vpnApi(path) {
+    return fetch(path, { cache: "no-store" }).then(function (r) {
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.json();
+    });
+  }
+  function vpnOn(st) { return !!(st && st.ok); }
+  function paintVpnGate(st) {
+    var gate = document.getElementById("vpnGate");
+    if (!gate) return;
+    vpnState = st || vpnState;
+    var on = vpnOn(st);
+    gate.classList.toggle("hidden", on);
+    gate.classList.toggle("on", on);
+    gate.classList.toggle("err", !!st && st.state === "error");
+    var title = document.getElementById("vpnTitle");
+    var msg = document.getElementById("vpnMsg");
+    if (title) title.textContent = on ? "Shield connected" :
+      (st && st.state === "error" ? "Shield needs a retry" : "Connecting the Shield");
+    if (msg) msg.textContent = on
+      ? "Anonymous WARP tunnel is live. Every request in SuperBox rides it."
+      : (st && st.state === "error"
+        ? "The tunnel did not come up. Retry, or pick another regional profile."
+        : "Establishing an anonymous WARP tunnel. Every catalogue, image and stream stays behind it.");
+    var engine = document.getElementById("vpnEngine");
+    if (engine) engine.textContent = (st && st.engine) || "usque · MASQUE";
+    var rl = document.getElementById("vpnRegionLabel");
+    if (rl) rl.textContent = (st && st.regionLabel) || "Global";
+    var eg = document.getElementById("vpnEgress");
+    if (eg) eg.textContent = (st && (st.egress || st.ip)) || "—";
+    var wp = document.getElementById("vpnWarp");
+    if (wp) wp.textContent = st && st.warp ? "ON" : ((st && st.state) || "OFF");
+    var err = document.getElementById("vpnErr");
+    if (err) err.textContent = (st && st.error) ? st.error : "";
+    var me = document.getElementById("meVpnState");
+    if (me) me.textContent = on
+      ? ("Connected · " + (st.egress || st.regionLabel || "WARP"))
+      : ((st && (st.state || "off")) + " · " + (st && st.error ? "retry" : "connecting"));
+    var sel = document.getElementById("vpnRegion");
+    if (sel && st && st.region && document.activeElement !== sel) {
+      try { sel.value = st.region; } catch (e) {}
+    }
+  }
+  function watchVpnGate() {
+    clearTimeout(vpnGateTimer);
+    vpnApi("/api/vpn/status").then(function (st) {
+      paintVpnGate(st);
+      vpnGateTimer = setTimeout(watchVpnGate, vpnOn(st) ? 8000 : 1600);
+    }).catch(function () {
+      var gate = document.getElementById("vpnGate");
+      if (gate) gate.classList.remove("hidden");
+      var title = document.getElementById("vpnTitle");
+      if (title) title.textContent = "Starting the Shield";
+      var msg = document.getElementById("vpnMsg");
+      if (msg) msg.textContent = "Waiting for the local engine to answer. This usually takes a few seconds.";
+      vpnGateTimer = setTimeout(watchVpnGate, 1400);
+    });
+  }
+  function switchVpnRegion(region) {
+    var msg = document.getElementById("vpnMsg");
+    if (msg) msg.textContent = "Switching the Shield endpoint…";
+    return vpnApi("/api/vpn/switch?region=" + enc(region || "auto")).then(function (st) {
+      paintVpnGate(st);
+      return st;
+    });
+  }
+  function reconnectVpn(region) {
+    var err = document.getElementById("vpnErr");
+    if (err) err.textContent = "Restarting the tunnel…";
+    return vpnApi("/api/vpn/reconnect?region=" + enc(region || "auto")).then(function (st) {
+      paintVpnGate(st);
+      return st;
+    });
+  }
+  function startVpnGate() {
+    var gate = document.getElementById("vpnGate");
+    if (!gate) return;
+    var sel = document.getElementById("vpnRegion");
+    if (sel) sel.onchange = function () { switchVpnRegion(sel.value).catch(function () {}); };
+    var retry = document.getElementById("vpnRetry");
+    if (retry) retry.onclick = function () {
+      retry.disabled = true;
+      reconnectVpn((sel && sel.value) || "auto").catch(function () {}).then(function () {
+        retry.disabled = false;
+      });
+    };
+    watchVpnGate();
+  }
+  function openVpnSheet() {
+    var st = vpnState || {};
+    var on = vpnOn(st);
+    var region = st.region || "auto";
+    var html = '<div class="sheet-title">SuperBox Shield</div>' +
+      '<div class="sheet-sub">Embedded WARP tunnel · usque / MASQUE</div>' +
+      '<div style="padding:4px 20px 0"><div class="me-list">' +
+      '<div class="me-row"><span class="ic">●</span><span class="tx"><b>Status</b><span id="vpnSheetState">' +
+      esc(on ? "Connected" : ((st.state || "starting") + (st.error ? " · " + st.error : ""))) +
+      '</span></span><span class="rt" style="color:' + (on ? "#41e88a" : "#ff8a8a") + '">' + (on ? "ON" : "OFF") + '</span></div>' +
+      '<div class="me-row"><span class="ic">IP</span><span class="tx"><b>Egress</b><span id="vpnSheetIp">' +
+      esc((st.egress || st.ip || "—") + (st.regionLabel ? " · " + st.regionLabel : "")) +
+      '</span></span></div></div>' +
+      '<div class="sheet-sub" style="padding:16px 0 8px">Preferred region</div>' +
+      '<div class="chips" id="vpnSheetRegions" style="padding:0 0 8px">' +
+      VPN_REGIONS.map(function (r) {
+        return '<button class="chip' + (r[0] === region ? " on" : "") + '" data-vpn-region="' + r[0] + '">' + esc(r[1]) + "</button>";
+      }).join("") + '</div>' +
+      '<button class="btn-primary" id="vpnSheetRetry" style="width:100%;margin:10px 0 20px">Reconnect tunnel</button>' +
+      '<div style="color:#777782;font-size:11.5px;line-height:1.6;padding-bottom:22px">Cloudflare WARP endpoints are anycast. The requested region is preferred, and the actual exit is shown above once connected. All catalogue, image and player traffic stays inside the tunnel.</div>' +
+      '</div></div>';
+    openSheet(html, function (root) {
+      $$("[data-vpn-region]", root).forEach(function (b) {
+        b.onclick = function () {
+          var r = b.getAttribute("data-vpn-region");
+          $$("[data-vpn-region]", root).forEach(function (x) { x.classList.toggle("on", x === b); });
+          var stateEl = document.getElementById("vpnSheetState");
+          if (stateEl) stateEl.textContent = "Switching to " + b.textContent;
+          switchVpnRegion(r).then(function (next) {
+            openSheetRefresh(next);
+          }).catch(function () {
+            if (stateEl) stateEl.textContent = "Switch failed. Try reconnect.";
+          });
+        };
+      });
+      var retry = document.getElementById("vpnSheetRetry");
+      if (retry) retry.onclick = function () {
+        retry.disabled = true;
+        var stateEl = document.getElementById("vpnSheetState");
+        if (stateEl) stateEl.textContent = "Restarting the tunnel…";
+        reconnectVpn(region).then(function (next) {
+          openSheetRefresh(next);
+          retry.disabled = false;
+        }).catch(function () {
+          if (stateEl) stateEl.textContent = "Reconnect failed";
+          retry.disabled = false;
+        });
+      };
+    });
+  }
+  function openSheetRefresh(st) {
+    var stateEl = document.getElementById("vpnSheetState");
+    var ipEl = document.getElementById("vpnSheetIp");
+    if (stateEl) stateEl.textContent = vpnOn(st) ? "Connected" : ((st && st.state) || "starting");
+    if (ipEl) ipEl.textContent = ((st && (st.egress || st.ip)) || "—") + (st && st.regionLabel ? " · " + st.regionLabel : "");
   }
 
   // ---------------------------------------------------------------- detail
@@ -1938,6 +2092,8 @@
         renderMe();
       } else if (what === "about") {
         openAboutSheet();
+      } else if (what === "vpn") {
+        openVpnSheet();
       } else if (what === "sources") {
         if (window.LIB && window.LIB.openSources) window.LIB.openSources();
         else openAboutSheet();
@@ -2215,11 +2371,12 @@
 
   function switchTab(tab) {
     if (!tab) tab = "home";
-    if (["home", "movies", "series", "anime", "me"].indexOf(tab) < 0) tab = "home";
+    if (["home", "movies", "series", "anime", "reading", "sources", "me"].indexOf(tab) < 0) tab = "home";
     if (S.playerOpen) closePlayer();
     closeSheet();
     if (S.searchOpen) closeSearch(true);
     if (S.detailOpen) closeDetail(true);
+    if (window.READER) { try { window.READER.close(); } catch (e) {} }
     S.tab = tab;
     $$("#tabbar .tab").forEach(function (b) {
       var on = b.getAttribute("data-tab") === tab;
@@ -2230,7 +2387,31 @@
     window.scrollTo(0, 0);
     if (tab === "home") renderHome();
     else if (tab === "me") renderMe();
+    else if (tab === "reading") renderReading();
+    else if (tab === "sources") renderSources();
     else renderLibrary(tab);
+  }
+
+  function renderReading() {
+    clearInterval(S.heroTimer);
+    view.innerHTML = '<div id="readingHost"></div>';
+    if (window.READER) {
+      window.READER.render(document.getElementById("readingHost"));
+    } else {
+      view.innerHTML = errorView("Reading is unavailable", "The reader module failed to load. Restart SuperBox and try again.");
+    }
+    removeBoot();
+  }
+
+  function renderSources() {
+    clearInterval(S.heroTimer);
+    view.innerHTML = '<div id="sourcesHost"></div>';
+    if (window.SOURCES_HUB) {
+      window.SOURCES_HUB.render(document.getElementById("sourcesHost"));
+    } else {
+      view.innerHTML = errorView("Sources are unavailable", "The source directory failed to load. Restart SuperBox and try again.");
+    }
+    removeBoot();
   }
 
   function startPlaybackFromItem(item) {
@@ -2241,6 +2422,7 @@
   }
 
   window.sbBack = function () {
+    if (window.READER && window.READER.back()) return true;
     if (window.LIB && window.LIB.back && window.LIB.back()) return true;
     if (S.sheetOpen) { closeSheet(); return true; }
     if (S.playerOpen) { closePlayer(); return true; }
@@ -2258,6 +2440,7 @@
     S.autoplay = prefGet("sb.autoplay") !== "0";
     S.speed = num(prefGet("sb.speed"), 1);
     bindEvents();
+    startVpnGate();
     renderHome();
     loadHome().then(function () {
       removeBoot();

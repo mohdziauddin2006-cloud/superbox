@@ -922,3 +922,53 @@ select.picker:focus { border-color: rgba(168, 224, 99, .45); }
   .mb-hero-in { padding: 30px; gap: 24px; }
   .mb-poster { width: 168px; height: 252px; flex-basis: 168px; }
 }
+
+/* ---------------- SuperBox Shield gate ---------------- */
+.vpn-gate {
+  position: fixed; inset: 0; z-index: 9000; display: grid; place-items: center;
+  padding: 26px; background:
+    radial-gradient(900px 520px at 18% -10%, rgba(255,193,5,.16), transparent 60%),
+    radial-gradient(700px 480px at 105% 110%, rgba(90,120,255,.12), transparent 60%),
+    #08090b;
+}
+.vpn-gate.hidden { display: none !important; }
+.vpn-card {
+  width: min(560px, 94vw); background: rgba(17,19,24,.96); border: 1px solid #262b34;
+  border-radius: 22px; padding: 30px 30px 24px; box-shadow: 0 40px 120px rgba(0,0,0,.6);
+}
+.vpn-mark {
+  width: 54px; height: 54px; border-radius: 16px; display: grid; place-items: center;
+  background: linear-gradient(135deg,#ffc105,#ff8a00); color: #111; font-weight: 900;
+  font-size: 24px; margin: 0 0 16px; box-shadow: 0 10px 30px rgba(255,193,5,.25);
+}
+.vpn-mark span { transform: translateY(-1px); }
+.vpn-kicker { display: block; font-size: 10.5px; letter-spacing: .22em; color: #ffc105; font-weight: 800; margin: 0 0 7px; }
+.vpn-card h2 { margin: 0 0 8px; font-size: 25px; letter-spacing: -.02em; }
+.vpn-card p { margin: 0 0 17px; color: #9ba1ac; font-size: 13px; line-height: 1.55; }
+.vpn-track { height: 4px; border-radius: 999px; background: #23272f; overflow: hidden; margin: 0 0 19px; }
+.vpn-track i { display: block; height: 100%; width: 34%; border-radius: inherit; background: linear-gradient(90deg,#ffc105,#ff8a00); animation: vpnSlide 1.25s ease-in-out infinite; }
+.vpn-gate.on .vpn-track i { width: 100%; animation: none; }
+.vpn-gate.err .vpn-track i { width: 100%; background: #ff5252; animation: none; }
+@keyframes vpnSlide { 0% { transform: translateX(-110%); } 100% { transform: translateX(320%); } }
+.vpn-facts { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: #23272f; border: 1px solid #23272f; border-radius: 12px; overflow: hidden; margin: 0 0 18px; }
+.vpn-facts div { background: #121419; padding: 11px 13px; min-width: 0; }
+.vpn-facts span { display: block; color: #7f8590; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; margin: 0 0 3px; }
+.vpn-facts b { display: block; font-size: 12.5px; color: #e8eaee; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vpn-actions { display: flex; gap: 9px; }
+.vpn-actions select {
+  flex: 1; background: #121419; border: 1px solid #2a2f39; color: #e8eaee; border-radius: 11px;
+  padding: 11px 12px; font-size: 13px; outline: none;
+}
+.vpn-note { margin: 13px 0 0; color: #ff8a8a; font-size: 11.5px; line-height: 1.5; min-height: 15px; }
+.vpn-settings-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; border: 1px solid #23272f; background: #121419; border-radius: 11px; padding: 11px 13px; margin: 0 0 16px; }
+.vpn-settings-row span { color: #9ba1ac; font-size: 11.5px; }
+.vpn-settings-row button { padding: 8px 13px; font-size: 12px; }
+
+/* ---------------- in-app source browser ---------------- */
+.srcframe { position: fixed; left: 250px; right: 0; top: 0; bottom: 0; z-index: 60; display: flex; flex-direction: column; background: #08090b; }
+.srcbar { flex: 0 0 auto; display: flex; align-items: center; gap: 10px; padding: 10px 16px; background: #101216; border-bottom: 1px solid #22262e; }
+.srcbar button { border: 1px solid #2a2f39; background: #171a20; color: #e8eaee; border-radius: 9px; padding: 8px 13px; font-size: 12px; font-weight: 700; cursor: pointer; }
+.srcbar b { flex: 1; min-width: 0; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.srcbar span { color: #7f8590; font-size: 11px; white-space: nowrap; }
+.srcpage { flex: 1 1 auto; width: 100%; border: 0; background: #fff; }
+@media (max-width: 900px) { .srcframe { left: 0; } }

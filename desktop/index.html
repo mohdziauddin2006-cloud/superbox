@@ -10,6 +10,39 @@
 
 <div id="appBg" aria-hidden="true"></div>
 
+<!-- SUPERBOX SHIELD GATE - unskippable while the tunnel is down. The
+     renderer polls /vpn/status and only removes this layer after WARP
+     reports warp=on. -->
+<div id="vpnGate" class="vpn-gate" role="dialog" aria-modal="true" aria-labelledby="vpnTitle">
+  <div class="vpn-card">
+    <div class="vpn-mark" aria-hidden="true"><span>S</span></div>
+    <span class="vpn-kicker">SUPERBOX SHIELD</span>
+    <h2 id="vpnTitle">Connecting the Shield</h2>
+    <p id="vpnMsg">Establishing an anonymous WARP tunnel. Every catalogue, image and stream stays behind it.</p>
+    <div class="vpn-track"><i id="vpnBar"></i></div>
+    <div class="vpn-facts">
+      <div><span>Engine</span><b id="vpnEngine">usque · MASQUE</b></div>
+      <div><span>Requested</span><b id="vpnRegionLabel">Global</b></div>
+      <div><span>Egress</span><b id="vpnEgress">—</b></div>
+      <div><span>WARP</span><b id="vpnWarp">—</b></div>
+    </div>
+    <div class="vpn-actions">
+      <select id="vpnRegion" aria-label="Preferred region">
+        <option value="auto">Global (automatic)</option>
+        <option value="us">United States</option>
+        <option value="ca">Canada</option>
+        <option value="uk">United Kingdom</option>
+        <option value="au">Australia</option>
+        <option value="in">India</option>
+        <option value="de">Germany</option>
+        <option value="jp">Japan</option>
+      </select>
+      <button id="vpnRetry" class="primary" type="button">Retry</button>
+    </div>
+    <div class="vpn-note" id="vpnErr"></div>
+  </div>
+</div>
+
 <div id="shell">
   <aside id="sidebar">
     <div class="brand">
@@ -19,6 +52,8 @@
     <nav id="nav" aria-label="Sections">
       <button data-sec="home" class="active">Home</button>
       <button data-sec="moviebox">Spotlight</button>
+      <button data-sec="reading">Reading</button>
+      <button data-sec="sources">Sources</button>
       <button data-sec="movie">Movies</button>
       <button data-sec="tv">Series</button>
       <button data-sec="webseries">Web Series</button>
@@ -115,7 +150,12 @@
     <div class="box-info">
       <div><span>Sources</span><b>SuperBox library</b></div>
       <div><span>Ads</span><b class="good">Blocked at network level</b></div>
-      <div><span>Version</span><b>1.1.0</b></div>
+      <div><span>Shield</span><b id="setVpnState">Checking…</b></div>
+      <div><span>Version</span><b>1.3.0</b></div>
+    </div>
+    <div class="vpn-settings-row">
+      <span>Embedded VPN · usque / WARP MASQUE</span>
+      <button id="setVpnBtn" class="ghost" type="button">Reconnect</button>
     </div>
     <div class="boxactions">
       <button id="setClose" class="ghost">Cancel</button>
@@ -127,6 +167,8 @@
 <script src="hls.min.js"></script>
 <script src="sources.js"></script>
 <script src="libraries.js"></script>
+<script src="sources-hub.js"></script>
+<script src="reading.js"></script>
 <script src="renderer.js"></script>
 </body>
 </html>

@@ -20,7 +20,7 @@ if (!assetsDir || !outDir || !secretsPath) {
   process.exit(2);
 }
 
-const OBFUSCATE = new Set(['app.js', 'library.js', 'sources.js', 'libraries.js']);
+const OBFUSCATE = new Set(['app.js', 'library.js', 'sources.js', 'libraries.js', 'sources-hub.js', 'reading.js']);
 const KEY = crypto.randomBytes(32);
 const KEY_HEX = KEY.toString('hex');
 const MAGIC = Buffer.from('SBX1');

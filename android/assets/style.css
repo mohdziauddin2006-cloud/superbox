@@ -269,7 +269,7 @@ svg { display: block; width: 1em; height: 1em; }
   position: fixed; z-index: 30; left: 0; right: 0; bottom: 0;
   height: calc(var(--nav-h) + var(--safe-bottom));
   padding: 0 6px var(--safe-bottom);
-  display: grid; grid-template-columns: repeat(5, 1fr);
+  display: grid; grid-template-columns: repeat(7, 1fr);
   background: rgba(13,13,17,.94);
   backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
   border-top: 1px solid rgba(255,255,255,.075);
@@ -777,3 +777,44 @@ body.wa-modal { overflow: hidden; }
 }
 .wa-card .card-poster img { background: #14141a; }
 @media (prefers-reduced-motion: reduce) { .lib-spin { animation: none; } }
+
+/* ---------------------------------------------------------- Shield gate */
+.vpn-gate {
+  position: fixed; inset: 0; z-index: 9000; display: grid; place-items: center;
+  padding: calc(20px + env(safe-area-inset-top)) 18px calc(20px + env(safe-area-inset-bottom));
+  background:
+    radial-gradient(600px 380px at 16% -8%, rgba(255,193,5,.18), transparent 62%),
+    radial-gradient(520px 380px at 108% 108%, rgba(90,120,255,.13), transparent 62%),
+    #08090b;
+}
+.vpn-gate.hidden { display: none !important; }
+.vpn-card {
+  width: min(430px, 94vw); background: rgba(17,19,24,.97); border: 1px solid #262b34;
+  border-radius: 20px; padding: 25px 21px 19px; box-shadow: 0 30px 90px rgba(0,0,0,.65);
+}
+.vpn-mark {
+  width: 48px; height: 48px; border-radius: 14px; display: grid; place-items: center;
+  background: linear-gradient(135deg,#ffc105,#ff8a00); color: #111; font-weight: 900;
+  font-size: 22px; margin: 0 0 14px; box-shadow: 0 10px 26px rgba(255,193,5,.26);
+}
+.vpn-kicker { display: block; font-size: 10px; letter-spacing: .22em; color: #ffc105; font-weight: 800; margin: 0 0 6px; }
+.vpn-card h2 { margin: 0 0 7px; font-size: 22px; letter-spacing: -.02em; }
+.vpn-card p { margin: 0 0 15px; color: #9ba1ac; font-size: 12.5px; line-height: 1.55; }
+.vpn-track { height: 4px; border-radius: 999px; background: #23272f; overflow: hidden; margin: 0 0 16px; }
+.vpn-track i { display: block; height: 100%; width: 34%; border-radius: inherit; background: linear-gradient(90deg,#ffc105,#ff8a00); animation: vpnSlide 1.25s ease-in-out infinite; }
+.vpn-gate.on .vpn-track i { width: 100%; animation: none; }
+.vpn-gate.err .vpn-track i { width: 100%; background: #ff5252; animation: none; }
+@keyframes vpnSlide { 0% { transform: translateX(-110%); } 100% { transform: translateX(320%); } }
+.vpn-facts { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: #23272f; border: 1px solid #23272f; border-radius: 12px; overflow: hidden; margin: 0 0 15px; }
+.vpn-facts div { background: #121419; padding: 10px 12px; min-width: 0; }
+.vpn-facts span { display: block; color: #7f8590; font-size: 9.5px; letter-spacing: .08em; text-transform: uppercase; margin: 0 0 3px; }
+.vpn-facts b { display: block; font-size: 12px; color: #e8eaee; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vpn-actions { display: flex; gap: 8px; }
+.vpn-actions select {
+  flex: 1; min-width: 0; background: #121419; border: 1px solid #2a2f39; color: #e8eaee;
+  border-radius: 11px; padding: 11px 10px; font-size: 12.5px; outline: none;
+}
+.vpn-note { margin: 12px 0 0; color: #ff8a8a; font-size: 11px; line-height: 1.5; min-height: 14px; }
+.tab { font-size: 9px; letter-spacing: .05px; }
+@media (max-width: 360px) { .tab { font-size: 8px; } .tab svg { width: 20px; height: 20px; } }
+

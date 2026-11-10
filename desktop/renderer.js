@@ -255,7 +255,7 @@
       var list = (op.subjects || []).map(function (x) { return mbNormalize(x.subject || x); }).filter(Boolean);
       if (!list.length) return;
       if (op.type !== 'SUBJECTS_MOVIE' && op.type !== 'APPOINTMENT_LIST') return;
-      rows.push({ t: mbCleanTitle(op.title) + (op.type === 'APPOINTMENT_LIST' ? '' : ''), kind: 'mblist', items: list });
+      rows.push({ t: mbCleanTitle(op.title), kind: 'mblist', items: list });
     });
     rows.push({ t: 'More Like This', kind: 'mbtr', page: 2 });
     return rows;
@@ -281,7 +281,6 @@
     } catch (e) {}
     return mbSearchLocal(q);
   }
-
 
   async function anilist(sort, fmt) {
     var q = '{Page(perPage:26){media(type:ANIME,sort:' + sort + (fmt ? ',format:' + fmt : '') + ',isAdult:false){id title{romaji english} coverImage{large} startDate{year} averageScore}}}';
@@ -743,7 +742,7 @@
         if (opts.onPlay) { try { opts.onPlay(it); } catch (e) {} }
         else openItem(it);
       };
-      bInfo.onclick = function () { mbDetail(it); };
+      bInfo.onclick = function () { if (opts.onInfo) { try { opts.onInfo(it); return; } catch (e) {} } openItem(it); };
       try { slideEls[cur].style.animation = 'none'; void slideEls[cur].offsetWidth; slideEls[cur].style.animation = ''; } catch (e) {}
     }
     apply(0);
@@ -757,13 +756,21 @@
   }
   async function mountHomeHero(host) {
     try {
-      var h = await mbHome();
+      var j = await api('/trending/all/week');
       if (state.section !== 'home' || !host || !host.isConnected) return;
-      var items = mbBannerItems(h);
+      var items = (j.results || []).filter(function (m) {
+        return (m.media_type === 'movie' || m.media_type === 'tv' || m.first_air_date || m.release_date) && !m.adult;
+      }).map(function (m) {
+        var it = normTmdb(m);
+        it.bg = m.backdrop_path ? 'https://image.tmdb.org/t/p/original' + m.backdrop_path : it.poster;
+        it.desc = m.overview || '';
+        it.stype = it.mt === 'tv' ? 2 : 1;
+        return it;
+      }).filter(function (it) { return it.t && (it.bg || it.poster); }).slice(0, 8);
       if (!items.length) { host.innerHTML = ''; return; }
       mountHero(host, items, {
         kicker: 'Featured on SuperBox',
-        onPlay: function (it) { mbQuickPlay(it); }
+        onPlay: function (it) { openItem(it); }
       });
     } catch (e) {
       try { if (host && host.isConnected) host.innerHTML = ''; } catch (err) {}
@@ -795,6 +802,125 @@
     return row;
   }
 
+  /* ---------------- sources / reading / shield ---------------- */
+
+  /* The Sources hub hands a URL here instead of launching an external
+     browser: an Electron iframe rides the same Shield-proxied session, and
+     main.js strips X-Frame-Options/CSP frame-ancestors so real sites mount. */
+  var sourceFrame = null;
+  function closeSourceFrame() {
+    if (sourceFrame) {
+      try { sourceFrame.remove(); } catch (e) {}
+      sourceFrame = null;
+    }
+  }
+  function openSource(url, title) {
+    if (!/^https?:\/\//i.test(String(url || ''))) return;
+    closeSourceFrame();
+    heroStop();
+    var box = el('div', 'srcframe');
+    var bar = el('div', 'srcbar');
+    var back = el('button', null, '\u2190 Back');
+    back.type = 'button';
+    back.onclick = function () { closeSourceFrame(); renderSection('sources'); };
+    var name = el('b', null, title || 'Source');
+    var reload = el('button', null, 'Reload');
+    reload.type = 'button';
+    var note = el('span', null, 'Shield routed');
+    var frame = document.createElement('iframe');
+    frame.className = 'srcpage';
+    frame.setAttribute('allow', 'autoplay *; fullscreen *; encrypted-media *; clipboard-write *');
+    frame.setAttribute('allowfullscreen', '');
+    frame.setAttribute('referrerpolicy', 'no-referrer');
+    frame.src = url;
+    reload.onclick = function () { try { frame.src = url; } catch (e) {} };
+    bar.appendChild(back);
+    bar.appendChild(name);
+    bar.appendChild(note);
+    bar.appendChild(reload);
+    box.appendChild(bar);
+    box.appendChild(frame);
+    document.body.appendChild(box);
+    sourceFrame = box;
+  }
+  window.SBOpenWeb = openSource;
+
+  function vpnApi(path) {
+    return SC.base().then(function (b) {
+      return fetch(b + path, { cache: 'no-store' }).then(function (r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+      });
+    });
+  }
+  var vpnTimer = 0, vpnFast = true;
+  function paintVpnStatus(st) {
+    var gate = $('#vpnGate');
+    if (!gate) return;
+    var on = !!(st && st.ok);
+    gate.classList.toggle('hidden', on);
+    gate.classList.toggle('on', on);
+    gate.classList.toggle('err', !!st && st.state === 'error');
+    if ($('#vpnTitle')) $('#vpnTitle').textContent = on ? 'Shield connected' :
+      (st && st.state === 'error' ? 'Shield needs a retry' : 'Connecting the Shield');
+    if ($('#vpnMsg')) $('#vpnMsg').textContent = on
+      ? 'Anonymous WARP tunnel is live. Every request in SuperBox rides it.'
+      : (st && st.state === 'error'
+        ? 'The tunnel did not come up. Retry, or pick another regional profile.'
+        : 'Establishing an anonymous WARP tunnel. Every catalogue, image and stream stays behind it.');
+    if ($('#vpnEngine')) $('#vpnEngine').textContent = (st && st.engine) || 'usque · MASQUE';
+    if ($('#vpnRegionLabel')) $('#vpnRegionLabel').textContent = (st && st.regionLabel) || 'Global';
+    if ($('#vpnEgress')) $('#vpnEgress').textContent = (st && (st.egress || st.ip)) || '—';
+    if ($('#vpnWarp')) $('#vpnWarp').textContent = st && st.warp ? 'ON' : (st && st.state) || 'OFF';
+    if ($('#vpnErr')) $('#vpnErr').textContent = (st && st.error) ? st.error : '';
+    if (st && st.region && $('#vpnRegion') && document.activeElement !== $('#vpnRegion')) {
+      try { $('#vpnRegion').value = st.region; } catch (e) {}
+    }
+    if ($('#setVpnState')) $('#setVpnState').textContent = on
+      ? ('Connected · ' + ((st.egress || st.regionLabel || 'WARP')))
+      : ((st && (st.state || 'off')) + ' · ' + (st && st.error ? 'retry' : 'connecting'));
+  }
+  function watchVpn() {
+    clearTimeout(vpnTimer);
+    vpnApi('/vpn/status').then(function (st) {
+      paintVpnStatus(st);
+      vpnFast = !st.ok;
+      vpnTimer = setTimeout(watchVpn, vpnFast ? 1600 : 8000);
+    }).catch(function () {
+      var gate = $('#vpnGate');
+      if (gate) gate.classList.remove('hidden');
+      if ($('#vpnTitle')) $('#vpnTitle').textContent = 'Starting the Shield';
+      if ($('#vpnMsg')) $('#vpnMsg').textContent = 'Waiting for the local engine to answer. This usually takes a few seconds.';
+      vpnTimer = setTimeout(watchVpn, 1400);
+    });
+  }
+  function startVpnGate() {
+    var gate = $('#vpnGate');
+    if (!gate) return;
+    var sel = $('#vpnRegion');
+    if (sel) sel.onchange = function () {
+      var region = sel.value || 'auto';
+      if ($('#vpnMsg')) $('#vpnMsg').textContent = 'Switching the Shield endpoint to ' + sel.options[sel.selectedIndex].text + '…';
+      vpnApi('/vpn/switch?region=' + encodeURIComponent(region)).then(paintVpnStatus).catch(function () {});
+    };
+    var retry = $('#vpnRetry');
+    if (retry) retry.onclick = function () {
+      if ($('#vpnErr')) $('#vpnErr').textContent = 'Restarting the tunnel…';
+      vpnApi('/vpn/reconnect?region=' + encodeURIComponent((sel && sel.value) || 'auto'))
+        .then(paintVpnStatus).catch(function (e) { if ($('#vpnErr')) $('#vpnErr').textContent = e.message || 'Retry failed'; });
+    };
+    var btn = $('#setVpnBtn');
+    if (btn) btn.onclick = function () {
+      btn.disabled = true;
+      vpnApi('/vpn/reconnect?region=' + encodeURIComponent((sel && sel.value) || 'auto')).then(function (st) {
+        paintVpnStatus(st);
+        toast('Shield reconnecting.');
+        btn.disabled = false;
+      }).catch(function () { btn.disabled = false; });
+    };
+    watchVpn();
+  }
+
   function renderSuperBox() {
     heroStop();
     state.section = 'moviebox';
@@ -819,7 +945,8 @@
       if (items.length) {
         mountHero(host, items, {
           kicker: 'Featured this week',
-          onPlay: function (it) { mbQuickPlay(it); }
+          onPlay: function (it) { mbQuickPlay(it); },
+          onInfo: function (it) { mbDetail(it); }
         });
       } else { try { host.remove(); } catch (e) {} }
       paintRows(c, mbRows(h));
@@ -830,6 +957,8 @@
   }
 
   function renderSection(sec, sub) {
+    closeSourceFrame();
+    if (window.READER) { try { window.READER.close(); } catch (e) {} }
     if (sec === 'moviebox') return renderSuperBox();
     heroStop();
     state.section = sec;
@@ -840,6 +969,14 @@
     c.innerHTML = '';
     c.scrollTop = 0;
     if (rowIO) { try { rowIO.disconnect(); } catch (e) {} rowIO = null; }
+    if (sec === 'reading') {
+      if (window.READER) window.READER.render(c);
+      return;
+    }
+    if (sec === 'sources') {
+      if (window.SOURCES_HUB) window.SOURCES_HUB.render(c, { open: openSource });
+      return;
+    }
     if (sec === 'home') {
       var hh = heroSkeleton();
       c.appendChild(hh);
@@ -1332,9 +1469,10 @@
         startAt: at,
         onFail: function () {
           if (ep0 !== playEpoch) return;
-          session.tried[q.id] = true;
           /* Signed CDN token expired or edge hiccup: refresh the play payload
-             once and retry the same tier before dropping quality. */
+             once and retry the same tier before dropping quality. Marking the
+             tier as tried BEFORE this retry made mbStartSession bail out and
+             surface "unavailable" without ever replaying it. */
           if (!session.refreshed) {
             session.refreshed = true;
             session.resumeAt = mbCurrentTime();
@@ -1348,9 +1486,10 @@
                 session.height = again ? again.height : session.height;
               }
               mbStartSession(session, ep0);
-            }).catch(function () { if (ep0 === playEpoch) mbFallbackQuality(session, ep0); });
+            }).catch(function () { if (ep0 === playEpoch) { session.tried[q.id] = true; mbFallbackQuality(session, ep0); } });
             return;
           }
+          session.tried[q.id] = true;
           mbFallbackQuality(session, ep0);
         }
       });
@@ -3546,10 +3685,21 @@
     document.addEventListener('keydown', function (e) {
       if (e.key === 'Escape') {
         if (!$('#settingsModal').classList.contains('hidden')) { $('#settingsModal').classList.add('hidden'); return; }
+        if (window.READER && window.READER.back()) return;
+        if (sourceFrame) { closeSourceFrame(); renderSection('sources'); return; }
         if (!player().classList.contains('hidden')) closePlayer();
       }
     });
     wireSettings();
+    startVpnGate();
+    window.sbBack = function () {
+      if (window.READER && window.READER.back()) return true;
+      if (sourceFrame) { closeSourceFrame(); renderSection('sources'); return true; }
+      if (!$('#settingsModal').classList.contains('hidden')) { $('#settingsModal').classList.add('hidden'); return true; }
+      if (!player().classList.contains('hidden')) { closePlayer(); return true; }
+      if (state.section !== 'home') { renderSection('home'); return true; }
+      return false;
+    };
     renderSection('home');
   }
 
