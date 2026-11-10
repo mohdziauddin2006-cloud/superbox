@@ -16,6 +16,7 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.net.Proxy;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.URL;
@@ -78,6 +79,7 @@ public class LocalServer {
     private static final long TMDB_CACHE_MS = 12L * 60L * 60L * 1000L;
 
     private final Context context;
+    private final VpnManager vpn;
     private final ExecutorService clients = Executors.newCachedThreadPool();
     /* Access-ordered maps are LRU: the oldest entry is evicted first and the
        byte budget below keeps page/image bodies from growing without bound.
@@ -103,8 +105,9 @@ public class LocalServer {
     private static final int API_CACHE_MAX = 260;
     private static final long API_CACHE_BYTES = 48L * 1024L * 1024L;
 
-    public LocalServer(Context context) {
+    public LocalServer(Context context, VpnManager vpn) {
         this.context = context.getApplicationContext();
+        this.vpn = vpn;
         this.token = newToken();
         this.diskDir = new File(this.context.getCacheDir(), "sb-cache");
         if (!diskDir.exists()) diskDir.mkdirs();
@@ -254,6 +257,31 @@ public class LocalServer {
                 send(out, 204, "image/x-icon", new byte[0], null);
                 return;
             }
+
+            /* Shield control plane. Must stay reachable while the tunnel is
+               offline - this is what the gate UI polls. */
+            if (path.startsWith("/api/vpn/")) {
+                handleVpn(out, path, qs);
+                return;
+            }
+
+            /* Kill switch: every upstream route is closed until WARP is up.
+               Local assets (HTML/JS/CSS) keep loading so the gate can paint. */
+            boolean upstream = "/img".equals(path) || "/page".equals(path)
+                    || "/extract".equals(path) || path.startsWith("/tmdb/3/")
+                    || path.startsWith("/api/home") || path.startsWith("/api/trending")
+                    || path.startsWith("/api/detail") || path.startsWith("/api/play")
+                    || path.startsWith("/api/rec") || path.startsWith("/api/search")
+                    || "/stream".equals(path) || "/raw".equals(path)
+                    || "/hls".equals(path) || "/hlsseg".equals(path)
+                    || "/dash".equals(path) || "/dashseg".equals(path);
+            if (upstream && (vpn == null || !vpn.isOn())) {
+                send(out, 503, "application/json; charset=utf-8",
+                        bytes("{\"error\":\"vpn_offline\",\"message\":\"SuperBox Shield is not connected. Upstream routes stay closed until the tunnel is up.\"}"),
+                        "Cache-Control: no-store\r\nRetry-After: 4\r\n");
+                return;
+            }
+
             if ("/img".equals(path)) {
                 String iu = qs.get("u");
                 if (iu == null || iu.isEmpty()) iu = qs.get("url");
@@ -301,6 +329,40 @@ public class LocalServer {
             Log.w(TAG, "request failed in " + (System.currentTimeMillis() - started) + "ms: " + e.getMessage());
         } finally {
             try { client.close(); } catch (IOException ignored) {}
+        }
+    }
+
+    // ---------------------------------------------------------------- VPN
+
+    private void handleVpn(OutputStream out, String path, Map<String, String> qs)
+            throws IOException {
+        if (vpn == null) {
+            sendJson(out, 503, "{\"ok\":false,\"state\":\"unavailable\",\"error\":\"Shield is not initialised\"}");
+            return;
+        }
+        String region = qs.get("region");
+        if (region == null || region.isEmpty()) region = qs.get("r");
+        try {
+            if ("/api/vpn/status".equals(path)) {
+                sendJson(out, 200, vpn.status().toString());
+                return;
+            }
+            if ("/api/vpn/switch".equals(path)) {
+                sendJson(out, 200, vpn.switchRegion(region).toString());
+                return;
+            }
+            if ("/api/vpn/reconnect".equals(path)) {
+                sendJson(out, 200, vpn.reconnect(region).toString());
+                return;
+            }
+            if ("/api/vpn/ensure".equals(path)) {
+                sendJson(out, 200, vpn.ensure(region).toString());
+                return;
+            }
+            sendJson(out, 404, "{\"ok\":false,\"error\":\"unknown vpn route\"}");
+        } catch (Exception e) {
+            Log.w(TAG, "vpn route " + path + ": " + e.getMessage());
+            sendJson(out, 200, vpn.status().toString());
         }
     }
 
@@ -554,6 +616,8 @@ public class LocalServer {
         if (host.contains("aoneroom") || host.contains("moviebox")) return SITE + "/";
         if (host.contains("anilist")) return "https://anilist.co/";
         if (host.contains("wikipedia") || host.contains("wikimedia")) return "https://en.wikipedia.org/";
+        if (host.contains("mangadex")) return "https://mangadex.org/";
+        if (host.contains("pstatic") || host.contains("webtoons") || host.contains("naver")) return "https://www.webtoons.com/";
         return originOf(url);
     }
 
@@ -581,7 +645,7 @@ public class LocalServer {
     }
 
     private HttpURLConnection openImage(String url, String ref) throws IOException {
-        HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
+        HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection(proxy());
         c.setConnectTimeout(9000);
         c.setReadTimeout(18000);
         c.setInstanceFollowRedirects(true);
@@ -592,6 +656,13 @@ public class LocalServer {
         c.setRequestProperty("Accept-Encoding", "identity");
         c.setRequestProperty("Connection", "close");
         if (ref != null && !ref.isEmpty()) c.setRequestProperty("Referer", ref);
+        String h = hostOf(url);
+        if (h != null && (h.contains("aoneroom") || h.contains("moviebox"))) {
+            c.setRequestProperty("Origin", SITE);
+            c.setRequestProperty("X-Client-Info", "{\"timezone\":\"Asia/Calcutta\"}");
+            c.setRequestProperty("X-Request-Lang", "en");
+            c.setRequestProperty("X-Client-Token", mbToken());
+        }
         return c;
     }
 
@@ -789,12 +860,17 @@ public class LocalServer {
     private static final Pattern HTTP_RE = Pattern.compile("^https?://", Pattern.CASE_INSENSITIVE);
 
     private HttpURLConnection openWeb(String url, String ref) throws IOException {
-        HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
+        HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection(proxy());
         c.setConnectTimeout(12000);
         c.setReadTimeout(25000);
         c.setInstanceFollowRedirects(true);
         c.setUseCaches(false);
-        c.setRequestProperty("User-Agent", UA);
+        /* MangaDex's API rejects a browser UA with a bot-challenge redirect.
+           The mobile reader sends an honest client id there so chapters and
+           covers resolve; every other host keeps the browser UA. */
+        boolean mangadexApi = "api.mangadex.org".equals(hostOf(url));
+        c.setRequestProperty("User-Agent", mangadexApi
+                ? "SuperBox/1.3 (+https://github.com/mohdziauddin2006-cloud/superbox)" : UA);
         c.setRequestProperty("Accept", "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8");
         c.setRequestProperty("Accept-Language", "en-US,en;q=0.9");
         c.setRequestProperty("Accept-Encoding", "identity");
@@ -813,7 +889,7 @@ public class LocalServer {
             return;
         }
         long streamStarted = System.currentTimeMillis();
-        String referer = ref == null || ref.isEmpty() ? SITE + "/" : ref;
+        String referer = ref == null || ref.isEmpty() ? null : ref;
         Meta meta = getMeta(url, referer);
         if (meta.total <= 0) {
             passthrough(out, url, referer, headers.get("range"));
@@ -1026,7 +1102,7 @@ public class LocalServer {
             send(out, 400, "text/plain", bytes("missing playlist"), null);
             return;
         }
-        String referer = ref == null || ref.isEmpty() ? SITE + "/" : ref;
+        String referer = ref == null || ref.isEmpty() ? null : ref;
         String key = "hls:" + url + "|" + referer;
         CacheEntry hit = apiCacheGet(key, HLS_CACHE_MS);
         if (hit == null) {
@@ -1081,7 +1157,7 @@ public class LocalServer {
             send(out, 400, "text/plain", bytes("missing segment"), null);
             return;
         }
-        String referer = ref == null || ref.isEmpty() ? SITE + "/" : ref;
+        String referer = ref == null || ref.isEmpty() ? null : ref;
         HttpURLConnection c = null;
         try {
             c = open(url, referer, headers.get("range"), 9000, 45000);
@@ -1133,7 +1209,7 @@ public class LocalServer {
             send(out, 400, "text/plain", bytes("missing manifest"), null);
             return;
         }
-        String referer = ref == null || ref.isEmpty() ? SITE + "/" : ref;
+        String referer = ref == null || ref.isEmpty() ? null : ref;
         String key = "dash:" + url + "|" + referer;
         CacheEntry hit = apiCacheGet(key, HLS_CACHE_MS);
         if (hit == null) {
@@ -1333,7 +1409,7 @@ public class LocalServer {
 
     private HttpURLConnection open(String url, String ref, String range,
                                    int connectMs, int readMs) throws IOException {
-        HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
+        HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection(proxy());
         c.setConnectTimeout(connectMs);
         c.setReadTimeout(readMs);
         c.setInstanceFollowRedirects(true);
@@ -1342,14 +1418,7 @@ public class LocalServer {
         c.setRequestProperty("Accept", "*/*");
         c.setRequestProperty("Accept-Encoding", "identity");
         c.setRequestProperty("Connection", "close");
-        c.setRequestProperty("Referer", ref == null || ref.isEmpty() ? SITE + "/" : ref);
-        String h = hostOf(url);
-        if (h != null && (h.contains("aoneroom") || h.contains("moviebox"))) {
-            c.setRequestProperty("Origin", SITE);
-            c.setRequestProperty("X-Client-Info", "{\"timezone\":\"Asia/Calcutta\"}");
-            c.setRequestProperty("X-Request-Lang", "en");
-            c.setRequestProperty("X-Client-Token", mbToken());
-        }
+        if (ref != null && !ref.isEmpty()) c.setRequestProperty("Referer", ref);
         if (range != null) c.setRequestProperty("Range", range);
         return c;
     }
@@ -1369,6 +1438,12 @@ public class LocalServer {
             md5 = "";
         }
         return sec + "," + md5;
+    }
+
+    /** Every upstream connection rides the embedded tunnel, never the raw NIC. */
+    private static Proxy proxy() {
+        return new Proxy(Proxy.Type.HTTP,
+                new InetSocketAddress(VpnManager.HOST, VpnManager.PORT));
     }
 
     // ---------------------------------------------------------- http helpers

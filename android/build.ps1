@@ -81,7 +81,9 @@ Write-Host "== javac =="
 $sources = @()
 $sources += (Get-ChildItem (Join-Path $root "src") -Recurse -Filter *.java).FullName
 $sources += (Get-ChildItem $gen -Recurse -Filter *.java).FullName
-& javac -source 8 -target 8 -Xlint:-options -encoding UTF-8 -bootclasspath $androidJar -d $classes $sources
+$webkitJar = Join-Path $root "libs\androidx-webkit-1.12.1.jar"
+if (-not (Test-Path $webkitJar)) { throw "androidx.webkit jar missing: $webkitJar" }
+& javac -source 8 -target 8 -Xlint:-options -encoding UTF-8 -bootclasspath $androidJar -cp $webkitJar -d $classes $sources
 if ($LASTEXITCODE -ne 0) { throw "javac failed" }
 
 Write-Host "== R8 (shrink + optimize + obfuscate) =="
@@ -89,7 +91,7 @@ $classFiles = (Get-ChildItem $classes -Recurse -Filter *.class).FullName
 $r8Jar = Join-Path $bt "lib\d8.jar"
 & java -cp $r8Jar com.android.tools.r8.R8 --release --min-api 23 `
     --lib $androidJar --output $dexDir `
-    --pg-conf (Join-Path $root "proguard-rules.pro") $classFiles
+    --pg-conf (Join-Path $root "proguard-rules.pro") $classFiles $webkitJar
 if ($LASTEXITCODE -ne 0) { throw "R8 failed" }
 
 Write-Host "== add classes.dex =="
@@ -102,7 +104,7 @@ if ($LASTEXITCODE -ne 0) { throw "adding classes.dex failed" }
 Write-Host "== bundle FFmpeg native decoders =="
 $ffAar = Join-Path $root "libs\ffmpeg-kit-full-gpl-6.0.LTS.aar"
 if (-not (Test-Path $ffAar)) { throw "FFmpeg decoder pack missing: $ffAar" }
-& $python (Join-Path $root "tools\add-native-libs.py") (Join-Path $build "base.apk") $ffAar
+& $python (Join-Path $root "tools\add-native-libs.py") (Join-Path $build "base.apk") $ffAar (Join-Path $root "libs\vpn")
 if ($LASTEXITCODE -ne 0) { throw "bundling FFmpeg native libraries failed" }
 
 Write-Host "== zipalign =="

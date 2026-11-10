@@ -5,6 +5,8 @@
 }
 -keepattributes JavascriptInterface,*Annotation*,Signature,InnerClasses,EnclosingMethod
 -keep class org.json.** { *; }
+-keep class androidx.webkit.** { *; }
+-keep class org.chromium.support_lib_boundary.** { *; }
 -dontwarn **
 -repackageclasses 'x'
 -allowaccessmodification

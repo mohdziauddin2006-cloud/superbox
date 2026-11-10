@@ -26,15 +26,22 @@ import android.widget.FrameLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.webkit.ProxyConfig;
+import androidx.webkit.ProxyController;
+import androidx.webkit.WebViewFeature;
+
 import org.json.JSONArray;
 
 import java.util.ArrayList;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public class MainActivity extends Activity {
 
     private FrameLayout root;
     private WebView web;
     private LocalServer server;
+    private VpnManager vpn;
     private View customView;
     private WebChromeClient.CustomViewCallback customViewCallback;
     private TextView splash;
@@ -106,11 +113,23 @@ public class MainActivity extends Activity {
 
         web.addJavascriptInterface(new Bridge(), "SBAndroid");
 
+        /* WebView traffic (source browsers, reader images) must ride the same
+           tunnel as the bridge. API 26+ exposes a per-app proxy override. */
+        installWebViewProxy();
+
         web.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 Uri u = request.getUrl();
-                if (u != null && "127.0.0.1".equals(u.getHost())) return false;
+                if (u == null) return false;
+                String s = u.toString();
+                if ("127.0.0.1".equals(u.getHost())) return false;
+                if (s.startsWith("http://") || s.startsWith("https://")) {
+                    /* Keep source pages inside the app so the WebView proxy
+                       (the Shield tunnel) still covers them. */
+                    openWebView(s, "SuperBox");
+                    return true;
+                }
                 try {
                     startActivity(new Intent(Intent.ACTION_VIEW, u));
                 } catch (Exception ignored) {
@@ -168,7 +187,9 @@ public class MainActivity extends Activity {
             @Override
             public void run() {
                 try {
-                    server = new LocalServer(getApplicationContext());
+                    vpn = new VpnManager(getApplicationContext());
+                    vpn.startAsync("auto");
+                    server = new LocalServer(getApplicationContext(), vpn);
                     final int port = server.start();
                     runOnUiThread(new Runnable() {
                         @Override
@@ -195,6 +216,29 @@ public class MainActivity extends Activity {
     /* Full-screen in-app browser used only for sources that refuse to expose
        a raw media file (provider embeds, some custom-library pages). It keeps
        the viewer inside SuperBox instead of handing off to an external app. */
+    private void installWebViewProxy() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
+        try {
+            if (!WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE)) {
+                android.util.Log.w("SuperBoxShield", "WebView proxy override not supported");
+                return;
+            }
+            ProxyConfig cfg = new ProxyConfig.Builder()
+                    .addProxyRule(VpnManager.HOST + ":" + VpnManager.PORT)
+                    .addBypassRule("127.0.0.1")
+                    .addBypassRule("localhost")
+                    .addBypassRule("<local>")
+                    .build();
+            final ExecutorService ex = Executors.newSingleThreadExecutor();
+            ProxyController.getInstance().setProxyOverride(cfg, ex, new Runnable() {
+                @Override public void run() { ex.shutdown(); }
+            });
+        } catch (Throwable e) {
+            android.util.Log.w("SuperBoxShield",
+                    "WebView proxy override unavailable: " + e.getMessage());
+        }
+    }
+
     private void openWebView(final String url, final String title) {
         openWebLadder(new String[]{url}, title);
     }
@@ -498,6 +542,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         if (server != null) server.stop();
+        if (vpn != null) vpn.stop();
         closeWebView();
         if (web != null) {
             web.loadUrl("about:blank");

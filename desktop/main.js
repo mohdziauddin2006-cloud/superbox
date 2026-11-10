@@ -23,6 +23,13 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 
+/* SuperBox Shield: the embedded WARP/MASQUE core. It must install the
+   process-wide dispatcher BEFORE srv2.js is required, otherwise the first
+   backend requests would leak around the tunnel. The tunnel itself starts in
+   app.whenReady(); the UI renders a gate until /vpn/status reports warp=on. */
+const vpn = require('./vpn');
+try { vpn.installDispatcher(); } catch (e) { logLine('ERROR', 'VPN dispatcher failed', e); }
+
 /* One instance only: launching the shortcut twice focuses the open window. */
 const gotLock = app.requestSingleInstanceLock();
 /* Headless verification mode: the UI still renders (and CDP works) but no
@@ -328,6 +335,31 @@ function createWindow() {
 app.whenReady().then(function () {
   try { app.setAppUserModelId('com.superbox.desktop'); } catch (e) {}
   logLine('INFO', 'app ready');
+
+  /* Shield first: hidden provisioning/tunnel process, then point the whole
+     Chromium session at the local proxy. The renderer gate polls
+     /vpn/status and only opens the catalogue once WARP reports warp=on. */
+  vpn.start(process.env.SB_VPN_REGION || 'auto').then(function (st) {
+    logLine('INFO', 'Shield ready: ' + JSON.stringify(st));
+  }).catch(function (e) {
+    logLine('ERROR', 'Shield start failed: ' + String((e && e.message) || e));
+  });
+  try {
+    session.defaultSession.setProxy({
+      proxyRules: 'http=127.0.0.1:46950;https=127.0.0.1:46950;socks=127.0.0.1:46950',
+      /* Moviebox's media CDN rejects Cloudflare WARP egress with 427. The
+         catalogue, API, artwork and source pages still ride the Shield;
+         only the signed media host is fetched directly so playback works.
+         The player also tries /raw, whose grab() mirrors this bypass. */
+      proxyBypassRules: '127.0.0.1,localhost,::1,*.hakunaymatata.com'
+    }).then(function () {
+      logLine('INFO', 'Chromium session routed through SuperBox Shield');
+    }).catch(function (e) {
+      logLine('ERROR', 'session proxy failed: ' + String((e && e.message) || e));
+    });
+  } catch (e) {
+    logLine('ERROR', 'session proxy setup failed: ' + String((e && e.message) || e));
+  }
 
   if (proxyError) {
     showFatal('Streaming engine failed',

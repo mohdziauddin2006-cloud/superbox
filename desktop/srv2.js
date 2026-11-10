@@ -1953,12 +1953,38 @@ function cookFor(host) {
   return '';
 }
 
-async function grab(url, referer, range, ua, ms){
+/* Moviebox's signed media CDN answers Cloudflare WARP egress with 427
+   Forbidden, while the same URL plays from the host connection. Keep the
+   catalogue/API behind the Shield but fetch only this media host directly.
+   Chromium gets the same exception through the session proxy bypass list in
+   main.js, so the direct <video> path and the /raw fallback agree. */
+const MEDIA_DIRECT_RE = /(^|\.)hakunaymatata\.com$/i;
+let directAgent = null;
+function isMediaDirect(url) {
+  try { return MEDIA_DIRECT_RE.test(new URL(url).hostname); } catch (e) { return false; }
+}
+function directFetch(url, init) {
+  try {
+    const undici = require('undici');
+    directAgent = directAgent || new undici.Agent({ connect: { timeout: 20000 } });
+    return undici.fetch(url, Object.assign({}, init, { dispatcher: directAgent }));
+  } catch (e) {
+    return fetch(url, init);
+  }
+}
+
+async function grab(url, referer, range, ua, ms, externalSignal){
   const budget = ms || 12000;
   const ctl = new AbortController();
   const t = setTimeout(() => ctl.abort(), budget);
+  /* MangaDex's API turns a browser UA away with a bot-challenge redirect
+     ("if this isn't a browser, don't send a browser UA"), which left the
+     Reading room empty. Its API wants an honest client identifier; every
+     other upstream keeps the browser string it expects. */
+  let grabHost = '';
+  try { grabHost = new URL(url).hostname.toLowerCase(); } catch (e) {}
   const h = {
-    'User-Agent': ua || UA,
+    'User-Agent': grabHost === 'api.mangadex.org' ? 'SuperBox/1.3 (+https://github.com/mohdziauddin2006-cloud/superbox)' : (ua || UA),
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,application/json;q=0.9,image/avif,image/webp,*/*;q=0.8',
     'Accept-Language': 'en-US,en;q=0.9',
     'Cache-Control': 'no-cache'
@@ -1975,7 +2001,9 @@ async function grab(url, referer, range, ua, ms){
   if (range) h.Range = range;
   let r;
   try {
-    r = await fetch(url, { headers: h, redirect: 'follow', signal: ctl.signal });
+    const doFetch = isMediaDirect(url) ? directFetch : fetch;
+    const sig = externalSignal ? AbortSignal.any([ctl.signal, externalSignal]) : ctl.signal;
+    r = await doFetch(url, { headers: h, redirect: 'follow', signal: sig });
   } catch (e) { clearTimeout(t); throw e; }
   clearTimeout(t);
   /* A server can answer the headers and then stall the body forever. Keep
@@ -2013,31 +2041,31 @@ async function grab(url, referer, range, ua, ms){
   return r;
 }
 
-/* The Spotlight CDN throttles a single connection hard (roughly 60-120 KB/s on
+/* Provider media CDNs throttle a single connection hard (roughly 60-120 KB/s on
    a normal line) and its MP4 index (`moov`) can be 8-9 MB. Chromium asks for
    `bytes=0-`, so a one-connection proxy would need 1.5 minutes before the
    first frame. The helpers below split one logical range into independent
    sub-ranges, download them concurrently, then hand the bytes back in order.
    The player sees a normal 206; the index simply arrives 5-8x sooner. */
-const MB_STREAM_WINDOW = 12 * 1024 * 1024;
-const MB_SIZE_CACHE = new Map();
-function mbTotalFromCR(cr) {
+const MEDIA_STREAM_WINDOW = 12 * 1024 * 1024;
+const MEDIA_SIZE_CACHE = new Map();
+function rangeTotalFromCR(cr) {
   const m = /\/(\d+)\s*$/.exec(String(cr || ''));
   return m ? Number(m[1]) : 0;
 }
-async function mbProbeSize(url, ref, ua) {
+async function probeMediaSize(url, ref, ua) {
   const key = (function () { try { return new URL(url).pathname; } catch (e) { return url; } })();
-  if (MB_SIZE_CACHE.has(key)) return MB_SIZE_CACHE.get(key);
+  if (MEDIA_SIZE_CACHE.has(key)) return MEDIA_SIZE_CACHE.get(key);
   let total = 0;
   try {
     const r = await grab(url, ref, 'bytes=0-1', ua, 15000);
-    total = mbTotalFromCR(r.headers.get('content-range'));
+    total = rangeTotalFromCR(r.headers.get('content-range'));
     try { if (r.body) await r.body.cancel(); } catch (e) {}
   } catch (e) {}
-  if (total > 0) MB_SIZE_CACHE.set(key, total);
+  if (total > 0) MEDIA_SIZE_CACHE.set(key, total);
   return total;
 }
-async function mbRangeBuffer(url, ref, start, end, ua) {
+async function mediaRangeBuffer(url, ref, start, end, ua) {
   for (let i = 0; i < 3; i++) {
     let r = null;
     try { r = await grab(url, ref, 'bytes=' + start + '-' + end, ua, 60000); } catch (e) { r = null; }
@@ -2055,18 +2083,18 @@ async function mbRangeBuffer(url, ref, start, end, ua) {
    Without sharing, each ask would start another 8-connection window, compete
    with the first one and hit the CDN's throttle. One in-flight window per
    12 MB bucket is kept here; every overlapping request reads the same slices. */
-const MB_WINDOWS = new Map();
-function mbWindowKey(url, start) {
+const MEDIA_WINDOWS = new Map();
+function mediaWindowKey(url, start) {
   let p = url;
   try { const x = new URL(url); p = x.host + x.pathname; } catch (e) {}
-  return p + '|' + Math.floor(start / MB_STREAM_WINDOW);
+  return p + '|' + Math.floor(start / MEDIA_STREAM_WINDOW);
 }
-function mbWindowGet(url, ref, start, total, ua) {
-  const key = mbWindowKey(url, start);
-  const have = MB_WINDOWS.get(key);
+function mediaWindowGet(url, ref, start, total, ua) {
+  const key = mediaWindowKey(url, start);
+  const have = MEDIA_WINDOWS.get(key);
   if (have) return have;
-  const bstart = Math.floor(start / MB_STREAM_WINDOW) * MB_STREAM_WINDOW;
-  const bend = Math.min(total - 1, bstart + MB_STREAM_WINDOW - 1);
+  const bstart = Math.floor(start / MEDIA_STREAM_WINDOW) * MEDIA_STREAM_WINDOW;
+  const bend = Math.min(total - 1, bstart + MEDIA_STREAM_WINDOW - 1);
   const len = bend - bstart + 1;
   const parts = [];
   if (len <= 384 * 1024) {
@@ -2085,21 +2113,21 @@ function mbWindowGet(url, ref, start, total, ua) {
     start: bstart, end: bend, total, t: Date.now(),
     parts: parts.map(function (p) {
       const part = { start: p[0], end: p[1], buf: null };
-      part.promise = mbRangeBuffer(url, ref, part.start, part.end, ua).then(function (b) {
+      part.promise = mediaRangeBuffer(url, ref, part.start, part.end, ua).then(function (b) {
         part.buf = b; return b;
       });
       return part;
     })
   };
-  MB_WINDOWS.set(key, win);
-  for (const [k, v] of MB_WINDOWS) {
-    if (Date.now() - v.t > 120000) MB_WINDOWS.delete(k);
+  MEDIA_WINDOWS.set(key, win);
+  for (const [k, v] of MEDIA_WINDOWS) {
+    if (Date.now() - v.t > 120000) MEDIA_WINDOWS.delete(k);
   }
-  while (MB_WINDOWS.size > 5) MB_WINDOWS.delete(MB_WINDOWS.keys().next().value);
+  while (MEDIA_WINDOWS.size > 5) MEDIA_WINDOWS.delete(MEDIA_WINDOWS.keys().next().value);
   return win;
 }
-async function mbStreamWindow(res, url, ref, start, reqEnd, total, ua) {
-  const win = mbWindowGet(url, ref, start, total, ua);
+async function mediaStreamWindow(res, url, ref, start, reqEnd, total, ua) {
+  const win = mediaWindowGet(url, ref, start, total, ua);
   const end = Math.min((reqEnd == null ? win.end : reqEnd), win.end);
   if (end < start) return false;
   /* Await the first slice that covers the request before committing headers:
@@ -2132,6 +2160,90 @@ async function mbStreamWindow(res, url, ref, start, reqEnd, total, ua) {
     }
     res.end();
   } catch (e) { try { res.destroy(); } catch (e2) {} }
+  return true;
+}
+
+/* Direct-CDN window: the Moviebox media host throttles each socket to roughly
+   100 KB/s, so a single range is useless for startup. Fetch the requested
+   window as a small header slice plus parallel siblings, then replay in order.
+   Unlike the generic window cache this is per-request and never reused: signed
+   URLs expire, and a failed set of slices must not wedge the next attempt. */
+const DIRECT_WINDOW = 16 * 1024 * 1024;
+const DIRECT_FIRST = 256 * 1024;
+const DIRECT_PARTS = 24;
+async function directRangeBuffer(url, ref, start, end, ua, signal) {
+  const want = end - start + 1;
+  for (let i = 0; i < 3; i++) {
+    if (signal && signal.aborted) return null;
+    let r = null;
+    try { r = await grab(url, ref, 'bytes=' + start + '-' + end, ua, 30000, signal); } catch (e) { r = null; }
+    if (r && r.status === 206 && r.body) {
+      try {
+        const b = Buffer.from(await r.arrayBuffer());
+        if (b.length === want) return b;
+      } catch (e) {}
+    }
+    try { if (r && r.body) await r.body.cancel(); } catch (e) {}
+  }
+  return null;
+}
+async function mediaDirectWindow(res, url, ref, start, total, ua, cap) {
+  const maxWin = Math.min(cap || DIRECT_WINDOW, DIRECT_WINDOW);
+  const bstart = Math.max(0, start);
+  const bend = Math.min(total - 1, bstart + maxWin - 1);
+  const len = bend - bstart + 1;
+  if (len <= 0) return false;
+  const parts = [];
+  if (len <= 512 * 1024) {
+    parts.push([bstart, bend]);
+  } else {
+    const first = Math.min(DIRECT_FIRST, len);
+    parts.push([bstart, bstart + first - 1]);
+    let pos = bstart + first;
+    const per = Math.ceil((bend - pos + 1) / DIRECT_PARTS);
+    while (pos <= bend) { parts.push([pos, Math.min(bend, pos + per - 1)]); pos += per; }
+  }
+  const ac = new AbortController();
+  let closed = false;
+  const onClose = function () { closed = true; try { ac.abort(); } catch (e) {} };
+  res.once('close', onClose);
+  const jobs = parts.map(function (p) {
+    const job = { start: p[0], end: p[1], buf: null };
+    job.promise = directRangeBuffer(url, ref, p[0], p[1], ua, ac.signal).then(function (b) {
+      job.buf = b; return b;
+    });
+    return job;
+  });
+  const firstBuf = await jobs[0].promise;
+  if (!firstBuf || closed || res.destroyed) {
+    try { ac.abort(); } catch (e) {}
+    res.removeListener('close', onClose);
+    return false;
+  }
+  res.writeHead(206, {
+    'Content-Type': 'video/mp4',
+    'Accept-Ranges': 'bytes',
+    'Content-Range': 'bytes ' + bstart + '-' + bend + '/' + total,
+    'Content-Length': String(len),
+    'Cache-Control': 'public, max-age=3600',
+    'Content-Disposition': 'inline'
+  });
+  let ok = true;
+  try {
+    for (let i = 0; i < jobs.length; i++) {
+      if (closed || res.destroyed) { ok = false; break; }
+      const job = jobs[i];
+      const b = i === 0 ? firstBuf : await job.promise;
+      if (!b || !b.length) { ok = false; break; }
+      const off = Math.max(bstart, job.start) - job.start;
+      const slice = off === 0 ? b : b.subarray(off);
+      if (!res.write(slice)) await new Promise(function (r2) { res.once('drain', r2); });
+    }
+    if (ok) res.end();
+    else { try { res.destroy(); } catch (e) {} }
+  } catch (e) { try { res.destroy(); } catch (e2) {} }
+  if (!ok) { try { ac.abort(); } catch (e) {} }
+  res.removeListener('close', onClose);
   return true;
 }
 
@@ -2242,6 +2354,13 @@ function within(ms, work, fallback) {
   });
 }
 
+/* ===========================================================================
+   SUPERBOX SHIELD CONTROL
+   The embedded usque/WARP core lives in vpn.js and is owned by the Electron
+   main process. These routes are the only control plane the renderer and the
+   shared source modules ever touch. Loaded lazily so the scraper backend can
+   still run under plain Node during smoke tests.
+   =========================================================================== */
 /* ===========================================================================
    SPOTLIGHT CATALOGUE + PLAY RESOLVER
    SuperBox's web client talks to its own BFF. Two details matter:
@@ -2401,6 +2520,10 @@ function mbNormalizePlay(json, detail, sid, dp, se, ep) {
   };
 }
 
+function shield() {
+  try { return require('./vpn'); } catch (e) { return null; }
+}
+
 async function handle(req, res){
   hdr(res);
   const u = new URL(req.url, 'http://127.0.0.1');
@@ -2426,6 +2549,35 @@ async function handle(req, res){
     return;
   }
   if (path === '/enhance.js'){ res.writeHead(200, {'Content-Type':'text/javascript; charset=utf-8','Cache-Control':'no-cache'}); return res.end(ENHANCER); }
+
+  /* ---- SuperBox Shield control plane ------------------------------------
+     status: current tunnel + real egress country
+     ensure: bring the tunnel up (optionally pinned to a region)
+     switch: reconnect through a different regional endpoint profile
+     reconnect: hard restart of the local proxy process */
+  if (path === '/vpn/status' || path === '/vpn/switch' || path === '/vpn/reconnect' || path === '/vpn/ensure') {
+    const v = shield();
+    const send = function (code, obj) {
+      res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify(obj));
+    };
+    if (!v) return send(503, { ok: false, state: 'unavailable', error: 'Shield core is not running in this process' });
+    try {
+      const region = u.searchParams.get('region') || u.searchParams.get('r') || '';
+      if (path === '/vpn/switch') return send(200, await v.switchRegion(region || 'auto'));
+      if (path === '/vpn/reconnect') {
+        const keep = region || v.region || 'auto';
+        v.stopSync();
+        return send(200, await v.start(keep));
+      }
+      if (path === '/vpn/ensure') return send(200, await v.ensure(region || 'auto'));
+      return send(200, v.status());
+    } catch (e) {
+      let st = null;
+      try { st = v.status(); } catch (e2) {}
+      return send(500, { ok: false, state: 'error', error: String((e && e.message) || e), status: st });
+    }
+  }
 
   /* Catalogue cache hit: Home/Movies/Series/Web Series/18+ rows, episode
      maps and proxied catalogue pages are returned before any upstream
@@ -3116,6 +3268,8 @@ async function handle(req, res){
     const hh = new URL(url).hostname;
     if (/(^|\.)huangguo(?:drama)?\.(?:ai|com|chat)$/i.test(hh)) autoRef = 'https://huangguodrama.ai/';
     else if (/(^|\.)googlevideo\.com$/i.test(hh)) autoRef = 'https://www.youtube.com/';
+    else if (/(^|\.)mangadex\.(?:org|network)$/i.test(hh)) autoRef = 'https://mangadex.org/';
+    else if (/(^|\.)(?:pstatic\.net|webtoons\.com|naver\.com)$/i.test(hh)) autoRef = 'https://www.webtoons.com/';
   } catch (e) {}
   try {
     if (path === '/img'){
@@ -3157,13 +3311,47 @@ async function handle(req, res){
         }
       } catch (e) {}
       const CHUNK = Math.max(65536, Math.min(8 * 1024 * 1024, Number(u.searchParams.get('chunk')) || (2 * 1024 * 1024)));
+      /* Moviebox's signed media host is fetched directly (WARP is blocked with
+         427) and throttles ONE socket to ~100 KB/s. A plain passthrough would
+         take ~20 s just to deliver the first 2 MB, so the startup stalls.
+         Split the window into parallel ranges (a small first slice for the MP4
+         header, then 8 siblings), stream them in order, and send headers as
+         soon as that first slice lands. No shared-window cache: a dead signed
+         URL must never poison a fresh one. */
+      if (isMediaDirect(url)) {
+        const cap = DIRECT_WINDOW;
+        let dtotal = Number(u.searchParams.get('size')) || 0;
+        if (!dtotal) dtotal = await probeMediaSize(url, ref, pUA || undefined);
+        if (dtotal > 0) {
+          const ddone = await mediaDirectWindow(res, url, ref, start, dtotal, pUA || undefined, cap);
+          if (ddone) return;
+        }
+        let sendRange = req.headers.range;
+        if (isRange) {
+          if (wantEnd == null || wantEnd - start + 1 > cap) sendRange = 'bytes=' + start + '-' + (start + cap - 1);
+        } else {
+          sendRange = 'bytes=0-' + (cap - 1);
+        }
+        const rd = await grab(url, ref, sendRange, pUA || undefined);
+        const hd = {
+          'Content-Type': rd.headers.get('content-type') || 'video/mp4',
+          'Accept-Ranges': 'bytes',
+          'Cache-Control': 'public, max-age=3600',
+          'Content-Disposition': 'inline'
+        };
+        const dcr = rd.headers.get('content-range'); if (dcr) hd['Content-Range'] = dcr;
+        const dcl = rd.headers.get('content-length'); if (dcl) hd['Content-Length'] = dcl;
+        res.writeHead(rd.status, hd);
+        if (!rd.body) return res.end();
+        return Readable.fromWeb(rd.body).pipe(res);
+      }
       let total = Number(u.searchParams.get('size')) || 0;
-      if (!total) total = await mbProbeSize(url, ref, pUA || undefined);
+      if (!total) total = await probeMediaSize(url, ref, pUA || undefined);
       if (total > 0) {
         const end = Math.min(total - 1,
-          (wantEnd != null && wantEnd - start + 1 <= MB_STREAM_WINDOW) ? wantEnd : start + MB_STREAM_WINDOW - 1);
+          (wantEnd != null && wantEnd - start + 1 <= MEDIA_STREAM_WINDOW) ? wantEnd : start + MEDIA_STREAM_WINDOW - 1);
         if (end - start + 1 >= 2 * 1024 * 1024) {
-          const done = await mbStreamWindow(res, url, ref, start, end, total, pUA || undefined);
+          const done = await mediaStreamWindow(res, url, ref, start, end, total, pUA || undefined);
           if (done) return;
         }
         range = 'bytes=' + start + '-' + end;
