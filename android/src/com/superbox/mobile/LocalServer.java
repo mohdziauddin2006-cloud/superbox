@@ -1419,7 +1419,7 @@ public class LocalServer {
 
     private HttpURLConnection open(String url, String ref, String range,
                                    int connectMs, int readMs) throws IOException {
-        HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection(proxy());
+        HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection(routeFor(url));
         c.setConnectTimeout(connectMs);
         c.setReadTimeout(readMs);
         c.setInstanceFollowRedirects(true);
@@ -1454,6 +1454,17 @@ public class LocalServer {
     private static Proxy proxy() {
         return new Proxy(Proxy.Type.HTTP,
                 new InetSocketAddress(VpnManager.HOST, VpnManager.PORT));
+    }
+
+    /* Moviebox's media CDN rejects WARP egress with 427, exactly like the
+       desktop build documents. Catalogue, APIs and artwork stay inside the
+       tunnel; only the signed MP4/HLS byte ranges use the direct route. */
+    private static Proxy routeFor(String url) {
+        String h = hostOf(url);
+        if (h != null && (h.equals("hakunaymatata.com") || h.endsWith(".hakunaymatata.com"))) {
+            return Proxy.NO_PROXY;
+        }
+        return proxy();
     }
 
     // ---------------------------------------------------------- http helpers

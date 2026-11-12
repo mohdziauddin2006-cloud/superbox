@@ -50,15 +50,37 @@ public final class VpnManager {
     private static final Map<String, String[]> ENDPOINTS = new LinkedHashMap<>();
     private static final Map<String, String> LABELS = new LinkedHashMap<>();
 
+    private static final String[] WARP_ENDPOINTS = {
+        "162.159.198.2", "162.159.199.2",
+        "162.159.192.2", "162.159.193.2", "162.159.195.2",
+        "188.114.96.2", "188.114.97.2", "188.114.98.2", "188.114.99.2",
+        "162.159.198.3", "162.159.199.3", "188.114.96.3"
+    };
+
+    private static String[] rotated(String[] list, int n) {
+        int k = ((n % list.length) + list.length) % list.length;
+        String[] out = new String[list.length];
+        for (int i = 0; i < list.length; i++) out[i] = list[(k + i) % list.length];
+        return out;
+    }
+
     static {
-        ENDPOINTS.put("auto", new String[]{"162.159.198.2", "162.159.199.2"});
-        ENDPOINTS.put("us", new String[]{"162.159.198.2", "162.159.199.2"});
-        ENDPOINTS.put("ca", new String[]{"162.159.199.2", "162.159.198.2"});
-        ENDPOINTS.put("uk", new String[]{"162.159.198.2", "162.159.199.2"});
-        ENDPOINTS.put("au", new String[]{"162.159.199.2", "162.159.198.2"});
-        ENDPOINTS.put("in", new String[]{"162.159.198.2", "162.159.199.2"});
-        ENDPOINTS.put("de", new String[]{"162.159.199.2", "162.159.198.2"});
-        ENDPOINTS.put("jp", new String[]{"162.159.198.2", "162.159.199.2"});
+        /* Full 12-endpoint pool per region. Anchors first for fast, reliable
+           switches; the rest are failover. Cloudflare is anycast, so the
+           measured egress is reported separately and truthfully. */
+        ENDPOINTS.put("auto", rotated(WARP_ENDPOINTS, 0));
+        ENDPOINTS.put("us", rotated(WARP_ENDPOINTS, 0));
+        ENDPOINTS.put("ca", rotated(WARP_ENDPOINTS, 0));
+        ENDPOINTS.put("uk", rotated(WARP_ENDPOINTS, 0));
+        ENDPOINTS.put("au", rotated(WARP_ENDPOINTS, 0));
+        ENDPOINTS.put("in", rotated(WARP_ENDPOINTS, 0));
+        ENDPOINTS.put("de", rotated(WARP_ENDPOINTS, 0));
+        ENDPOINTS.put("jp", rotated(WARP_ENDPOINTS, 0));
+        ENDPOINTS.put("sg", rotated(WARP_ENDPOINTS, 0));
+        ENDPOINTS.put("hk", rotated(WARP_ENDPOINTS, 0));
+        ENDPOINTS.put("kr", rotated(WARP_ENDPOINTS, 0));
+        ENDPOINTS.put("fr", rotated(WARP_ENDPOINTS, 0));
+        ENDPOINTS.put("br", rotated(WARP_ENDPOINTS, 0));
         LABELS.put("auto", "Global");
         LABELS.put("us", "United States");
         LABELS.put("ca", "Canada");
@@ -67,6 +89,11 @@ public final class VpnManager {
         LABELS.put("in", "India");
         LABELS.put("de", "Germany");
         LABELS.put("jp", "Japan");
+        LABELS.put("sg", "Singapore");
+        LABELS.put("hk", "Hong Kong");
+        LABELS.put("kr", "South Korea");
+        LABELS.put("fr", "France");
+        LABELS.put("br", "Brazil");
     }
 
     private final Context context;
@@ -211,6 +238,9 @@ public final class VpnManager {
         region = wanted;
         ensureConfig();
         killProcess();
+        /* The previous proxy can hold 127.0.0.1:46950 briefly; a new usque
+           instance fails to bind if it starts in that window. */
+        Thread.sleep(1200L);
 
         String[] list = ENDPOINTS.get(wanted);
         if (list == null) list = ENDPOINTS.get("auto");
@@ -225,18 +255,22 @@ public final class VpnManager {
             return;
         }
 
-        for (String endpoint : list) {
+        for (int idx = 0; idx < list.length && idx < 6; idx++) {
+            String endpoint = list[idx];
             writeEndpoint(wanted, endpoint);
             spawn();
             try {
                 waitReady(12000);
                 bestActual = actual;
                 bestIp = ip;
-                if (wanted.equalsIgnoreCase(actual)) { matched = true; break; }
+                /* Anycast: stop once the tunnel is up; the egress country is
+                   measured and reported, not guaranteed by the address. */
+                if ("on".equals(state)) { matched = wanted.equalsIgnoreCase(actual); break; }
             } catch (Exception e) {
                 log("endpoint " + endpoint + " failed: " + e.getMessage());
             }
             killProcess();
+            Thread.sleep(900L);
         }
 
         if (!"on".equals(state)) {
@@ -328,7 +362,7 @@ public final class VpnManager {
             File cfg = configFile();
             JSONObject j = new JSONObject(read(cfg));
             j.put("endpoint_v4", ip);
-            if (j.optString("endpoint_h2_v4").isEmpty()) j.put("endpoint_h2_v4", ip);
+            j.put("endpoint_h2_v4", ip);
             write(cfg, j.toString(2).getBytes(StandardCharsets.UTF_8));
         } catch (Exception e) {
             log("endpoint write: " + e.getMessage());
@@ -481,6 +515,11 @@ public final class VpnManager {
         if ("ind".equals(v)) return "in";
         if ("ger".equals(v)) return "de";
         if ("jpn".equals(v)) return "jp";
+        if ("sgp".equals(v) || "singapore".equals(v)) return "sg";
+        if ("hkg".equals(v) || "hongkong".equals(v)) return "hk";
+        if ("kor".equals(v) || "korea".equals(v)) return "kr";
+        if ("fra".equals(v)) return "fr";
+        if ("bra".equals(v)) return "br";
         return ENDPOINTS.containsKey(v) ? v : "auto";
     }
 

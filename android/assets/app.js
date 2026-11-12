@@ -689,7 +689,8 @@
   var vpnGateTimer = 0;
   var VPN_REGIONS = [
     ["auto", "Global"], ["us", "United States"], ["ca", "Canada"], ["uk", "United Kingdom"],
-    ["au", "Australia"], ["in", "India"], ["de", "Germany"], ["jp", "Japan"]
+    ["au", "Australia"], ["in", "India"], ["de", "Germany"], ["jp", "Japan"],
+    ["sg", "Singapore"], ["hk", "Hong Kong"], ["kr", "South Korea"], ["fr", "France"], ["br", "Brazil"]
   ];
   function vpnApi(path) {
     return fetch(path, { cache: "no-store" }).then(function (r) {
@@ -764,6 +765,36 @@
       paintVpnGate(st);
       return st;
     });
+  }
+  /* Dynamic routing: prefer the region matching the source/video. The
+     endpoints are anycast, so the measured egress stays truthful. */
+  var vpnAutoTimer = 0;
+  var VPN_REGION_MAP = {
+    IN: "in", US: "us", CA: "ca", UK: "uk", AU: "au", DE: "de", JP: "jp",
+    SG: "sg", HK: "hk", KR: "kr", FR: "fr", BR: "br"
+  };
+  function autoVpnRegion(region) {
+    var key = VPN_REGION_MAP[String(region || "").toUpperCase()] || "";
+    if (!key) return;
+    /* Anycast: never drop a healthy tunnel just to chase a country. */
+    if (vpnOn(vpnState)) return;
+    clearTimeout(vpnAutoTimer);
+    vpnAutoTimer = setTimeout(function () {
+      vpnApi("/api/vpn/ensure?region=" + encodeURIComponent(key)).catch(function () {});
+    }, 700);
+  }
+  window.SBAutoVpn = autoVpnRegion;
+  var VPN_HOST_REGION = [
+    [/bbc\.co\.uk|itv\.com|channel4\.com/i, "uk"],
+    [/9now\.com\.au|abc\.net\.au/i, "au"],
+    [/pluto\.tv|tubitv\.com|sling\.com|stirr\.com|kanopy\.com|hoopladigital\.com|fawesome\.tv|freemoviescinema\.com/i, "us"],
+    [/amazon\.in|hotstar\.com|zee5\.com|sonyliv\.com|voot\.com/i, "in"]
+  ];
+  function autoVpnForUrl(url) {
+    var h = String(url || "");
+    for (var i = 0; i < VPN_HOST_REGION.length; i++) {
+      if (VPN_HOST_REGION[i][0].test(h)) { autoVpnRegion(VPN_HOST_REGION[i][1]); return; }
+    }
   }
   function startVpnGate() {
     var gate = document.getElementById("vpnGate");
@@ -1284,6 +1315,7 @@
     var ref = pb.waRef || (pb.subject ? detailUrl((pb.audio && pb.audio.detailPath) || pb.subject.detailPath) : "");
     var format = streamFormat(q);
     var src = engineUrl(format, q, ref);
+    autoVpnForUrl(src);
     pb.streamSrc = src;
     pb.format = format;
     pb.pendingSeek = num(at, 0);
@@ -1606,6 +1638,25 @@
       toast("Could not open this player");
     }
   }
+
+  /* Open a source only after the Shield is on the region that matches it. */
+  function openSourceEnsured(url, title, region) {
+    if (!url) return;
+    var key = VPN_REGION_MAP[String(region || "").toUpperCase()] || "";
+    /* Reuse a healthy tunnel; only establish/recover it when it is down. */
+    if (!key || vpnOn(vpnState)) { openWeb(url, title); return; }
+    toast("Starting the Shield\u2026");
+    var opened = false;
+    var go = function () { if (opened) return; opened = true; openWeb(url, title); };
+    var timer = setTimeout(go, 16000);
+    vpnApi("/api/vpn/ensure?region=" + enc(key)).then(function (st) {
+      paintVpnGate(st);
+    }).catch(function () {}).then(function () {
+      clearTimeout(timer);
+      go();
+    });
+  }
+  window.SBOpenSource = openSourceEnsured;
 
   /* Ordered provider shells: the native overlay rotates past dead ones. */
   function openLadder(urls, title) {

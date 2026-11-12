@@ -287,7 +287,17 @@
     if (tagId) pairs.push(['includedTags[]', tagId]);
     ratingPairs().forEach(function (r) { pairs.push(['contentRating[]', r]); });
     try {
-      var j = await api('https://api.mangadex.org/manga?' + qs(pairs));
+      var j = null;
+      /* MangaDex rate-limits bursts; one quiet retry keeps the shelf full. */
+      for (var attempt = 0; attempt < 2; attempt++) {
+        try {
+          j = await api('https://api.mangadex.org/manga?' + qs(pairs));
+          break;
+        } catch (err) {
+          if (attempt === 1) throw err;
+          await new Promise(function (r) { setTimeout(r, 1400); });
+        }
+      }
       var list = (j.data || []).map(mdCard).filter(ratingAllowed);
       state.items = append ? state.items.concat(list) : list;
       state.offset += (j.data || []).length;

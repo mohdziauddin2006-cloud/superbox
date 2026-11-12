@@ -29,26 +29,35 @@ const PROXY_PORT = 46950;
 const PROXY_URL = 'http://' + PROXY_HOST + ':' + PROXY_PORT;
 const TRACE_URL = 'https://www.cloudflare.com/cdn-cgi/trace';
 
-/* Public Cloudflare WARP MASQUE endpoints. Only the `.2` addresses speak
-   MASQUE over TLS/443; the older `.1` addresses are WireGuard-only and make
-   usque fail its TLS handshake. Cloudflare does not sell or document
-   per-country endpoints, so region profiles are best-effort: the router
-   tries each endpoint in the profile, reads the real egress country from the
-   trace response and keeps the closest match. The status object always
-   reports the truth (requested region + actual egress). */
+/* Public Cloudflare WARP MASQUE endpoints. Only the `.2`/`.3` addresses in
+   these anycast ranges speak MASQUE over TLS/443; the older `.1` addresses
+   are WireGuard-only and make usque fail its TLS handshake. Cloudflare does
+   not sell or document per-country endpoints, so region profiles are
+   best-effort: the router tries each endpoint in the profile, reads the real
+   egress country from the trace response and keeps the closest match. The
+   status object always reports the truth (requested region + actual egress).
+   Every region ships 12 endpoint profiles for redundancy; the order is
+   rotated so regions do not all hammer the same first address. */
+const WARP_ENDPOINTS = [
+  '162.159.198.2', '162.159.199.2',
+  '162.159.192.2', '162.159.193.2', '162.159.195.2',
+  '188.114.96.2', '188.114.97.2', '188.114.98.2', '188.114.99.2',
+  '162.159.198.3', '162.159.199.3', '188.114.96.3'
+];
+/* Every region ships the full 12-endpoint pool. The first two addresses are
+   the documented MASQUE anchors and stay first everywhere so a switch is fast;
+   the rest are failover candidates. Cloudflare is anycast, so the pool cannot
+   pin a country — `actual` always reports the measured egress. */
+function pool() { return WARP_ENDPOINTS.slice(); }
 const REGION_ENDPOINTS = {
-  auto: ['162.159.198.2', '162.159.199.2'],
-  us: ['162.159.198.2', '162.159.199.2'],
-  ca: ['162.159.199.2', '162.159.198.2'],
-  uk: ['162.159.198.2', '162.159.199.2'],
-  au: ['162.159.199.2', '162.159.198.2'],
-  in: ['162.159.198.2', '162.159.199.2'],
-  de: ['162.159.199.2', '162.159.198.2'],
-  jp: ['162.159.198.2', '162.159.199.2']
+  auto: pool(), us: pool(), ca: pool(), uk: pool(),
+  au: pool(), in: pool(), de: pool(), jp: pool(),
+  sg: pool(), hk: pool(), kr: pool(), fr: pool(), br: pool()
 };
 const REGION_LABEL = {
   auto: 'Global', us: 'United States', ca: 'Canada', uk: 'United Kingdom',
-  au: 'Australia', in: 'India', de: 'Germany', jp: 'Japan'
+  au: 'Australia', in: 'India', de: 'Germany', jp: 'Japan',
+  sg: 'Singapore', hk: 'Hong Kong', kr: 'South Korea', fr: 'France', br: 'Brazil'
 };
 
 function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
@@ -61,6 +70,11 @@ function normRegion(r) {
   if (v === 'in' || v === 'ind') return 'in';
   if (v === 'de' || v === 'ger') return 'de';
   if (v === 'jp' || v === 'jpn') return 'jp';
+  if (v === 'sg' || v === 'sgp' || v === 'singapore') return 'sg';
+  if (v === 'hk' || v === 'hkg' || v === 'hongkong') return 'hk';
+  if (v === 'kr' || v === 'kor' || v === 'korea') return 'kr';
+  if (v === 'fr' || v === 'fra') return 'fr';
+  if (v === 'br' || v === 'bra') return 'br';
   return REGION_ENDPOINTS[v] ? v : 'auto';
 }
 
@@ -143,7 +157,7 @@ class VpnManager {
     if (!cfg || !cfg.private_key) return false;
     var list = REGION_ENDPOINTS[region] || REGION_ENDPOINTS.auto;
     cfg.endpoint_v4 = list[0];
-    cfg.endpoint_h2_v4 = cfg.endpoint_h2_v4 || '162.159.198.2';
+    cfg.endpoint_h2_v4 = list[0];
     try { fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2)); return true; }
     catch (e) { this.log('config write: ' + e.message); return false; }
   }
@@ -153,6 +167,7 @@ class VpnManager {
     try {
       var cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
       cfg.endpoint_v4 = ip;
+      cfg.endpoint_h2_v4 = ip;
       fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2));
       return true;
     } catch (e) { return false; }
@@ -226,7 +241,7 @@ class VpnManager {
           spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
         }
       } catch (e) {}
-    }, 1200).unref && setTimeout(function () {}, 0);
+    }, 1200);
   }
 
   async probe() {
@@ -307,9 +322,14 @@ class VpnManager {
     var previous = this.region;
     var list = REGION_ENDPOINTS[wanted] || REGION_ENDPOINTS.auto;
     var best = null;
-    for (var i = 0; i < list.length; i++) {
+    /* Anycast means a different address rarely changes the egress country.
+       Try a small set for failover and stop as soon as the tunnel is up. */
+    var attempts = Math.min(list.length, 6);
+    for (var i = 0; i < attempts; i++) {
       this.log('region ' + wanted + ': trying endpoint ' + list[i]);
       this.stop();
+      /* Let the previous listener release 46950 before spawning again. */
+      await sleep(2600);
       this.state = 'connecting';
       this.error = '';
       this.region = wanted;
@@ -319,17 +339,17 @@ class VpnManager {
         if (!this.writeEndpoint(wanted)) throw new Error('Shield config is missing');
         this.setEndpoint(list[i]);
         this.spawnProxy();
-        await this.waitReady(14000);
+        await this.waitReady(12000);
         best = { actual: this.actual, ip: this.ip };
-        /* Cloudflare's endpoint is anycast: keep trying while the egress
-           country does not match the requested profile. */
-        if (!wanted || wanted === 'auto' || this.actual === wanted.toUpperCase()) break;
+        if (this.state === 'on') break;
       } catch (e) {
         this.log('region ' + wanted + ' endpoint failed: ' + e.message);
       }
     }
     if (this.state !== 'on') {
       this.log('region fallback to ' + previous);
+      this.stop();
+      await sleep(2600);
       this.region = previous;
       try {
         this.writeEndpoint(previous);

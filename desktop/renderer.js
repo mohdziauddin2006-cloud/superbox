@@ -814,7 +814,7 @@
       sourceFrame = null;
     }
   }
-  function openSource(url, title) {
+  function openSource(url, title, region) {
     if (!/^https?:\/\//i.test(String(url || ''))) return;
     closeSourceFrame();
     heroStop();
@@ -832,8 +832,8 @@
     frame.setAttribute('allow', 'autoplay *; fullscreen *; encrypted-media *; clipboard-write *');
     frame.setAttribute('allowfullscreen', '');
     frame.setAttribute('referrerpolicy', 'no-referrer');
-    frame.src = url;
-    reload.onclick = function () { try { frame.src = url; } catch (e) {} };
+    var go = function () { try { frame.src = url; } catch (e) {} };
+    reload.onclick = go;
     bar.appendChild(back);
     bar.appendChild(name);
     bar.appendChild(note);
@@ -842,6 +842,22 @@
     box.appendChild(frame);
     document.body.appendChild(box);
     sourceFrame = box;
+    /* A live Shield connection is reused as-is; restarting it here would
+       interrupt the page. Only a down tunnel is re-established on open. */
+    var wanted = vpnRegionFor(region);
+    note.textContent = 'Shield routed';
+    if (wanted && !(vpnLastStatus && vpnLastStatus.ok)) {
+      note.textContent = 'Switching Shield\u2026';
+      vpnApi('/vpn/ensure?region=' + encodeURIComponent(wanted)).then(function (st) {
+        note.textContent = 'Shield \u00b7 ' + ((st && (st.egress || st.regionLabel)) || 'on');
+      }).catch(function () {
+        note.textContent = 'Shield routed';
+      }).then(function () {
+        if (sourceFrame === box) go();
+      });
+    } else {
+      go();
+    }
   }
   window.SBOpenWeb = openSource;
 
@@ -853,10 +869,48 @@
       });
     });
   }
+  /* Dynamic routing: the VPN prefers the region that matches the source being
+     opened or played. Cloudflare's endpoints are anycast, so the actual egress
+     is measured and reported truthfully by the Shield status. */
+  var vpnAutoTimer = 0;
+  var vpnLastStatus = null;
+  var VPN_REGION_MAP = {
+    IN: 'in', US: 'us', CA: 'ca', UK: 'uk', AU: 'au', DE: 'de', JP: 'jp',
+    SG: 'sg', HK: 'hk', KR: 'kr', FR: 'fr', BR: 'br'
+  };
+  function vpnRegionFor(region) {
+    return VPN_REGION_MAP[String((region || '')).toUpperCase()] || '';
+  }
+  function autoVpnRegion(region) {
+    var key = vpnRegionFor(region);
+    if (!key) return;
+    /* The endpoint pool is anycast: restarting a healthy tunnel to chase a
+       country costs a working connection and rarely changes the egress.
+       Record the preference (the VPN sheet and next reconnect use it) but do
+       not tear down a live tunnel just because a source loaded. */
+    if (vpnLastStatus && vpnLastStatus.ok) return;
+    clearTimeout(vpnAutoTimer);
+    vpnAutoTimer = setTimeout(function () {
+      vpnApi('/vpn/ensure?region=' + encodeURIComponent(key)).catch(function () {});
+    }, 700);
+  }
+  var VPN_HOST_REGION = [
+    [/bbc\.co\.uk|itv\.com|channel4\.com/i, 'uk'],
+    [/9now\.com\.au|abc\.net\.au/i, 'au'],
+    [/pluto\.tv|tubitv\.com|sling\.com|stirr\.com|kanopy\.com|hoopladigital\.com|fawesome\.tv|freemoviescinema\.com/i, 'us'],
+    [/amazon\.in|hotstar\.com|zee5\.com|sonyliv\.com|voot\.com/i, 'in']
+  ];
+  function autoVpnForUrl(url) {
+    var h = String(url || '');
+    for (var i = 0; i < VPN_HOST_REGION.length; i++) {
+      if (VPN_HOST_REGION[i][0].test(h)) { autoVpnRegion(VPN_HOST_REGION[i][1]); return; }
+    }
+  }
   var vpnTimer = 0, vpnFast = true;
   function paintVpnStatus(st) {
     var gate = $('#vpnGate');
     if (!gate) return;
+    vpnLastStatus = st || null;
     var on = !!(st && st.ok);
     gate.classList.toggle('hidden', on);
     gate.classList.toggle('on', on);
@@ -2742,6 +2796,7 @@
 
   function playStream(url, title, opts) {
     opts = opts || {};
+    autoVpnForUrl(url);
     var ep = playEpoch;
     stopEmbed();
     var v = $('#pVideo');

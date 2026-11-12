@@ -62,6 +62,7 @@
     { id: 'miruro', n: 'Miruro', u: 'https://www.miruro.cx/', k: 'anime', r: 'Global', note: 'Fast anime streaming' },
     { id: 'aniwatch', n: 'AniWatch', u: 'https://aniwatchtv.ws/home', k: 'anime', r: 'Global', note: 'Anime with dubs' },
     { id: 'yomi', n: 'Yomi', u: 'https://yomi.to/', k: 'anime', r: 'Global', note: 'Anime and manga' },
+    { id: 'allmanga', n: 'AllManga', u: 'https://allmanga.to/', k: 'anime', r: 'Global', note: 'Anime streams and manga' },
     { id: 'aniflix', n: 'AniFlix', u: 'https://aniflix.uno/', k: 'anime', r: 'Global', note: 'Anime catalogue' },
     { id: 'animixplay', n: 'AniMixPlay', u: 'https://animixplay.com.ro/', k: 'anime', r: 'Global', note: 'Anime aggregator' },
     { id: 'hianimes', n: 'HiAnime', u: 'https://hianimes.se/home', k: 'anime', r: 'Global', note: 'Anime sub and dub' }
@@ -83,7 +84,8 @@
   }
   function open(item, opts) {
     if (!item) return;
-    if (opts && opts.open) { opts.open(item.u, item.n); return; }
+    if (opts && opts.open) { opts.open(item.u, item.n, item.r); return; }
+    if (window.SBAutoVpn) { try { window.SBAutoVpn(item.r); } catch (e) {} }
     if (window.SBAndroid && window.SBAndroid.openWeb) {
       window.SBAndroid.openWeb(item.u, item.n);
       return;
