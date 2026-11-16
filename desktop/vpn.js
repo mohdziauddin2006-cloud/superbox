@@ -10,9 +10,13 @@
      - hidden child process, never a console window
      - HTTP proxy on 127.0.0.1:46950, consumed by srv2.js (undici) and by
        Electron's session proxy for every renderer request
+     - endpoint failover on start: several MASQUE anchors are tried before
+       the Shield is allowed to report a failure
+     - a watchdog that notices a dead tunnel and repairs it in the background
      - region profiles: the routing engine rewrites the Cloudflare endpoint
        and reconnects when a source asks for another region, then reports the
        real egress country from the WARP trace endpoint
+     - honest progress: phase + percentage for the gate UI
      - kill-switch semantics: while the proxy is down every upstream request
        fails closed instead of leaking around the tunnel
    --------------------------------------------------------------------------- */
@@ -20,6 +24,7 @@
 
 const { spawn, execFile } = require('child_process');
 const fs = require('fs');
+const net = require('net');
 const path = require('path');
 const { app } = require('electron');
 const { ProxyAgent, fetch: proxyFetch, setGlobalDispatcher } = require('undici');
@@ -60,6 +65,16 @@ const REGION_LABEL = {
   sg: 'Singapore', hk: 'Hong Kong', kr: 'South Korea', fr: 'France', br: 'Brazil'
 };
 
+const START_ATTEMPTS = 6;        /* endpoint profiles tried on a cold start */
+const ATTEMPT_READY_MS = 13000;  /* per-endpoint tunnel budget */
+/* MASQUE over IPv6 is a different anycast path and, on networks where the
+   IPv4 anchors are throttled to a few KB/s, it is often an order of magnitude
+   faster. It is tried first with a shorter budget, then the IPv4 ladder. */
+const WARP_ENDPOINT_V6 = '2606:4700:103::2';
+const V6_READY_MS = 10000;
+const WATCHDOG_MS = 20000;       /* health probe cadence while connected */
+const WATCHDOG_FAILS = 3;        /* consecutive misses before self-repair */
+
 function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 function normRegion(r) {
   var v = String(r || 'auto').toLowerCase();
@@ -83,6 +98,7 @@ class VpnManager {
     this.child = null;
     this.state = 'idle';          /* idle | provisioning | connecting | on | error */
     this.region = 'auto';
+    this.preferred = 'auto';      /* region a source asked for; applied on reconnect */
     this.actual = '';
     this.ip = '';
     this.warp = false;
@@ -90,8 +106,19 @@ class VpnManager {
     this.startedAt = 0;
     this.lastProbe = 0;
     this.probing = null;
+    this.progress = 0;
+    this.phase = 'idle';
+    this.attempt = 0;
+    this.endpoint = '';
+    this.transport = 'ipv4';
+    this.dnsMode = 'cf';
     this._starting = null;
+    this._recovering = null;
     this._dispatcherInstalled = false;
+    this._agent = null;
+    this._watchdog = null;
+    this._watchFails = 0;
+    this._watchBusy = false;
   }
 
   binary() {
@@ -115,6 +142,22 @@ class VpnManager {
 
   configPath() { return path.join(this.dataDir(), 'config.json'); }
 
+  agent() {
+    if (!this._agent) {
+      try {
+        this._agent = new ProxyAgent({
+          uri: PROXY_URL,
+          keepAliveTimeout: 10000,
+          keepAliveMaxTimeout: 30000,
+          connectTimeout: 10000
+        });
+      } catch (e) {
+        this._agent = new ProxyAgent(PROXY_URL);
+      }
+    }
+    return this._agent;
+  }
+
   log(line) {
     try {
       var file = path.join(this.dataDir(), 'shield.log');
@@ -131,15 +174,20 @@ class VpnManager {
     try { if (global.__superboxLog) global.__superboxLog('VPN', line); } catch (e) {}
   }
 
+  setPhase(state, phase, progress) {
+    if (state) this.state = state;
+    if (phase) this.phase = phase;
+    if (typeof progress === 'number') this.progress = Math.max(0, Math.min(100, progress));
+  }
+
   /* Install one process-wide dispatch rule. Local control-plane requests stay
      on the native fetch (loopback), every other fetch rides the WARP proxy.
      Electron's renderer session is pointed at the same proxy in main.js. */
   installDispatcher() {
     if (this._dispatcherInstalled) return;
     this._dispatcherInstalled = true;
-    try { setGlobalDispatcher(new ProxyAgent(PROXY_URL)); } catch (e) { this.log('dispatcher: ' + e.message); }
+    try { setGlobalDispatcher(this.agent()); } catch (e) { this.log('dispatcher: ' + e.message); }
     var nativeFetch = globalThis.fetch;
-    var manager = this;
     globalThis.fetch = function (input, init) {
       var u = typeof input === 'string' ? input : (input && input.url) || '';
       if (/^https?:\/\/(?:127\.0\.0\.1|localhost)(?::|\/|$)/i.test(u)) {
@@ -150,27 +198,21 @@ class VpnManager {
     this.log('process dispatcher -> ' + PROXY_URL);
   }
 
-  writeEndpoint(region) {
+  writeEndpoint(region, ip) {
     var cfgPath = this.configPath();
     var cfg = null;
     try { cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8')); } catch (e) {}
     if (!cfg || !cfg.private_key) return false;
     var list = REGION_ENDPOINTS[region] || REGION_ENDPOINTS.auto;
-    cfg.endpoint_v4 = list[0];
-    cfg.endpoint_h2_v4 = list[0];
+    var pick = ip || list[0];
+    cfg.endpoint_v4 = pick;
+    cfg.endpoint_h2_v4 = pick;
     try { fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2)); return true; }
     catch (e) { this.log('config write: ' + e.message); return false; }
   }
 
   setEndpoint(ip) {
-    var cfgPath = this.configPath();
-    try {
-      var cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
-      cfg.endpoint_v4 = ip;
-      cfg.endpoint_h2_v4 = ip;
-      fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2));
-      return true;
-    } catch (e) { return false; }
+    return this.writeEndpoint(this.region, ip);
   }
 
   async ensureConfig() {
@@ -184,7 +226,7 @@ class VpnManager {
     try { fs.unlinkSync(cfgPath); } catch (e) {}
     var bin = this.binary();
     if (!bin) throw new Error('Shield core missing (bin/usque.exe)');
-    this.state = 'provisioning';
+    this.setPhase('provisioning', 'Registering an anonymous identity', 6);
     this.log('registering anonymous WARP identity');
     await new Promise(function (resolve, reject) {
       execFile(bin, ['-c', cfgPath, 'register', '--accept-tos', '-n', 'SuperBox'],
@@ -198,15 +240,31 @@ class VpnManager {
     return true;
   }
 
-  spawnProxy() {
+  spawnProxy(dnsMode, transport) {
     var bin = this.binary();
     if (!bin) throw new Error('Shield core missing');
     var cfg = this.configPath();
+    var useV6 = transport === 'v6';
+    this.transport = useV6 ? 'ipv6' : 'ipv4';
     /* L4 CONNECT proxy: usque's plain HTTP proxy serialises work behind a
        small number of tunnels and starves when Chromium keeps several
        connections open. The L4 proxy opens one direct HTTP/3 CONNECT stream
        per request, which is exactly what a browser proxy needs. */
-    var child = spawn(bin, ['-c', cfg, 'l4-http-proxy', '-b', PROXY_HOST, '-p', String(PROXY_PORT)],
+    /* DNS decides reachability through WARP. With local DNS the name is
+       resolved by 1.1.1.1 *inside* the tunnel, so every CONNECT goes to an
+       address WARP itself can route. The ISP resolver can hand back anycast
+       addresses that WARP answers with 504/CRYPTO_ERROR on this network, so
+       `-d 1.1.1.1` is the default; `--system-dns` stays as the fallback for
+       networks that block Cloudflare DNS over the tunnel. */
+    var mode = dnsMode === 'system' ? 'system' : 'cf';
+    this.dnsMode = mode;
+    var args = ['-c', cfg, 'l4-http-proxy'];
+    if (useV6) args.push('-6');
+    args.push('-b', PROXY_HOST, '-p', String(PROXY_PORT));
+    if (mode === 'system') args.push('--system-dns');
+    else args.push('-d', '1.1.1.1', '-d', '1.0.0.1', '-t', '5s');
+    this.log('usque transport: ' + (useV6 ? 'IPv6' : 'IPv4') + '; DNS mode: ' + (mode === 'system' ? 'system resolver' : '1.1.1.1 over tunnel'));
+    var child = spawn(bin, args,
       { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     var self = this;
     child.stdout.on('data', function (b) { self.log('usque: ' + String(b).trim().slice(0, 400)); });
@@ -218,6 +276,8 @@ class VpnManager {
         if (self.state === 'on' || self.state === 'connecting') {
           self.state = 'error';
           self.error = 'Shield process exited';
+          self.progress = 100;
+          self.phase = 'Process exited';
         }
       }
     });
@@ -230,18 +290,41 @@ class VpnManager {
     return child;
   }
 
-  stop() {
+  /* Resolve as soon as nothing is listening on the proxy port. usque needs a
+     moment to release the listener after a kill; spawning into that window
+     fails with "Only one usage of each socket address". */
+  async waitPortFree(timeoutMs) {
+    var until = Date.now() + (timeoutMs || 7000);
+    while (Date.now() < until) {
+      var busy = await new Promise(function (resolve) {
+        var s = net.connect({ host: PROXY_HOST, port: PROXY_PORT });
+        var done = false;
+        function finish(v) { if (!done) { done = true; try { s.destroy(); } catch (e) {} resolve(v); } }
+        s.setTimeout(500);
+        s.once('connect', function () { finish(true); });
+        s.once('timeout', function () { finish(false); });
+        s.once('error', function () { finish(false); });
+      });
+      if (!busy) return true;
+      await sleep(220);
+    }
+    return false;
+  }
+
+  killChild() {
     var child = this.child;
     this.child = null;
     if (!child) return;
     try { child.kill(); } catch (e) {}
-    setTimeout(function () {
-      try {
-        if (child.exitCode === null) {
-          spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
-        }
-      } catch (e) {}
-    }, 1200);
+    if (child.exitCode === null && child.pid) {
+      setTimeout(function () {
+        try { spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' }); } catch (e) {}
+      }, 350);
+    }
+  }
+
+  stop() {
+    this.killChild();
   }
 
   async probe() {
@@ -249,9 +332,9 @@ class VpnManager {
     var self = this;
     this.probing = (async function () {
       var ctl = new AbortController();
-      var tm = setTimeout(function () { try { ctl.abort(); } catch (e) {} }, 14000);
+      var tm = setTimeout(function () { try { ctl.abort(); } catch (e) {} }, 12000);
       try {
-        var r = await proxyFetch(TRACE_URL, { dispatcher: new ProxyAgent(PROXY_URL), signal: ctl.signal });
+        var r = await proxyFetch(TRACE_URL, { dispatcher: self.agent(), signal: ctl.signal });
         if (!r.ok) throw new Error('trace HTTP ' + r.status);
         var text = await r.text();
         var map = {};
@@ -272,109 +355,236 @@ class VpnManager {
     return this.probing;
   }
 
-  async waitReady(timeoutMs) {
+  async waitReady(timeoutMs, label) {
     var until = Date.now() + (timeoutMs || 30000);
+    var started = Date.now();
     while (Date.now() < until) {
       if (!this.child) throw new Error(this.error || 'Shield process is not running');
       try {
         if (await this.probe()) {
-          this.state = 'on';
+          this.setPhase('on', 'Tunnel live', 100);
           this.startedAt = this.startedAt || Date.now();
           this.error = '';
+          this._watchFails = 0;
           this.log('tunnel ready egress=' + (this.actual || '?') + ' warp=' + this.warp);
+          this.startWatchdog();
           return true;
         }
-      } catch (e) { this.log('probe waiting: ' + String(e.message || e).slice(0, 160)); }
-      await sleep(1400);
+      } catch (e) {
+        this.log('probe waiting: ' + String(e.message || e).slice(0, 160));
+      }
+      var pct = 58 + Math.min(34, Math.round((Date.now() - started) / Math.max(1, timeoutMs) * 34));
+      this.setPhase('connecting', label || 'Negotiating the tunnel', pct);
+      await sleep(1100);
     }
     throw new Error('Shield tunnel did not come up in time');
+  }
+
+  startWatchdog() {
+    if (this._watchdog) return;
+    var self = this;
+    this._watchdog = setInterval(function () { self.watch(); }, WATCHDOG_MS);
+    try { this._watchdog.unref(); } catch (e) {}
+  }
+
+  stopWatchdog() {
+    if (this._watchdog) { try { clearInterval(this._watchdog); } catch (e) {} this._watchdog = null; }
+  }
+
+  /* Health check after the gate is open. A tunnel can die quietly (endpoint
+     rotation, sleep/resume, network change). When three probes in a row fail
+     the manager rebuilds it without waiting for the user to notice. */
+  async watch() {
+    if (this._watchBusy || this._starting) return;
+    if (this.state !== 'on') return;
+    if (!this.child) { this.recover('Shield process disappeared'); return; }
+    this._watchBusy = true;
+    try {
+      var ok = false;
+      try { ok = await this.probe(); } catch (e) { ok = false; }
+      if (ok) { this._watchFails = 0; return; }
+      this._watchFails++;
+      this.log('watchdog miss ' + this._watchFails + '/' + WATCHDOG_FAILS);
+      if (this._watchFails >= WATCHDOG_FAILS) {
+        this._watchFails = 0;
+        this.recover('Tunnel stopped answering');
+      }
+    } finally {
+      this._watchBusy = false;
+    }
+  }
+
+  async recover(reason) {
+    if (this._recovering || this._starting) return this._recovering;
+    this.log('self-repair: ' + reason);
+    this.error = reason || 'Reconnecting the Shield';
+    this.setPhase('connecting', 'Repairing the tunnel', 8);
+    this.stopWatchdog();
+    var self = this;
+    this._recovering = this._bringUp(this.region, true).catch(function (e) {
+      return null;
+    }).finally(function () { self._recovering = null; });
+    return this._recovering;
+  }
+
+  async _bringUp(region, fresh) {
+    var wanted = normRegion(region || this.region);
+    this.installDispatcher();
+    this.stopWatchdog();
+    this.setPhase('connecting', 'Preparing the Shield', 2);
+    this.error = '';
+    this.warp = false;
+    this.actual = '';
+    this.ip = '';
+    this.region = wanted;
+    try {
+      await this.ensureConfig();
+    } catch (e) {
+      this.state = 'error';
+      this.progress = 100;
+      this.phase = 'Provisioning failed';
+      this.error = (e && e.message) || 'Shield provisioning failed';
+      throw e;
+    }
+
+    if (fresh || this.child) {
+      this.killChild();
+      this.setPhase('connecting', 'Releasing the local proxy', 12);
+      await this.waitPortFree(8000);
+    }
+
+    var list = (REGION_ENDPOINTS[wanted] || REGION_ENDPOINTS.auto).slice();
+    var attempts = Math.min(START_ATTEMPTS, list.length);
+    var lastErr = null;
+
+    /* IPv6 first: its anycast path bypasses IPv4-anchor congestion. A short
+       budget keeps IPv4-only networks from waiting long for the fallback. */
+    this.attempt = 1;
+    this.endpoint = WARP_ENDPOINT_V6;
+    this.setPhase('connecting', 'IPv6 anchor \u00b7 ' + WARP_ENDPOINT_V6, 16);
+    this.log('start ' + wanted + ': IPv6 anchor ' + WARP_ENDPOINT_V6);
+    this.spawnProxy('cf', 'v6');
+    try {
+      await this.waitReady(V6_READY_MS, 'Negotiating the IPv6 anchor');
+    } catch (e) {
+      lastErr = e;
+      this.log('IPv6 anchor failed: ' + e.message);
+      this.killChild();
+      await this.waitPortFree(5000);
+    }
+
+    if (this.state !== 'on') for (var i = 0; i < attempts; i++) {
+      this.attempt = i + 1;
+      this.endpoint = list[i];
+      /* First half of the ladder resolves inside the tunnel (the reliable
+         path); the second half falls back to the system resolver for
+         networks that answer Cloudflare DNS with nothing. */
+      var dns = i < Math.ceil(attempts / 2) ? 'cf' : 'system';
+      this.setPhase('connecting', 'Endpoint ' + (i + 1) + ' of ' + attempts + ' \u00b7 ' + list[i], 18 + i * 11);
+      this.log('start ' + wanted + ': endpoint ' + list[i] + ' (' + (i + 1) + '/' + attempts + ', DNS ' + dns + ')');
+      if (!this.writeEndpoint(wanted, list[i])) {
+        lastErr = new Error('Shield config is missing');
+        break;
+      }
+      this.warp = false;
+      this.actual = '';
+      this.spawnProxy(dns);
+      try {
+        await this.waitReady(ATTEMPT_READY_MS, 'Negotiating ' + list[i]);
+        lastErr = null;
+        break;
+      } catch (e) {
+        lastErr = e;
+        this.log('endpoint ' + list[i] + ' failed: ' + e.message);
+        this.killChild();
+        await this.waitPortFree(5000);
+      }
+    }
+
+    /* Regional profiles could all fail (a blocked network, a bad anchor).
+       One last attempt on the global anchor keeps the app usable. */
+    if (this.state !== 'on' && wanted !== 'auto') {
+      this.log('region ' + wanted + ' exhausted; trying the global profile');
+      this.setPhase('connecting', 'Trying the global profile', 88);
+      this.region = wanted; /* keep the requested label for the status report */
+      this.writeEndpoint(wanted, WARP_ENDPOINTS[0]);
+      this.killChild();
+      await this.waitPortFree(5000);
+      this.spawnProxy(this.dnsMode === 'system' ? 'cf' : 'system', 'ipv4');
+      try {
+        await this.waitReady(ATTEMPT_READY_MS, 'Negotiating the global anchor');
+        lastErr = null;
+      } catch (e) { lastErr = e; }
+    }
+
+    if (this.state !== 'on') {
+      this.killChild();
+      this.state = 'error';
+      this.progress = 100;
+      this.phase = 'No endpoint answered';
+      this.error = (lastErr && lastErr.message) || 'No Shield endpoint answered';
+      throw lastErr || new Error(this.error);
+    }
+
+    if (wanted !== 'auto' && this.actual && this.actual !== wanted.toUpperCase()) {
+      this.error = 'Region endpoint is anycast; egress is ' + this.actual;
+    }
+    return this.status();
   }
 
   async start(region) {
     if (this._starting) return this._starting;
     var self = this;
     this._starting = (async function () {
-      self.state = 'connecting';
-      self.error = '';
-      self.region = normRegion(region || self.region);
-      self.installDispatcher();
-      await self.ensureConfig();
-      if (!self.child) {
-        self.writeEndpoint(self.region);
-        self.spawnProxy();
+      try {
+        return await self._bringUp(region || self.region, true);
+      } finally {
+        self._starting = null;
       }
-      await self.waitReady(42000);
-      return self.status();
     })();
-    try { return await this._starting; }
-    finally { this._starting = null; }
+    return this._starting;
   }
 
   stopSync() {
+    this.stopWatchdog();
     this.state = 'idle';
     this.warp = false;
+    this.progress = 0;
+    this.phase = 'idle';
     this.stop();
   }
 
   async switchRegion(region) {
     var wanted = normRegion(region);
+    this.preferred = wanted;
     if (this.state === 'on' && wanted === this.region && this.warp) return this.status();
-    var previous = this.region;
-    var list = REGION_ENDPOINTS[wanted] || REGION_ENDPOINTS.auto;
-    var best = null;
-    /* Anycast means a different address rarely changes the egress country.
-       Try a small set for failover and stop as soon as the tunnel is up. */
-    var attempts = Math.min(list.length, 6);
-    for (var i = 0; i < attempts; i++) {
-      this.log('region ' + wanted + ': trying endpoint ' + list[i]);
-      this.stop();
-      /* Let the previous listener release 46950 before spawning again. */
-      await sleep(2600);
-      this.state = 'connecting';
-      this.error = '';
-      this.region = wanted;
-      this.warp = false;
-      this.actual = '';
-      try {
-        if (!this.writeEndpoint(wanted)) throw new Error('Shield config is missing');
-        this.setEndpoint(list[i]);
-        this.spawnProxy();
-        await this.waitReady(12000);
-        best = { actual: this.actual, ip: this.ip };
-        if (this.state === 'on') break;
-      } catch (e) {
-        this.log('region ' + wanted + ' endpoint failed: ' + e.message);
-      }
+    if (this._starting) {
+      try { await this._starting; } catch (e) {}
+      if (this.state === 'on' && wanted === this.region && this.warp) return this.status();
     }
-    if (this.state !== 'on') {
-      this.log('region fallback to ' + previous);
-      this.stop();
-      await sleep(2600);
-      this.region = previous;
-      try {
-        this.writeEndpoint(previous);
-        this.spawnProxy();
-        await this.waitReady(14000);
-      } catch (e) {
-        this.state = 'error';
-        this.error = 'No Shield endpoint answered';
-      }
-    }
-    if (best && this.actual && wanted !== 'auto' && this.actual !== wanted.toUpperCase()) {
-      this.error = 'Region endpoint is anycast; egress is ' + this.actual;
-    }
-    return this.status();
+    var self = this;
+    this._starting = (async function () {
+      try { return await self._bringUp(wanted, true); }
+      finally { self._starting = null; }
+    })();
+    return this._starting;
   }
 
+  /* Non-disruptive: a source asking for a region records a preference. A
+     healthy tunnel is never torn down mid-session just to chase a country. */
   async ensure(region) {
     var wanted = normRegion(region);
-    if (this.state === 'on' && this.warp && (wanted === 'auto' || wanted === this.region)) return this.status();
-    if (this.state === 'connecting' || this.state === 'provisioning') {
-      try { await this.waitReady(30000); } catch (e) {}
-      if (this.state === 'on' && (wanted === 'auto' || wanted === this.region)) return this.status();
+    this.preferred = wanted;
+    if (this.state === 'on' && this.warp) return this.status();
+    if (this._starting) {
+      try { await this._starting; } catch (e) {}
+      if (this.state === 'on' && this.warp) return this.status();
     }
-    if (wanted !== this.region || !this.child) return this.switchRegion(wanted);
-    return this.status();
+    if (this.state === 'connecting' || this.state === 'provisioning') {
+      try { await this.waitReady(20000); } catch (e) {}
+      if (this.state === 'on' && this.warp) return this.status();
+    }
+    return this.switchRegion(wanted);
   }
 
   status() {
@@ -382,8 +592,15 @@ class VpnManager {
       ok: this.state === 'on' && this.warp,
       engine: 'usque/WARP MASQUE',
       state: this.state,
+      phase: this.phase,
+      progress: this.progress,
       region: this.region,
       regionLabel: REGION_LABEL[this.region] || this.region,
+      preferred: this.preferred,
+      endpoint: this.endpoint,
+      transport: this.transport,
+      attempt: this.attempt,
+      dns: this.dnsMode,
       egress: this.actual,
       ip: this.ip,
       warp: this.warp,

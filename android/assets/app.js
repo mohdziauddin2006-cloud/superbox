@@ -704,18 +704,28 @@
     if (!gate) return;
     vpnState = st || vpnState;
     var on = vpnOn(st);
+    var failed = !!st && st.state === "error";
+    var phase = (st && st.phase) || "";
     gate.classList.toggle("hidden", on);
     gate.classList.toggle("on", on);
-    gate.classList.toggle("err", !!st && st.state === "error");
+    gate.classList.toggle("err", failed);
     var title = document.getElementById("vpnTitle");
     var msg = document.getElementById("vpnMsg");
     if (title) title.textContent = on ? "Shield connected" :
-      (st && st.state === "error" ? "Shield needs a retry" : "Connecting the Shield");
+      (failed ? "Shield needs a retry" : (phase || "Connecting the Shield"));
     if (msg) msg.textContent = on
       ? "Anonymous WARP tunnel is live. Every request in SuperBox rides it."
-      : (st && st.state === "error"
+      : (failed
         ? "The tunnel did not come up. Retry, or pick another regional profile."
-        : "Establishing an anonymous WARP tunnel. Every catalogue, image and stream stays behind it.");
+        : (phase && /endpoint/i.test(phase)
+          ? "Trying the fastest MASQUE anchor for " + ((st && st.regionLabel) || "your region") + ". This can take a few seconds."
+          : "Establishing an anonymous WARP tunnel. Every catalogue, image and stream stays behind it."));
+    var bar = document.getElementById("vpnBar");
+    if (bar) {
+      var pct = st && typeof st.progress === "number" ? st.progress : (on ? 100 : 4);
+      if (failed) pct = 100;
+      bar.style.width = Math.max(3, Math.min(100, pct)) + "%";
+    }
     var engine = document.getElementById("vpnEngine");
     if (engine) engine.textContent = (st && st.engine) || "usque · MASQUE";
     var rl = document.getElementById("vpnRegionLabel");
@@ -723,13 +733,13 @@
     var eg = document.getElementById("vpnEgress");
     if (eg) eg.textContent = (st && (st.egress || st.ip)) || "—";
     var wp = document.getElementById("vpnWarp");
-    if (wp) wp.textContent = st && st.warp ? "ON" : ((st && st.state) || "OFF");
+    if (wp) wp.textContent = st && st.warp ? "ON" : (failed ? "OFF" : (st && st.state ? String(st.state).toUpperCase() : "OFF"));
     var err = document.getElementById("vpnErr");
     if (err) err.textContent = (st && st.error) ? st.error : "";
     var me = document.getElementById("meVpnState");
     if (me) me.textContent = on
       ? ("Connected · " + (st.egress || st.regionLabel || "WARP"))
-      : ((st && (st.state || "off")) + " · " + (st && st.error ? "retry" : "connecting"));
+      : (failed ? "Retry needed" : (phase || "Connecting"));
     var sel = document.getElementById("vpnRegion");
     if (sel && st && st.region && document.activeElement !== sel) {
       try { sel.value = st.region; } catch (e) {}
@@ -1071,7 +1081,7 @@
     var f = String((q && q.format) || "").toLowerCase();
     var u = String((q && q.url) || "");
     if (f.indexOf("dash") >= 0 || /\.mpd(?:[?#]|$)/i.test(u)) return "dash";
-    if (f.indexOf("hls") >= 0 || f.indexOf("m3u8") >= 0 || /\.m3u8(?:[?#]|$)/i.test(u)) return "hls";
+    if (f.indexOf("hls") >= 0 || f.indexOf("m3u8") >= 0 || /(?:\.m3u8|(?:^|\/)_hls\/)/i.test(u)) return "hls";
     return "mp4";
   }
 
@@ -1314,7 +1324,11 @@
     var q = pb.quality;
     var ref = pb.waRef || (pb.subject ? detailUrl((pb.audio && pb.audio.detailPath) || pb.subject.detailPath) : "");
     var format = streamFormat(q);
-    var src = engineUrl(format, q, ref);
+    /* Cloudflare's media CDN scores the client fingerprint: Java's
+       HttpURLConnection gets 403 even with a signed token, while the WebView
+       (Chromium) plays it directly. Keep 1hanime MP4s on the native URL. */
+    var directCdn = format === "mp4" && /^https?:\/\/[^\/]*1hanime\.com\//i.test(q.url);
+    var src = directCdn ? q.url : engineUrl(format, q, ref);
     autoVpnForUrl(src);
     pb.streamSrc = src;
     pb.format = format;
@@ -1358,6 +1372,13 @@
       if (S.playback !== pb) return;
       clearTimeout(pb._watch);
       pb._watch = null;
+      /* A signed Hentai.tv token lives only a few minutes. If playback dies
+         after a long pause, mint a fresh one before giving up on the title. */
+      if (pb.htv && !pb.htvTried && window.SBAndroid && window.SBAndroid.htvProbe) {
+        pb.htvTried = 1;
+        refreshHtv();
+        return;
+      }
       if (!tryNextQuality(msg || "This source failed — trying another")) {
         /* Nothing in the ladder worked. Before surfacing a dead end, hand the
            title to the backup stream (the local twin of the same file), then
@@ -1379,6 +1400,35 @@
         if (pb.page) { toast("Opening the source page…"); openWeb(pb.page, pb.title); return; }
         showPlayerError("This stream could not be played. Try another quality or episode.");
       }
+    }
+
+    function refreshHtv() {
+      var at = num(video.currentTime, 0);
+      showSpinner(true);
+      toast("Verifying player…");
+      new Promise(function (resolve) {
+        var done = false;
+        var timer = setTimeout(function () { finish(""); }, 45000);
+        var finish = function (u) {
+          if (done) return;
+          done = true;
+          clearTimeout(timer);
+          window.__SB_HTV_SIGNED = null;
+          resolve(u || "");
+        };
+        window.__SB_HTV_SIGNED = function (u) { finish(u); };
+        try { window.SBAndroid.htvProbe(pb.htv); } catch (e) { finish(""); }
+      }).then(function (signed) {
+        if (S.playback !== pb) return;
+        if (signed) {
+          pb.quality = { id: "htv-live", url: signed, format: "mp4", height: 0 };
+          pb.htv = "";
+          loadStream(at, pb.wantPlay);
+        } else {
+          pb.htv = "";
+          failed("This stream is not responding — trying another");
+        }
+      });
     }
 
     try {
@@ -1609,7 +1659,7 @@
   function playDirect(url, title, opts) {
     opts = opts || {};
     if (!url) { toast("No playable stream was returned"); return; }
-    var fmt = opts.format || (/\.mpd(?:[?#]|$)/i.test(url) ? "dash" : (/\.m3u8(?:[?#]|$)/i.test(url) ? "hls" : "mp4"));
+    var fmt = opts.format || (/\.mpd(?:[?#]|$)/i.test(url) ? "dash" : (/(?:\.m3u8|(?:^|\/)_hls\/)/i.test(url) ? "hls" : "mp4"));
     var q = { id: "wa", url: url, format: fmt, height: num(opts.height, 0) };
     var pb = {
       subject: { detailPath: "" },
@@ -1624,6 +1674,7 @@
       fallback: opts.fallback || "",
       embed: opts.embed || "",
       page: opts.page || "",
+      htv: opts.htv || "",
       restart: function () { closePlayer(); setTimeout(function () { playDirect(url, title, opts); }, 60); }
     };
     openPlayer(pb);

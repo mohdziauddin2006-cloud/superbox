@@ -282,17 +282,21 @@
   A('Stepsister','FAM','stepsister','top-rated');
   A('VR','VR','vr','top-rated');
 
-  /* Rule34 - full animated .mp4 files from rule34video (KVS tube). */
+  /* Rule34 - full animated .mp4 files from rule34video (KVS tube).
+     Queries are deliberately ONE term each: the site's search treats a
+     multi-word q loosely and returned the same "animated" shelf for every
+     row, which made sibling rows duplicate each other and starve the ones
+     rendered later. Distinct terms give each row its own shelf. */
   VAULT.rule34 = [];
   function R(t, b, q) { VAULT.rule34.push({ kind:'r34v', t:t, q:q || t, badge:b }); }
   R('Animated (R34)','R34','animated');
-  R('Animated With Sound','R34-S','animated voice');
   R('3D / CG','3D','3d');
-  R('Animated Creampie','R34-CP','animated creampie');
-  R('Animated Big Breasts','R34-BB','animated big tits');
-  R('Animated Yuri','R34-Y','animated yuri');
-  R('Animated Futanari','R34-F','animated futanari');
-  R('Animated Anal','R34-A','animated anal');
+  R('Hentai Music Video','HMV','hmv');
+  R('Yuri','R34-Y','yuri');
+  R('Futanari','R34-F','futanari');
+  R('Creampie','R34-CP','creampie');
+  R('Big Breasts','R34-BB','big tits');
+  R('Anal','R34-A','anal');
 
   /* MMS - viral / desi / leaked rows + JAV mirrors (123av lane). */
   VAULT.mms = [];
@@ -330,11 +334,13 @@
   VAULT.hentai = [
     { kind:'hc',  t:'Hentaicity - Newest', u:'https://www.hentaicity.com/', badge:'H-CITY' },
     { kind:'hc',  t:'Hentaicity - Hentai', u:'https://www.hentaicity.com/search/video/hentai', badge:'H-CITY' },
-    { kind:'hc',  t:'Hentaicity - 3D / CG', u:'https://www.hentaicity.com/search/video/3d', badge:'H-CITY' },
+    { kind:'hc',  t:'Hentaicity - 3D / CG', u:'https://www.hentaicity.com/videos/straight/3d-popular.html', badge:'H-CITY' },
     { kind:'hc',  t:'Hentaicity - Uncensored', u:'https://www.hentaicity.com/search/video/uncensored', badge:'H-CITY' },
-    { kind:'hc',  t:'Hentaicity - Futanari', u:'https://www.hentaicity.com/search/video/futanari', badge:'H-CITY' },
+    { kind:'hc',  t:'Hentaicity - Futanari', u:'https://www.hentaicity.com/videos/straight/futanari-popular.html', badge:'H-CITY' },
     { kind:'htv', t:'Hentai.tv - Latest', u:'https://hentai.tv/api/browse', badge:'HTV' },
-    { kind:'htv', t:'Hentai.tv - Top Rated', u:'https://hentai.tv/api/browse?sort=rating&order=desc', badge:'HTV' },
+    /* The API ignores sort/order and page 1 is the newest shelf. Paging is
+       the only way to get a second, non-repeating row. */
+    { kind:'htv', t:'Hentai.tv - More', u:'https://hentai.tv/api/browse?page=2', badge:'HTV' },
     { kind:'ep',  t:'Eporner - Hentai', q:'hentai', order:'top-rated', badge:'EP-H' },
     { kind:'r34v', t:'Rule34 - Animated', q:'animated', badge:'R34' }
   ];

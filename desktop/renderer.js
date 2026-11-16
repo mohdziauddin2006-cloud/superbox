@@ -912,27 +912,38 @@
     if (!gate) return;
     vpnLastStatus = st || null;
     var on = !!(st && st.ok);
+    var failed = !!(st && st.state === 'error');
     gate.classList.toggle('hidden', on);
     gate.classList.toggle('on', on);
-    gate.classList.toggle('err', !!st && st.state === 'error');
+    gate.classList.toggle('err', failed);
+    var phase = (st && st.phase) || '';
     if ($('#vpnTitle')) $('#vpnTitle').textContent = on ? 'Shield connected' :
-      (st && st.state === 'error' ? 'Shield needs a retry' : 'Connecting the Shield');
+      (failed ? 'Shield needs a retry' : (phase || 'Connecting the Shield'));
     if ($('#vpnMsg')) $('#vpnMsg').textContent = on
       ? 'Anonymous WARP tunnel is live. Every request in SuperBox rides it.'
-      : (st && st.state === 'error'
+      : (failed
         ? 'The tunnel did not come up. Retry, or pick another regional profile.'
-        : 'Establishing an anonymous WARP tunnel. Every catalogue, image and stream stays behind it.');
+        : (phase && /endpoint/i.test(phase)
+          ? 'Trying the fastest MASQUE anchor for ' + ((st && st.regionLabel) || 'your region') + '. This can take a few seconds.'
+          : 'Establishing an anonymous WARP tunnel. Every catalogue, image and stream stays behind it.'));
+    var bar = $('#vpnBar');
+    if (bar) {
+      var pct = st && typeof st.progress === 'number' ? st.progress : (on ? 100 : 4);
+      if (failed) pct = 100;
+      bar.style.width = Math.max(3, Math.min(100, pct)) + '%';
+    }
     if ($('#vpnEngine')) $('#vpnEngine').textContent = (st && st.engine) || 'usque · MASQUE';
     if ($('#vpnRegionLabel')) $('#vpnRegionLabel').textContent = (st && st.regionLabel) || 'Global';
     if ($('#vpnEgress')) $('#vpnEgress').textContent = (st && (st.egress || st.ip)) || '—';
-    if ($('#vpnWarp')) $('#vpnWarp').textContent = st && st.warp ? 'ON' : (st && st.state) || 'OFF';
+    if ($('#vpnWarp')) $('#vpnWarp').textContent = st && st.warp ? 'ON' :
+      (failed ? 'OFF' : (st && st.state ? String(st.state).toUpperCase() : 'OFF'));
     if ($('#vpnErr')) $('#vpnErr').textContent = (st && st.error) ? st.error : '';
     if (st && st.region && $('#vpnRegion') && document.activeElement !== $('#vpnRegion')) {
       try { $('#vpnRegion').value = st.region; } catch (e) {}
     }
     if ($('#setVpnState')) $('#setVpnState').textContent = on
       ? ('Connected · ' + ((st.egress || st.regionLabel || 'WARP')))
-      : ((st && (st.state || 'off')) + ' · ' + (st && st.error ? 'retry' : 'connecting'));
+      : (failed ? 'Retry needed' : (phase || 'Connecting'));
   }
   function watchVpn() {
     clearTimeout(vpnTimer);
@@ -3341,9 +3352,40 @@
      black/pink iframe fallback). */
   var CUSTOM_NATIVE = /^(hd|kd|kat|xs|anx)$/;
 
-  /* Hentai.tv -> nhplayer: decode the signed mp4 in the renderer, play it
-     natively; the local /raw twin (carrying the full signed raw string) and
-     the source's own player/watch pages are silent fallbacks. */
+  /* Hentai.tv -> nhplayer: the r2 CDN rejects the bare mp4 (403) and only
+     accepts the short-lived `?verify=` URL that nhplayer's challenge page
+     mints at request time. Mount that page in an offscreen frame just long
+     enough for its own <video> to receive the signed src, then stream the
+     signed URL through the local /raw twin with native controls. The full
+     nhplayer shell remains the fallback when the probe times out. */
+  function nhProbe(playerUrl, maxMs) {
+    return new Promise(function (resolve) {
+      var f = document.createElement('iframe');
+      f.setAttribute('aria-hidden', 'true');
+      f.style.cssText = 'position:fixed;left:-10000px;top:0;width:640px;height:360px;opacity:0;border:0;pointer-events:none';
+      var done = false;
+      var timer = setTimeout(function () { finish(''); }, maxMs || 14000);
+      function finish(src) {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        try { window.removeEventListener('message', onMsg); } catch (e) {}
+        try { f.src = 'about:blank'; f.remove(); } catch (e) {}
+        resolve(src || '');
+      }
+      function onMsg(e) {
+        try {
+          if (e.source !== f.contentWindow) return;
+          var src = e.data && e.data.__zaiSrc;
+          if (typeof src === 'string' && /^https?:\/\//i.test(src)) finish(src);
+        } catch (x) {}
+      }
+      window.addEventListener('message', onMsg);
+      document.body.appendChild(f);
+      f.src = playerUrl;
+    });
+  }
+
   async function htvPlay(it) {
     if (!ladderOwns(it)) clearSeries();
     var ep = playEpoch;
@@ -3360,14 +3402,22 @@
        list, so the selector is live whether the mp4 resolves or the player
        page is the surface that ends up mounting. */
     seedPageSeries(it) || seedEpsLadder(it, s && s.eps, s && s.title);
-    if (s && s.url) {
-      var B = await SC.base();
+    if (s && s.playerUrl) {
+      /* The player.php challenge deliberately sits on a fingerprint + PoW
+         check for ~20s on a cold WARP exit; a 14s window used to fall back to
+         the ad-laden embed just before the signed URL landed. */
+      var signed = await nhProbe(s.playerUrl, 30000);
       if (ep !== playEpoch) return;
-      var prox = B + '/raw?url=' + encodeURIComponent(s.raw) + '&ref=' + encodeURIComponent('https://nhplayer.com/');
-      playStream(s.url, it.t, { watchdog: 15000, fallback: prox, onFail: embP });
-      return;
+      if (signed) {
+        /* Chromium carries the signed URL itself; the session bypasses the
+           Shield for this media host only (the WARP path throttles the MP4
+           index to a few KB/s), while the player page and the challenge that
+           minted the URL stay behind it. */
+        playStream(signed, it.t, { watchdog: 26000, onFail: embP });
+        return;
+      }
     }
-    embV();
+    embP();
   }
 
   /* Tube: a real progressive MP4/HLS from the local resolver plays in the
@@ -3404,6 +3454,12 @@
   async function customPlay(it, re) {
     showPlayer(it.t);
     var ep = playEpoch;
+    /* A previous stream may still be buffering at full speed while this
+       click resolves. Leaving it running starved the extraction fetch (a
+       164 KB page took >10 s and the click died with "Playback
+       unavailable" right after watching Rule34). Tear the old stream down
+       before touching the network. */
+    stopVideo();
     showLoading('Preparing stream...');
     /* Card-annotated ladders (web-series / K-Drama / anime / JAV card lists)
        seed the engine before extraction, so the Season/Episode selector and
@@ -3602,7 +3658,7 @@
     /* Problem/part cards that arrived grouped: raise the episode ladder the
        instant the click lands, before the resolver has answered. */
     if ((it.kind === 'mv' || it.kind === 'htv') && !ladderOwns(it)) seedPageSeries(it);
-    customPlay(it).catch(function () { showUnavailable(it.t, { retry: function () { customPlay(it); } }); });
+    customPlay(it).catch(function (e) { try { console.error('customPlay failed:', e && (e.stack || e.message || e)); } catch (x) {} showUnavailable(it.t, { retry: function () { customPlay(it); } }); });
   }
 
   /* ---------------- search ---------------- */

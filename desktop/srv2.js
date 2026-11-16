@@ -197,7 +197,7 @@ const CUSTOM_SRC_RE = /(katmoviehd|kdramasmaza|xmaal|zmaal|animixplay|hentaicity
 /* Never surfaced to the player: advertising, popup, tracker and widget frames. */
 const JUNK_FRAME_RE = /(doubleclick|googlesyndication|googleadservices|google-analytics|googletagmanager|facebook|twitter\.com\/intent|platform\.twitter|amazon-adsystem|adnxs|histats|yandex|vk\.com\/share|addthis|sharethis|disqus|outbrain|taboola|mgid|zergnet|criteo|pubmatic|rubicon|openx|smartadserver|teads|triplelift|sharethrough|smaato|inmobi|loopme)/i;
 
-const MEDIA_EXT_RE = /\.(?:mp4|m3u8|webm|m4v|mpd)(?:[?#]|$)/i;
+const MEDIA_EXT_RE = /\.(?:mp4|m3u8|webm|m4v|mpd)(?:[?#\/]|$)/i;
 
 /* Only these services are DRM-walled (no scrapable stream): resolving the
    title on TMDB is the only useful answer for them, and ONLY for them. */
@@ -225,17 +225,23 @@ function findMedia(html, base){
   const cands = [];
   const push = function (u) {
     const a = absUrl(u, base);
-    /* The Eporner hotlink "not available" clip and friends are never media. */
-    if (a && MEDIA_EXT_RE.test(a) && cands.indexOf(a) < 0 && !AD_RE.test(a) && !EP_STUB_RE.test(a)) cands.push(a);
+    /* The Eporner hotlink "not available" clip and friends are never media.
+       KVS tubes (rule34video) also advertise a silent `_preview.mp4` on every
+       card; it is a few seconds long and must never become the episode. */
+    if (a && MEDIA_EXT_RE.test(a) && cands.indexOf(a) < 0 && !AD_RE.test(a) &&
+        !EP_STUB_RE.test(a) && !/(?:^|[\/_.-])preview(?:[\/_.-]|\.(?:mp4|webm))/i.test(a)) cands.push(a);
   };
   let m;
   const tagRe = /<(?:video|source|audio)[^>]*\bsrc\s*=\s*["']([^"']+)["']/gi;
   while ((m = tagRe.exec(html))) push(m[1]);
-  const jsonRe = /["'](?:file|src|source|url|contentUrl|hls|playlist|videoUrl|video_url|stream|stream_url|mp4|m3u8|sd|hd)["']\s*:\s*["']([^"']{6,700})["']/gi;
+  const jsonRe = /["'](?:file|src|source|url|contentUrl|hls|playlist|videoUrl|video_url|video_alt_url\d*|stream|stream_url|mp4|m3u8|sd|hd)["']\s*:\s*["']([^"']{6,700})["']/gi;
   while ((m = jsonRe.exec(html))) push(m[1]);
-  const bareEsc = /https?:(?:\\\/|\/){2}[^"'\s<>\\]+?\.(?:mp4|m3u8|webm|m4v)(?:\?[^"'\s<>\\]*)?/gi;
+  /* KVS players sign each twin as ".../4726177_720p.mp4/?v-acctoken=..." -
+     a slash BEFORE the query. Without it the regex stopped at ".mp4" and the
+     player was handed an unsigned URL that always answered 403. */
+  const bareEsc = /https?:(?:\\\/|\/){2}[^"'\s<>\\]+?\.(?:mp4|m3u8|webm|m4v)(?:\/)?(?:\?[^"'\s<>\\]*)?/gi;
   while ((m = bareEsc.exec(html))) push(m[0]);
-  const bare = /https?:\/\/[^"'\s<>\\]+?\.(?:mp4|m3u8|webm|m4v)(?:\?[^"'\s<>\\]*)?/gi;
+  const bare = /https?:\/\/[^"'\s<>\\]+?\.(?:mp4|m3u8|webm|m4v)(?:\/)?(?:\?[^"'\s<>\\]*)?/gi;
   while ((m = bare.exec(html))) push(m[0]);
   const dataRe = /data-(?:src|file|video|video-src|stream|hls|mp4|url)\s*=\s*["']([^"']+)["']/gi;
   while ((m = dataRe.exec(html))) push(m[1]);
@@ -245,9 +251,29 @@ function findMedia(html, base){
   /* Candidate order is significant: a <source>/<video> tag URL is what the
      site's own player uses (and plays in Chromium with the Referer rewrite).
      Signed JSON-LD twins (xmaal/boldmaal) carry a 1h S3 signature that is
-     usually ALREADY EXPIRED in the served page - never prefer them. */
-  const mp4 = cands.filter(function (u) { return /\.(?:mp4|webm|m4v)/i.test(u); })[0];
-  if (mp4) return { type: 'direct', file: mp4 };
+     usually ALREADY EXPIRED in the served page - never prefer them.
+     KVS players (rule34video & friends) list 360p/480p/720p twins in one
+     flashvars blob and the page order is worst-first, so a plain "first mp4"
+     handed the player a 360p file. When resolution markers exist, the highest
+     one wins; unlabelled candidates keep their original order. */
+  const mp4s = cands.filter(function (u) { return /\.(?:mp4|webm|m4v)/i.test(u); });
+  const qualityOf = function (u) {
+    const s = String(u);
+    /* "720p" anywhere, else a KVS "_720.mp4" style twin. A bare 3-4 digit
+       path segment is NOT a resolution (years like /2024/ are common). */
+    const q = s.match(/(?:^|[\/_.-])(\d{3,4})p(?:[\/_.-]|$)/i) ||
+              s.match(/(?:^|[\/_.-])(360|480|540|720|1080|1440|2160)(?:[\/_.-]|$)/i);
+    if (!q) return 0;
+    const n = Number(q[1]);
+    return n >= 240 && n <= 4320 ? n : 0;
+  };
+  let bestMp4 = mp4s[0], bestQ = 0;
+  mp4s.forEach(function (u) {
+    const q = qualityOf(u);
+    if (q > bestQ) { bestQ = q; bestMp4 = u; }
+  });
+  if (bestMp4 && bestQ >= 480) return { type: 'direct', file: bestMp4 };
+  if (mp4s[0]) return { type: 'direct', file: mp4s[0] };
 
   /* No raw media: isolate the exact player iframe, stripping site chrome,
      navigation and every tracker frame that surrounds it. */
@@ -350,7 +376,7 @@ function hgResolve(html, pageUrl) {
   const pool = [];
   const add = function (u) {
     const a = absUrl(u, pageUrl);
-    if (!a || !/\.mp4(?:\?|#|$)/i.test(a) || AD_RE.test(a)) return;
+    if (!a || !/\.mp4(?:[?#\/]|$)/i.test(a) || AD_RE.test(a)) return;
     if (pool.indexOf(a) < 0) pool.push(a);
   };
   let m;
@@ -358,9 +384,9 @@ function hgResolve(html, pageUrl) {
   while ((m = tagRe.exec(t))) add(m[1]);
   const dataRe = /data-(?:media-backup-src|src|file|video-src)\s*=\s*["']([^"']+)["']/gi;
   while ((m = dataRe.exec(t))) add(m[1]);
-  const jsonRe = /["'](?:contentUrl|contentURL|videoUrl|video_url|file|src|url)["']\s*:\s*["']([^"']{8,900})["']/gi;
+  const jsonRe = /["'](?:contentUrl|contentURL|videoUrl|video_url|video_alt_url\d*|file|src|url)["']\s*:\s*["']([^"']{8,900})["']/gi;
   while ((m = jsonRe.exec(t))) add(m[1]);
-  const bare = /https?:\/\/[^"'\s<>\\]+?\.mp4(?:\?[^"'\s<>\\]*)?/gi;
+  const bare = /https?:\/\/[^"'\s<>\\]+?\.mp4(?:\/)?(?:\?[^"'\s<>\\]*)?/gi;
   while ((m = bare.exec(t))) add(m[0]);
   if (!pool.length) return null;
   const ep = pool.filter(function (u) { return /drama-episodes|\/episodes?\//i.test(u); })[0];
@@ -1755,11 +1781,11 @@ function findPartLinks(html, pageUrl) {
   };
   const tagRe = /<(?:video|source|audio)[^>]*\bsrc\s*=\s*["']([^"']+)["']/gi;
   while ((m = tagRe.exec(src))) pushMedia(m[1]);
-  const jsonRe = /["'](?:file|src|source|url|contentUrl|hls|playlist|videoUrl|video_url|stream|stream_url|mp4|m3u8|sd|hd)["']\s*:\s*["']([^"']{6,700})["']/gi;
+  const jsonRe = /["'](?:file|src|source|url|contentUrl|hls|playlist|videoUrl|video_url|video_alt_url\d*|stream|stream_url|mp4|m3u8|sd|hd)["']\s*:\s*["']([^"']{6,700})["']/gi;
   while ((m = jsonRe.exec(src))) pushMedia(m[1]);
   const dataRe = /data-(?:src|file|video|video-src|stream|hls|mp4|url)\s*=\s*["']([^"']+)["']/gi;
   while ((m = dataRe.exec(src))) pushMedia(m[1]);
-  const bare2 = /https?:\/\/[^"'\s<>\\]+?\.(?:mp4|webm|m4v|m3u8)(?:\?[^"'\s<>\\]*)?/gi;
+  const bare2 = /https?:\/\/[^"'\s<>\\]+?\.(?:mp4|webm|m4v|m3u8)(?:\/)?(?:\?[^"'\s<>\\]*)?/gi;
   while ((m = bare2.exec(src))) pushMedia(m[0]);
   const uniqM = [], mseen = {};
   pool.forEach(function (u) {
@@ -3483,14 +3509,30 @@ async function handle(req, res){
       return res.end(html);
     }
     if (path === '/page'){
-      const got = await within(16000, async function () {
-        const r = await grab(url, pRef || undefined, undefined, pUA || undefined);
+      /* Catalogue APIs answer with big list payloads: MangaDex's 24-title
+         collection is roughly 450 KB and WARP throughput varies. The old fixed
+         16 s ceiling cut the body off mid-transfer, so the Reading room painted
+         "source unavailable" even though the tunnel was healthy. Catalogue
+         hosts get a wider budget; ordinary pages stay snappy. */
+      let pageHost = '';
+      try { pageHost = new URL(url).hostname.toLowerCase(); } catch (e) {}
+      const pageBudget = /(^|\.)mangadex\.org$/.test(pageHost) ? 42000 : 16000;
+      /* A superseded filter change aborts its request in the renderer. Stop the
+         upstream transfer too, otherwise a stale 450 KB download keeps the
+         tunnel busy while the new filter waits. */
+      const pageCtl = new AbortController();
+      const onGone = function () { if (!res.writableEnded) { try { pageCtl.abort(); } catch (e) {} } };
+      res.on('close', onGone);
+      const got = await within(pageBudget, async function () {
+        const r = await grab(url, pRef || undefined, undefined, pUA || undefined,
+          pageBudget, pageCtl.signal);
         return {
           status: r.status,
           ctype: r.headers.get('content-type') || '',
           html: Buffer.from(await r.arrayBuffer()).toString('utf8')
         };
       }, null);
+      res.removeListener('close', onGone);
       if (!got) {
         res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
         return res.end('PROXY_ERROR: timeout');

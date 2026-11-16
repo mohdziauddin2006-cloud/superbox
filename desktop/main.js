@@ -347,11 +347,13 @@ app.whenReady().then(function () {
   try {
     session.defaultSession.setProxy({
       proxyRules: 'http=127.0.0.1:46950;https=127.0.0.1:46950;socks=127.0.0.1:46950',
-      /* Moviebox's media CDN rejects Cloudflare WARP egress with 427. The
-         catalogue, API, artwork and source pages still ride the Shield;
-         only the signed media host is fetched directly so playback works.
-         The player also tries /raw, whose grab() mirrors this bypass. */
-      proxyBypassRules: '127.0.0.1,localhost,::1,*.hakunaymatata.com'
+      /* Moviebox's media CDN rejects Cloudflare WARP egress with 427, and
+         nhplayer's r2 host throttles the WARP path to a few KB/s while the
+         media element waits for the MP4 index. The catalogue, API, artwork,
+         player page and every challenge still ride the Shield; only these
+         signed media hosts are fetched directly so playback works.
+         The player also tries /raw, whose grab() mirrors the Moviebox bypass. */
+      proxyBypassRules: '127.0.0.1,localhost,::1,*.hakunaymatata.com,*.1hanime.com'
     }).then(function () {
       logLine('INFO', 'Chromium session routed through SuperBox Shield');
     }).catch(function (e) {
@@ -452,6 +454,16 @@ app.whenReady().then(function () {
   session.defaultSession.webRequest.onBeforeSendHeaders({ urls: ['<all_urls>'] }, function (d, cb) {
     try {
       const u = d.url || '';
+      /* nhplayer's page script refuses to boot without a site Referer (it
+         answers 503 + "Verifying that you are not a robot" when the request
+         looks like a bare navigation). An iframe started from our file://
+         page sends none, so seed its top-level player request. Same-origin
+         XHRs already carry the player URL and are left untouched. */
+      if (/^https?:\/\/nhplayer\.com\//i.test(u) && d.resourceType === 'document') {
+        const hh = d.requestHeaders || {};
+        if (!hh['Referer'] && !hh['referer']) hh['Referer'] = 'https://hentai.tv/';
+        return cb({ requestHeaders: hh });
+      }
       const isMedia = d.resourceType === 'media' || /\.(mp4|webm|m4v|mov|ts|m4s|mpd|m3u8|key|bin)(\?|#|$)/i.test(u);
       if (isMedia && /^https?:/i.test(u) && !/^https?:\/\/(127\.0\.0\.1|127\.0\.0\.2|localhost)(:|\/)/i.test(u)) {
         const h = d.requestHeaders || {};

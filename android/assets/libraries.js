@@ -629,24 +629,24 @@
   }
   async function r34vRow(row) {
     var q = String(row.q || 'animated');
-    var tries = [q];
-    if (q !== 'animated') tries.push('animated');
     var seen = new Set(), uniq = [];
-    for (var i = 0; i < tries.length; i++) {
-      try {
-        var u = 'https://rule34video.com/search/?q=' + enc(tries[i]) + '&sort_by=post_date&from=1';
-        var html = await fetchText(u, 16000);
-        var cards = parseAnchorCards(html, 'https://rule34video.com', { kind: 'r34v' });
-        cards.forEach(function (c) {
-          var id = r34vKey(c.page);
-          var uk = 'u:' + normMedia(c.page);
-          if (seen.has(id) || seen.has(uk)) return;
-          seen.add(id); seen.add(uk);
-          uniq.push(c);
-        });
-      } catch (e) {}
-      if (uniq.length) break;                 /* the fallback query is a last resort only */
-    }
+    try {
+      var u = 'https://rule34video.com/search/?q=' + enc(q) + '&sort_by=post_date&from=1';
+      var html = await fetchText(u, 16000);
+      /* Only real /video/<id>/ pages are episodes. An unfiltered anchor scan
+         also collected model profiles and category tiles (tiny avatar GIFs),
+         which looked like low-quality, repeated cards. */
+      var cards = parseAnchorCards(html, 'https://rule34video.com', {
+        kind: 'r34v', slugFilter: /\/video\/\d+/i
+      });
+      cards.forEach(function (c) {
+        var id = r34vKey(c.page);
+        var uk = 'u:' + normMedia(c.page);
+        if (seen.has(id) || seen.has(uk)) return;
+        seen.add(id); seen.add(uk);
+        uniq.push(c);
+      });
+    } catch (e) {}
     if (!uniq.length) return [];
     uniq.forEach(function (c) { c.badge = row.badge || 'R34'; });
     return uniq.slice(0, 40);

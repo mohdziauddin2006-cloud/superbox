@@ -53,27 +53,47 @@
     });
   }
 
+  /* TMDB/AniList row descriptors carry only a path; the loader selects the
+     resolver from `kind`, so every catalogue row must be tagged here. */
+  function tmdbRows(list) {
+    return (list || []).map(function (r) {
+      var o = {};
+      for (var k in r) o[k] = r[k];
+      o.kind = 'tmdb';
+      return o;
+    });
+  }
+
+  function arcRows(list) {
+    return (list || []).map(function (r) {
+      var o = {};
+      for (var k in r) o[k] = r[k];
+      o.kind = 'arc';
+      return o;
+    });
+  }
+
   function rowsForTab(tab) {
     var T = Z.TMDB_ROWS || {};
     if (tab === 'home') {
-      return tagged('home', T.home || [], 'Spotlight')
-        .concat(tagged('webseries', (T.webseries || []).slice(0, 1), 'Web Series'))
-        .concat(tagged('kdrama', (T.kdrama || []).slice(0, 1), 'K-Drama'))
-        .concat(tagged('cartoons', ((Z.ARCHIVE_ROWS || {}).cartoons || []).slice(0, 1), 'Cartoons'))
+      return tagged('home', tmdbRows(T.home), 'Spotlight')
+        .concat(tagged('webseries', tmdbRows((T.webseries || []).slice(0, 1)), 'Web Series'))
+        .concat(tagged('kdrama', tmdbRows((T.kdrama || []).slice(0, 1)), 'K-Drama'))
+        .concat(tagged('cartoons', arcRows((Z.ARCHIVE_ROWS || {}).cartoons || []).slice(0, 1), 'Cartoons'))
         .concat(tagged('tube', (Z.YT_ROWS || []).slice(0, 1), 'Tube'));
     }
     if (tab === 'movies') {
-      return tagged('movie', T.movie || [], 'Movies')
-        .concat(tagged('webseries', (T.webseries || []).slice(0, 2), 'Web Series'))
-        .concat(tagged('cartoons', ((Z.ARCHIVE_ROWS || {}).cartoons || []).slice(0, 2), 'Cartoons'))
+      return tagged('movie', tmdbRows(T.movie), 'Movies')
+        .concat(tagged('webseries', tmdbRows((T.webseries || []).slice(0, 2)), 'Web Series'))
+        .concat(tagged('cartoons', arcRows((Z.ARCHIVE_ROWS || {}).cartoons || []).slice(0, 2), 'Cartoons'))
         .concat(tagged('tube', (Z.YT_ROWS || []).slice(0, 1), 'Tube'));
     }
     if (tab === 'series') {
-      return tagged('tv', T.tv || [], 'Series')
-        .concat(tagged('webseries', (T.webseries || []).slice(0, 2), 'Web Series'))
-        .concat(tagged('kdrama', (T.kdrama || []).slice(0, 2), 'K-Drama'));
+      return tagged('tv', tmdbRows(T.tv), 'Series')
+        .concat(tagged('webseries', tmdbRows((T.webseries || []).slice(0, 2)), 'Web Series'))
+        .concat(tagged('kdrama', tmdbRows((T.kdrama || []).slice(0, 2)), 'K-Drama'));
     }
-    if (tab === 'anime') return tagged('anime', T.anime || [], 'Anime');
+    if (tab === 'anime') return tagged('anime', tmdbRows(T.anime), 'Anime');
     return [];
   }
 
@@ -134,9 +154,8 @@
   // ---------------------------------------------------------------- rows
   function rowsFor(sec, sub) {
     var T = Z.TMDB_ROWS || {};
-    function tmdb(list) { return (list || []).map(function (r) { var o = {}; for (var k in r) o[k] = r[k]; o.kind = 'tmdb'; return o; }); }
-    if (sec === 'home' || sec === 'movie' || sec === 'tv' || sec === 'kids') return tmdb(T[sec]);
-    if (sec === 'anime') return tmdb(T.anime);
+    if (sec === 'home' || sec === 'movie' || sec === 'tv' || sec === 'kids') return tmdbRows(T[sec]);
+    if (sec === 'anime') return tmdbRows(T.anime);
     if (sec === 'webseries') {
       var out = (Z.xmaalRows ? Z.xmaalRows((Z.XMAAL && Z.XMAAL.sfw) || [], 'XS') : []);
       out = out.concat(((Z.KAT && Z.KAT.ws) || []).map(function (r) { return { kind: 'kat', t: r.t, u: r.u, k: 'kat', badge: 'KAT' }; }));
@@ -1225,16 +1244,21 @@
 
   function findMedia(html) {
     var norm = unescapeMedia(html);
-    var re = /https?:\/\/[^\s"'<>\\]+?\.(?:mp4|webm|m3u8)(?:\?[^\s"'<>\\]*)?/gi;
+    /* KVS tubes sign each twin as "..._720p.mp4/?v-acctoken=..." - keep the
+       slash+query inside the match or the player gets a 403. */
+    var re = /https?:\/\/[^\s"'<>\\]+?\.(?:mp4|webm|m3u8)(?:\/)?(?:\?[^\s"'<>\\]*)?/gi;
     var best = null, bestScore = -1, m;
     while ((m = re.exec(norm))) {
       var u = m[0];
-      if (/pixel|blank|spacer|thumb|preview\./i.test(u) && !/preview\.mp4/i.test(u)) continue;
+      /* Silent "_preview.mp4" teasers and thumbnails are never episodes. */
+      if (/pixel|blank|spacer|thumbnail|preview/i.test(u)) continue;
       var sc = 0;
-      if (/\.m3u8/i.test(u)) sc += 3;
-      if (/master|playlist/i.test(u)) sc += 2;
-      if (/1080/.test(u)) sc += 2;
-      if (/720/.test(u)) sc += 1;
+      if (/\.m3u8/i.test(u)) sc += 20;
+      if (/master|playlist/i.test(u)) sc += 6;
+      if (/1080/.test(u)) sc += 10;
+      else if (/720/.test(u)) sc += 9;
+      else if (/480/.test(u)) sc += 3;
+      else if (/360/.test(u)) sc += 1;
       if (u.length > 40) sc += 1;
       if (sc > bestScore) { bestScore = sc; best = u; }
     }
@@ -1281,7 +1305,40 @@
       if (it.kind === 'htv') {
         try {
           var nh = await SC.nhStream(url);
-          if (nh && nh.url) { App.playDirect(nh.url, title || it.t, { ref: 'https://nhplayer.com/', page: url }); return; }
+          if (nh && nh.url) {
+            /* The bare r2 URL answers 403: nhplayer mints a `?verify=` URL
+               only after its ~20s anti-bot challenge. Android runs that
+               challenge in an offscreen WebView and hands the signed URL
+               back through window.__SB_HTV_SIGNED. */
+            var signed = '';
+            if (nh.playerUrl && window.SBAndroid && window.SBAndroid.htvProbe) {
+              btns.forEach(function (b) { b.textContent = 'Verifying player…'; });
+              signed = await new Promise(function (resolve) {
+                var done = false;
+                var timer = setTimeout(function () { finish(''); }, 45000);
+                var finish = function (u) {
+                  if (done) return;
+                  done = true;
+                  clearTimeout(timer);
+                  window.__SB_HTV_SIGNED = null;
+                  resolve(u || '');
+                };
+                window.__SB_HTV_SIGNED = function (u) { finish(u); };
+                try { window.SBAndroid.htvProbe(nh.playerUrl); } catch (e) { finish(''); }
+              });
+              if (!signed && window.SBAndroid.htvCancel) {
+                try { window.SBAndroid.htvCancel(); } catch (e) {}
+              }
+            }
+            if (signed) {
+              App.playDirect(signed, title || it.t, { ref: 'https://nhplayer.com/', page: url, htv: nh.playerUrl });
+            } else {
+              /* Verification failed: the nhplayer shell is still a working
+                 player, just with ads around it. */
+              App.openWeb(nh.playerUrl || url, title || it.t);
+            }
+            return;
+          }
         } catch (e) {}
       }
       var ex = null;

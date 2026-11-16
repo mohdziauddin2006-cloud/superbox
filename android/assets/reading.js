@@ -66,9 +66,9 @@
   }
 
   /* ------------------------------------------------------------- transport */
-  async function page(url, ms) {
+  async function page(url, ms, signal) {
     var B = await base();
-    var r = await withTimeout(fetch(B + '/page?url=' + enc(url), { cache: 'no-store' }), ms || 26000);
+    var r = await withTimeout(fetch(B + '/page?url=' + enc(url), { cache: 'no-store', signal: signal }), ms || 26000);
     if (!r.ok) throw new Error('proxy HTTP ' + r.status);
     var body = await withTimeout(r.text(), ms || 26000);
     if (!body || body.indexOf('PROXY_ERROR') === 0 || body.length < 2) {
@@ -76,8 +76,8 @@
     }
     return body;
   }
-  async function api(url, ms) {
-    var body = await page(url, ms);
+  async function api(url, ms, signal) {
+    var body = await page(url, ms, signal);
     try { return JSON.parse(body); } catch (e) { throw new Error('bad response from source'); }
   }
   function imgRef(url) {
@@ -151,7 +151,9 @@
   async function mdTags() {
     if (MD_TAGS) return MD_TAGS;
     var cache = lsGet('sb.read.md.tags', null);
-    if (cache && cache.v && cache.t && Date.now() - cache.t < 7 * 86400000) {
+    /* An empty cached list is a failed fetch, not a valid catalogue. Treating
+       it as a hit hid every genre chip for a week after one bad request. */
+    if (cache && Array.isArray(cache.v) && cache.v.length && cache.t && Date.now() - cache.t < 7 * 86400000) {
       MD_TAGS = cache.v;
       return MD_TAGS;
     }
@@ -167,20 +169,96 @@
   }
 
   /* ---------------------------------------------------------------- state */
+  var LANGUAGES = [
+    { c: 'en', n: 'English' }, { c: 'es', n: 'Spanish' }, { c: 'fr', n: 'French' },
+    { c: 'pt-br', n: 'Portuguese (BR)' }, { c: 'ru', n: 'Russian' }, { c: 'de', n: 'German' },
+    { c: 'it', n: 'Italian' }, { c: 'pl', n: 'Polish' }, { c: 'tr', n: 'Turkish' },
+    { c: 'id', n: 'Indonesian' }, { c: 'vi', n: 'Vietnamese' }, { c: 'th', n: 'Thai' },
+    { c: 'ar', n: 'Arabic' }, { c: 'hi', n: 'Hindi' }, { c: 'ja', n: 'Japanese' },
+    { c: 'ko', n: 'Korean' }, { c: 'zh', n: 'Chinese (Simplified)' }, { c: 'zh-hk', n: 'Chinese (Traditional)' },
+    { c: 'uk', n: 'Ukrainian' }, { c: 'ro', n: 'Romanian' }, { c: 'cs', n: 'Czech' },
+    { c: 'hu', n: 'Hungarian' }, { c: 'nl', n: 'Dutch' }, { c: 'sv', n: 'Swedish' },
+    { c: 'fi', n: 'Finnish' }, { c: 'no', n: 'Norwegian' }, { c: 'da', n: 'Danish' },
+    { c: 'el', n: 'Greek' }, { c: 'he', n: 'Hebrew' }, { c: 'bg', n: 'Bulgarian' },
+    { c: 'ca', n: 'Catalan' }, { c: 'ms', n: 'Malay' }, { c: 'tl', n: 'Filipino' },
+    { c: 'fa', n: 'Persian' }, { c: 'lt', n: 'Lithuanian' }, { c: 'lv', n: 'Latvian' },
+    { c: 'et', n: 'Estonian' }, { c: 'sr', n: 'Serbian' }, { c: 'hr', n: 'Croatian' },
+    { c: 'sk', n: 'Slovak' }, { c: 'sl', n: 'Slovenian' }, { c: 'af', n: 'Afrikaans' },
+    { c: 'bn', n: 'Bengali' }, { c: 'bs', n: 'Bosnian' }
+  ];
+  var MD_TYPES = [
+    { c: '', n: 'All types' }, { c: 'manga', n: 'Manga' },
+    { c: 'manhwa', n: 'Manhwa' }, { c: 'manhua', n: 'Manhua' },
+    { c: 'other', n: 'Other origin' }
+  ];
+  var WT_TYPES = [
+    { c: '', n: 'All formats' }, { c: 'originals', n: 'Originals' }, { c: 'canvas', n: 'Canvas' }
+  ];
+  var MD_TYPE_LANGS = {
+    manga: ['ja'],
+    manhwa: ['ko'],
+    manhua: ['zh', 'zh-hk'],
+    other: ['id', 'th', 'vi', 'es', 'fr', 'de', 'pt-br', 'ru', 'it', 'ar', 'tr', 'pl', 'hi',
+      'uk', 'ro', 'cs', 'hu', 'nl', 'sv', 'fi', 'no', 'da', 'el', 'he', 'bg', 'ca', 'ms', 'tl',
+      'fa', 'lt', 'lv', 'et', 'sr', 'hr', 'sk', 'sl', 'af', 'bn', 'bs']
+  };
+  var WT_LOCALES = {
+    en: 'en', es: 'es', fr: 'fr', 'pt-br': 'pt-br', ru: 'ru', de: 'de', it: 'it',
+    id: 'id', th: 'th', zh: 'zh-hant', 'zh-hk': 'zh-hant', ja: 'ja',
+    ar: 'ar', hi: 'hi', tr: 'tr', vi: 'vi'
+  };
+
+  var savedLang = lsGet('sb.read.lang', 'en');
+  var savedType = lsGet('sb.read.type', '');
+  var savedGenre = lsGet('sb.read.genre', '');
   var state = {
     source: 'md',
     q: '',
-    genre: '',
+    lang: LANGUAGES.some(function (l) { return l.c === savedLang; }) ? savedLang : 'en',
+    type: typeof savedType === 'string' ? savedType : '',
+    genre: typeof savedGenre === 'string' ? savedGenre : '',
     rating: 'teen',
     offset: 0,
     items: [],
     total: 0,
     loading: false,
     more: false,
+    req: 0,
+    ctl: null,
     view: 'browse',
     detail: null,
     wtPage: 1
   };
+  function savePrefs() {
+    lsSet('sb.read.lang', state.lang || 'en');
+    lsSet('sb.read.type', state.type || '');
+    lsSet('sb.read.genre', state.genre || '');
+  }
+  state.type = typeForSource(state.type);
+  function langLabel(code) {
+    var hit = LANGUAGES.filter(function (l) { return l.c === code; })[0];
+    return hit ? hit.n : (code || 'English');
+  }
+  function typeLabel(code) {
+    var hit = MD_TYPES.concat(WT_TYPES).filter(function (t) { return t.c === code; })[0];
+    return hit ? hit.n : '';
+  }
+  function mdTypeOf(orig) {
+    if (orig === 'ja') return 'manga';
+    if (orig === 'ko') return 'manhwa';
+    if (orig === 'zh' || orig === 'zh-hk') return 'manhua';
+    return 'other';
+  }
+  function wtLocale() {
+    return WT_LOCALES[state.lang] || 'en';
+  }
+  function typesForSource() {
+    return state.source === 'md' ? MD_TYPES : WT_TYPES;
+  }
+  function typeForSource(code) {
+    var allowed = state.source === 'md' ? ['', 'manga', 'manhwa', 'manhua', 'other'] : ['', 'originals', 'canvas'];
+    return allowed.indexOf(code) >= 0 ? code : '';
+  }
 
   var WT_GENRES = [
     { s: 'action', n: 'Action' }, { s: 'romance', n: 'Romance' }, { s: 'fantasy', n: 'Fantasy' },
@@ -260,10 +338,18 @@
         return (t.attributes && t.attributes.name && t.attributes.name.en) || '';
       }).filter(Boolean),
       author: author,
+      orig: a.originalLanguage || '',
       rating: a.contentRating || ''
     };
   }
   async function mdLoad(append) {
+    var req = ++state.req;
+    /* Cancel the previous download when filters change quickly. Without this a
+       stale 450 KB payload keeps the tunnel busy and the newest filter waits
+       behind it until its own timeout. */
+    if (state.ctl) { try { state.ctl.abort(); } catch (e) {} }
+    var ctl = new AbortController();
+    state.ctl = ctl;
     if (!append) { state.offset = 0; state.items = []; }
     state.loading = true;
     state.more = false;
@@ -271,6 +357,7 @@
     var tagId = '';
     if (state.genre) {
       var tags = await mdTags();
+      if (req !== state.req) return;
       var hit = tags.filter(function (t) { return t.n.toLowerCase() === state.genre.toLowerCase(); })[0];
       tagId = hit ? hit.id : '';
     }
@@ -280,38 +367,48 @@
       ['includes[]', 'cover_art'],
       ['includes[]', 'author'],
       ['hasAvailableChapters', 'true'],
-      ['availableTranslatedLanguage[]', 'en']
+      ['availableTranslatedLanguage[]', state.lang || 'en']
     ];
     if (state.q) { pairs.push(['title', state.q]); pairs.push(['order[relevance]', 'desc']); }
     else pairs.push(['order[followedCount]', 'desc']);
     if (tagId) pairs.push(['includedTags[]', tagId]);
+    var typeLangs = MD_TYPE_LANGS[state.type];
+    if (typeLangs) typeLangs.forEach(function (l) { pairs.push(['originalLanguage[]', l]); });
     ratingPairs().forEach(function (r) { pairs.push(['contentRating[]', r]); });
     try {
       var j = null;
       /* MangaDex rate-limits bursts; one quiet retry keeps the shelf full. */
       for (var attempt = 0; attempt < 2; attempt++) {
         try {
-          j = await api('https://api.mangadex.org/manga?' + qs(pairs));
+          j = await api('https://api.mangadex.org/manga?' + qs(pairs), 40000, ctl.signal);
           break;
         } catch (err) {
           if (attempt === 1) throw err;
           await new Promise(function (r) { setTimeout(r, 1400); });
         }
       }
-      var list = (j.data || []).map(mdCard).filter(ratingAllowed);
+      if (req !== state.req) return;
+      var list = (j.data || []).map(mdCard).filter(function (it) {
+        if (!ratingAllowed(it)) return false;
+        return !state.type || mdTypeOf(it.orig) === state.type;
+      });
       state.items = append ? state.items.concat(list) : list;
       state.offset += (j.data || []).length;
       state.total = Number(j.total) || state.items.length;
       state.more = state.offset < state.total && (j.data || []).length > 0;
     } catch (e) {
+      if (req !== state.req) return;
       if (!append) state.items = [];
+      state.total = 0;
+      state.more = false;
+      if (e && e.name === 'AbortError') return;
       toast(e.message || 'MangaDex is unavailable');
     }
     state.loading = false;
     paintBody();
     if (!append) {
       mdCoverBase().then(function () {
-        if (state.source === 'md' && state.view === 'browse' && root) paintBody();
+        if (req === state.req && state.source === 'md' && state.view === 'browse' && root) paintBody();
       });
     }
   }
@@ -348,11 +445,11 @@
     function readable(j) {
       return mapAll(j).filter(function (c) { return c.pages > 0; });
     }
-    /* English first. A title whose EN releases are all official links
-       (externalUrl, pages 0) must fall back to every language, and finally
-       to the unfiltered list, otherwise its detail page shows a blank
-       chapter box even though MangaDex returned chapters. */
-    return feed('en').then(function (j) {
+    /* The reader's language wins. A title whose releases in that language are
+       all official links (externalUrl, pages 0) falls back to every language,
+       and finally to the unfiltered list, otherwise its detail page shows a
+       blank chapter box even though MangaDex returned chapters. */
+    return feed(state.lang || 'en').then(function (j) {
       var list = readable(j);
       if (!append && !offset && !list.length) {
         return feed('').then(function (j2) {
@@ -404,21 +501,33 @@
     return out;
   }
   function wtBrowseUrl() {
-    if (state.q) return 'https://www.webtoons.com/en/search?keyword=' + enc(state.q);
-    if (state.genre) return 'https://www.webtoons.com/en/genres/' + state.genre + '?sortOrder=UPDATE';
-    return 'https://www.webtoons.com/en/originals?sortOrder=UPDATE';
+    var loc = wtLocale();
+    if (state.q) return 'https://www.webtoons.com/' + loc + '/search?keyword=' + enc(state.q);
+    if (state.genre) return 'https://www.webtoons.com/' + loc + '/genres/' + state.genre + '?sortOrder=UPDATE';
+    if (state.type === 'canvas') return 'https://www.webtoons.com/' + loc + '/canvas?sortOrder=UPDATE';
+    return 'https://www.webtoons.com/' + loc + '/originals?sortOrder=UPDATE';
   }
   async function wtLoad() {
+    var req = ++state.req;
+    if (state.ctl) { try { state.ctl.abort(); } catch (e) {} }
+    var ctl = new AbortController();
+    state.ctl = ctl;
     state.loading = true;
     state.more = false;
     paintBody();
+    if (state.lang !== 'en' && !WT_LOCALES[state.lang]) {
+      toast('WEBTOON has no ' + langLabel(state.lang) + ' catalogue; showing English titles.');
+    }
     try {
-      var html = await page(wtBrowseUrl(), 28000);
+      var html = await page(wtBrowseUrl(), 28000, ctl.signal);
+      if (req !== state.req) return;
       var list = parseWtCards(html).filter(ratingAllowed).slice(0, 30);
       state.items = list;
       state.total = list.length;
       state.more = false;
     } catch (e) {
+      if (req !== state.req) return;
+      if (e && e.name === 'AbortError') return;
       state.items = [];
       toast('WEBTOON is unavailable');
     }
@@ -552,6 +661,12 @@
       '.rd-source button{border:0;background:transparent;color:#9aa0aa;font-weight:700;font-size:13px;padding:10px 18px;border-radius:10px;cursor:pointer;transition:.16s}',
       '.rd-source button.on{background:#ffc105;color:#101010}',
       '.rd-tools{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:0 0 14px}',
+      '.rd-filters{display:flex;gap:9px;flex-wrap:wrap;align-items:center;margin:0 0 15px}',
+      '.rd-filters label{display:flex;align-items:center;gap:8px;background:#121419;border:1px solid #252a33;border-radius:12px;padding:7px 10px;font-size:11px;font-weight:700;color:#8f96a2;letter-spacing:.03em;text-transform:uppercase}',
+      '.rd-filters select{background:transparent;border:0;color:#eceef2;font-size:12.5px;font-weight:600;outline:none;max-width:190px;cursor:pointer}',
+      '.rd-filters select option{background:#121419;color:#eceef2}',
+      '.rd-filters .rd-btn{padding:9px 12px;font-size:11.5px}',
+      '.rd-fnote{color:#7e8490;font-size:11.5px;margin-left:auto}',
       '.rd-search{flex:1 1 320px;display:flex;gap:8px;min-width:240px}',
       '.rd-search input{flex:1;background:#121419;border:1px solid #252a33;color:#eceef2;border-radius:12px;padding:12px 15px;font-size:14px;outline:none;min-width:0}',
       '.rd-search input:focus{border-color:#ffc105;box-shadow:0 0 0 3px rgba(255,193,5,.12)}',
@@ -643,12 +758,17 @@
       '.rd-toast{position:fixed;left:50%;bottom:28px;transform:translate(-50%,14px);z-index:200;background:#1a1e25;border:1px solid #333947;color:#f0f2f5;padding:11px 17px;border-radius:11px;font-size:12.5px;opacity:0;pointer-events:none;transition:.22s;max-width:88vw;text-align:center}',
       '.rd-toast.on{opacity:1;transform:translate(-50%,0)}',
       'body.rd-lock{overflow:hidden!important}',
-      '@media(max-width:720px){.rd-shell{padding:14px 13px 92px}.rd-hero{gap:10px;margin-bottom:14px}.rd-hero p{font-size:12.5px}.rd-grid{grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px}.rd-cover{border-radius:10px}.rd-card b{font-size:12px}.rd-card span{font-size:10.5px}.rd-source{width:100%}.rd-source button{flex:1;padding:9px 8px;font-size:12px}.rd-chips{margin-bottom:16px;flex-wrap:nowrap;overflow-x:auto;padding-bottom:4px}.rd-detail{padding:2px 0 20px}.rd-dcover{flex:0 0 128px;max-width:128px}.rd-dinfo h1{font-size:25px}.rd-desc{max-height:120px}.rd-chap .g{display:none}.rd-chap .d{flex-basis:70px}.rd-chap .n{flex-basis:62px}.rd-rpages{display:none}.rd-rtitle b{font-size:12.5px}.rd-rbar{gap:7px;padding-left:9px;padding-right:9px}.rd-rbar button{min-width:34px;height:34px;padding:0 9px;font-size:15px}}'
+      '@media(max-width:720px){.rd-shell{padding:14px 13px 92px}.rd-hero{gap:10px;margin-bottom:14px}.rd-hero p{font-size:12.5px}.rd-filters{gap:7px}.rd-filters label{flex:1 1 44%;min-width:0;padding:7px 9px}.rd-filters select{max-width:100%;width:100%}.rd-filters .rd-btn{flex:1 1 100%}.rd-fnote{display:none}.rd-grid{grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px}.rd-cover{border-radius:10px}.rd-card b{font-size:12px}.rd-card span{font-size:10.5px}.rd-source{width:100%}.rd-source button{flex:1;padding:9px 8px;font-size:12px}.rd-chips{margin-bottom:16px;flex-wrap:nowrap;overflow-x:auto;padding-bottom:4px}.rd-detail{padding:2px 0 20px}.rd-dcover{flex:0 0 128px;max-width:128px}.rd-dinfo h1{font-size:25px}.rd-desc{max-height:120px}.rd-chap .g{display:none}.rd-chap .d{flex-basis:70px}.rd-chap .n{flex-basis:62px}.rd-rpages{display:none}.rd-rtitle b{font-size:12.5px}.rd-rbar{gap:7px;padding-left:9px;padding-right:9px}.rd-rbar button{min-width:34px;height:34px;padding:0 9px;font-size:15px}}'
     ].join('\n');
     document.head.appendChild(s);
   }
 
   /* ----------------------------------------------------------------- paint */
+  function optionHtml(list, value) {
+    return list.map(function (o) {
+      return '<option value="' + esc(o.c) + '"' + (o.c === value ? ' selected' : '') + '>' + esc(o.n) + '</option>';
+    }).join('');
+  }
   function shellHtml() {
     return '<div class="rd-shell">' +
       '<div class="rd-hero"><div><h1>Reading <em>room</em></h1>' +
@@ -666,6 +786,14 @@
       '<button data-rd-rating="teen" class="' + (state.rating === 'teen' ? 'on' : '') + '">Teen</button>' +
       '<button data-rd-rating="mature" class="' + (state.rating === 'mature' ? 'on' : '') + '">18+</button>' +
       '</div></div>' +
+      '<div class="rd-filters">' +
+      '<label>Language<select id="rdLang" aria-label="Reading language">' + optionHtml(LANGUAGES, state.lang) + '</select></label>' +
+      '<label>' + (state.source === 'md' ? 'Type' : 'Format') + '<select id="rdType" aria-label="Title type">' + optionHtml(typesForSource(), state.type) + '</select></label>' +
+      '<button type="button" class="rd-btn ghost" id="rdReset">Reset filters</button>' +
+      '<span class="rd-fnote">' + (state.source === 'md'
+        ? 'Showing titles with ' + esc(langLabel(state.lang)) + ' chapters'
+        : 'WEBTOON catalogue: ' + esc(WT_LOCALES[state.lang] ? langLabel(state.lang) : 'English')) + '</span>' +
+      '</div>' +
       '<div class="rd-chips" id="rdChips"></div>' +
       '<div id="rdBody"></div></div>';
   }
@@ -718,15 +846,24 @@
     if (state.view === 'detail') { paintDetail(body); return; }
     var head = historyRow();
     if (state.loading && !state.items.length) {
-      body.innerHTML = head + '<div class="rd-sec"><h2>' + (state.source === 'md' ? 'MangaDex catalogue' : 'WEBTOON originals') + '</h2><span class="muted">Loading</span></div><div class="rd-grid">' + skeletonHtml(12) + '</div>';
+      body.innerHTML = head + '<div class="rd-sec"><h2>' + (state.source === 'md' ? 'MangaDex catalogue' : 'WEBTOON originals') + '</h2><span class="muted">Loading · ' + esc(langLabel(state.lang)) + '</span></div><div class="rd-grid">' + skeletonHtml(12) + '</div>';
       return;
     }
     if (!state.items.length) {
-      body.innerHTML = head + '<div class="rd-empty">' + (state.q ? 'Nothing matched that search.' : 'No titles available right now.') + '<br><span style="font-size:12px;color:#6f7681">Try another genre or refresh the section.</span></div>';
+      var filtered = !!(state.q || state.genre || state.type || state.lang !== 'en');
+      body.innerHTML = head + '<div class="rd-empty">' + (state.q
+        ? 'Nothing matched that search in ' + esc(langLabel(state.lang)) + '.'
+        : 'No ' + esc(langLabel(state.lang)) + ' titles for this filter yet.') +
+        '<br><span style="font-size:12px;color:#6f7681">Try another language, type or genre.</span>' +
+        (filtered ? '<div class="rd-more"><button class="rd-btn" type="button" data-rd-reset="1">Reset filters</button></div>' : '') +
+        '</div>';
       return;
     }
+    var heading = state.q ? 'Results for “' + esc(state.q) + '”' : (state.source === 'md'
+      ? ['Popular on MangaDex', state.type ? typeLabel(state.type) : '', esc(state.genre || ''), state.lang !== 'en' ? langLabel(state.lang) : ''].filter(Boolean).join(' · ')
+      : ['WEBTOON', state.type === 'canvas' ? 'Canvas' : 'Originals', esc(state.genre || ''), WT_LOCALES[state.lang] ? langLabel(state.lang) : 'English'].filter(Boolean).join(' · '));
     body.innerHTML = head +
-      '<div class="rd-sec"><h2>' + (state.q ? 'Results for “' + esc(state.q) + '”' : (state.source === 'md' ? 'Popular on MangaDex' : (state.genre ? 'WEBTOON · ' + esc(state.genre) : 'WEBTOON originals'))) + '</h2>' +
+      '<div class="rd-sec"><h2>' + heading + '</h2>' +
       '<span class="muted">' + (state.total ? state.total + ' titles' : state.items.length + ' titles') + '</span></div>' +
       '<div class="rd-grid">' + state.items.map(cardHtml).join('') + '</div>' +
       (state.loading ? '<div class="rd-loading"><span class="rd-spin"></span>Loading more</div>' : '') +
@@ -812,7 +949,7 @@
         var done = prog && prog.chapterId === c.id;
         return '<button class="rd-chap" type="button" data-rd-chap="' + esc(c.id) + '">' +
           '<span class="n">' + esc(label) + '</span><span class="t">' + esc(c.title || 'Chapter ' + c.chapter) + '</span>' +
-          '<span class="g">' + esc(c.group || '') + '</span><span class="d">' + esc(fmtDate(c.date)) + '</span>' +
+          '<span class="g">' + esc((c.group ? c.group + ' · ' : '') + String(c.lang || 'en').toUpperCase()) + '</span><span class="d">' + esc(fmtDate(c.date)) + '</span>' +
           (done ? '<span class="done">✓</span>' : '') + '</button>';
       }).join('') + '</div>' +
         (list.length > 400 ? '<div class="rd-loading">Showing the newest 400. Use the filter to find older chapters.</div>' : '') +
@@ -1129,6 +1266,18 @@
 
   function bind() {
     if (!root) return;
+    function reload() {
+      if (state.source === 'md') mdLoad(false); else wtLoad();
+    }
+    function resetFilters() {
+      state.q = '';
+      state.genre = '';
+      state.type = '';
+      state.lang = 'en';
+      savePrefs();
+      paint();
+      reload();
+    }
     $$('[data-rd-source]', root).forEach(function (b) {
       b.onclick = function () {
         var s = b.getAttribute('data-rd-source');
@@ -1138,8 +1287,10 @@
         state.offset = 0;
         state.genre = '';
         state.q = '';
+        state.type = typeForSource(state.type);
+        savePrefs();
         paint();
-        if (s === 'md') mdLoad(false); else wtLoad();
+        reload();
       };
     });
     var form = $('#rdForm', root);
@@ -1147,8 +1298,9 @@
       e.preventDefault();
       state.q = String($('#rdSearch', root).value || '').trim();
       state.genre = '';
+      savePrefs();
       paintChips();
-      if (state.source === 'md') mdLoad(false); else wtLoad();
+      reload();
     };
     var input = $('#rdSearch', root);
     if (input) input.oninput = function () {
@@ -1158,10 +1310,31 @@
       searchTimer = setTimeout(function () {
         state.q = v;
         state.genre = '';
+        savePrefs();
         paintChips();
-        if (state.source === 'md') mdLoad(false); else wtLoad();
+        reload();
       }, 520);
     };
+    var langSel = $('#rdLang', root);
+    if (langSel) langSel.onchange = function () {
+      state.lang = langSel.value || 'en';
+      state.items = [];
+      state.offset = 0;
+      savePrefs();
+      paint();
+      reload();
+    };
+    var typeSel = $('#rdType', root);
+    if (typeSel) typeSel.onchange = function () {
+      state.type = typeForSource(typeSel.value);
+      state.items = [];
+      state.offset = 0;
+      savePrefs();
+      paint();
+      reload();
+    };
+    var reset = $('#rdReset', root);
+    if (reset) reset.onclick = resetFilters;
     $$('[data-rd-rating]', root).forEach(function (b) {
       b.onclick = function () {
         var r = b.getAttribute('data-rd-rating');
@@ -1175,18 +1348,20 @@
         state.items = [];
         state.offset = 0;
         paint();
-        if (state.source === 'md') mdLoad(false); else wtLoad();
+        reload();
       };
     });
     root.onclick = function (e) {
+      if (e.target.closest('[data-rd-reset]')) { resetFilters(); return; }
       var chip = e.target.closest('[data-rd-genre]');
       if (chip) {
         state.genre = chip.getAttribute('data-rd-genre') || '';
         state.q = '';
+        savePrefs();
         paintChips();
         var inp = $('#rdSearch', root);
         if (inp) inp.value = '';
-        if (state.source === 'md') mdLoad(false); else wtLoad();
+        reload();
         return;
       }
       var open = e.target.closest('[data-rd-open]');

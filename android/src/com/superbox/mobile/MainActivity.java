@@ -31,8 +31,10 @@ import androidx.webkit.ProxyController;
 import androidx.webkit.WebViewFeature;
 
 import org.json.JSONArray;
+import org.json.JSONObject;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -53,6 +55,11 @@ public class MainActivity extends Activity {
     private boolean overlayStalled = false;
     private final android.os.Handler overlayHandler = new android.os.Handler(android.os.Looper.getMainLooper());
     private Runnable overlayWatch;
+    /* Hentai.tv: nhplayer mints a short-lived signed r2 URL only after its
+       fingerprint/PoW challenge (~20s). A tiny offscreen WebView runs that
+       challenge and the request interceptor hands the signed URL to the app. */
+    private WebView probeWeb;
+    private Runnable probeWatch;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -241,6 +248,145 @@ public class MainActivity extends Activity {
 
     private void openWebView(final String url, final String title) {
         openWebLadder(new String[]{url}, title);
+    }
+
+    /* ---------------------------------------------------- Hentai.tv probe */
+    /* The r2 CDN rejects a bare mp4 (403) and only honours the `?verify=`
+       token that nhplayer's player.php mints after its anti-bot challenge.
+       Keep the challenge off the main screen: a 1x1 WebView loads player.php,
+       the interceptor catches the signed media request, the body is answered
+       empty (nothing is downloaded twice) and the URL is handed to the app's
+       native player, which streams it through /stream. */
+    private void startHtvProbe(final String playerUrl) {
+        if (playerUrl == null || playerUrl.isEmpty()) return;
+        runOnUiThread(new Runnable() {
+            @Override public void run() {
+                stopHtvProbe();
+                final WebView wv = new WebView(MainActivity.this);
+                WebSettings ws = wv.getSettings();
+                ws.setJavaScriptEnabled(true);
+                ws.setDomStorageEnabled(true);
+                ws.setDatabaseEnabled(true);
+                ws.setMediaPlaybackRequiresUserGesture(false);
+                ws.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+                ws.setJavaScriptCanOpenWindowsAutomatically(false);
+                ws.setSupportMultipleWindows(false);
+                ws.setCacheMode(WebSettings.LOAD_DEFAULT);
+                /* nhplayer's challenge rejects WebView client hints. A normal
+                   Chrome UA (no "; wv", no "Version/4.0") passes it, so the
+                   probe presents one while keeping the real engine underneath. */
+                try {
+                    String ua = ws.getUserAgentString();
+                    if (ua != null) {
+                        ua = ua.replace("; wv", "").replace("Version/4.0 ", "");
+                        ws.setUserAgentString(ua);
+                    }
+                } catch (Exception ignored) {
+                }
+                CookieManager.getInstance().setAcceptCookie(true);
+                CookieManager.getInstance().setAcceptThirdPartyCookies(wv, true);
+                wv.setWebViewClient(new WebViewClient() {
+                    @Override
+                    public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+                        try {
+                            Uri u = request == null ? null : request.getUrl();
+                            if (u != null) {
+                                String h = u.getHost();
+                                String s = u.toString();
+                                if (h != null && (h.equals("1hanime.com") || h.endsWith(".1hanime.com"))
+                                        && s.contains("verify=") && s.matches("(?i).*\\.(mp4|m3u8).*")) {
+                                    deliverSigned(s);
+                                    return new WebResourceResponse("video/mp4", null, 200, "OK",
+                                            Collections.singletonMap("Content-Length", "0"),
+                                            new java.io.ByteArrayInputStream(new byte[0]));
+                                }
+                            }
+                        } catch (Exception ignored) {
+                        }
+                        return null;
+                    }
+                });
+                probeWeb = wv;
+                FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(1, 1);
+                lp.leftMargin = -2;
+                lp.topMargin = -2;
+                wv.setAlpha(0f);
+                root.addView(wv, lp);
+                probeWatch = new Runnable() {
+                    @Override public void run() {
+                        if (probeWeb == wv) stopHtvProbe();
+                    }
+                };
+                overlayHandler.postDelayed(probeWatch, 75000L);
+                /* The player may set <video>.src without issuing the request
+                   (preload=none), so watch the DOM too instead of relying on
+                   the interceptor alone. */
+                final Runnable[] poll = new Runnable[1];
+                poll[0] = new Runnable() {
+                    private int n = 0;
+                    @Override public void run() {
+                        if (probeWeb != wv) return;
+                        if (++n > 70) { stopHtvProbe(); return; }
+                        try {
+                            wv.evaluateJavascript("(function(){try{"
+                                    + "var v=document.querySelector('video');"
+                                    + "if(v&&(v.currentSrc||v.src))return v.currentSrc||v.src;"
+                                    + "if(window.jwplayer){var p=window.jwplayer();"
+                                    + "if(p&&p.getPlaylistItem)return p.getPlaylistItem().file||'';}"
+                                    + "}catch(e){}return '';})()", new ValueCallback<String>() {
+                                @Override public void onReceiveValue(String value) {
+                                    String u = "";
+                                    try {
+                                        Object o = value == null ? null
+                                                : new org.json.JSONTokener(value).nextValue();
+                                        if (o instanceof String) u = (String) o;
+                                    } catch (Exception ignored) {
+                                    }
+                                    if (u != null && u.matches("(?i)^https?://[^\\s]*1hanime[^\\s]*")) {
+                                        deliverSigned(u);
+                                        return;
+                                    }
+                                    if (probeWeb == wv) overlayHandler.postDelayed(poll[0], 1000L);
+                                }
+                            });
+                        } catch (Exception e) {
+                            if (probeWeb == wv) overlayHandler.postDelayed(poll[0], 1000L);
+                        }
+                    }
+                };
+                overlayHandler.postDelayed(poll[0], 1500L);
+                try {
+                    wv.loadUrl(playerUrl);
+                } catch (Exception e) {
+                    stopHtvProbe();
+                }
+            }
+        });
+    }
+
+    private void deliverSigned(final String signed) {
+        runOnUiThread(new Runnable() {
+            @Override public void run() {
+                stopHtvProbe();
+                if (web == null) return;
+                String js = "(function(){try{if(window.__SB_HTV_SIGNED)window.__SB_HTV_SIGNED("
+                        + JSONObject.quote(signed) + ");}catch(e){}})()";
+                try { web.evaluateJavascript(js, null); } catch (Exception ignored) {}
+            }
+        });
+    }
+
+    private void stopHtvProbe() {
+        if (probeWatch != null) {
+            try { overlayHandler.removeCallbacks(probeWatch); } catch (Exception ignored) {}
+            probeWatch = null;
+        }
+        if (probeWeb != null) {
+            try { root.removeView(probeWeb); } catch (Exception ignored) {}
+            try { probeWeb.stopLoading(); } catch (Exception ignored) {}
+            try { probeWeb.destroy(); } catch (Exception ignored) {}
+            probeWeb = null;
+        }
     }
 
     /* A provider shell is only a means to a stream. When one answers with a
@@ -543,6 +689,7 @@ public class MainActivity extends Activity {
     protected void onDestroy() {
         if (server != null) server.stop();
         if (vpn != null) vpn.stop();
+        stopHtvProbe();
         closeWebView();
         if (web != null) {
             web.loadUrl("about:blank");
@@ -627,6 +774,20 @@ public class MainActivity extends Activity {
             }
             if (list.isEmpty()) return;
             MainActivity.this.openWebLadder(list.toArray(new String[list.size()]), title);
+        }
+
+        /* Start the offscreen nhplayer challenge for a Hentai.tv title. The
+           signed URL comes back through window.__SB_HTV_SIGNED. */
+        @JavascriptInterface
+        public void htvProbe(final String playerUrl) {
+            startHtvProbe(playerUrl);
+        }
+
+        @JavascriptInterface
+        public void htvCancel() {
+            runOnUiThread(new Runnable() {
+                @Override public void run() { stopHtvProbe(); }
+            });
         }
 
         @JavascriptInterface

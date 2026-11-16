@@ -22,6 +22,7 @@ console.log('TARGET:', page.title, page.url);
 const ws = new WebSocket(page.webSocketDebuggerUrl);
 let id = 0;
 const pending = new Map();
+const consoleLogs = [];
 function call(method, params = {}) {
   return new Promise((resolve, reject) => {
     const mid = ++id;
@@ -36,8 +37,13 @@ ws.addEventListener('message', (ev) => {
     pending.delete(msg.id);
     msg.error ? reject(new Error(JSON.stringify(msg.error))) : resolve(msg.result);
   }
+  if (msg.method === 'Runtime.consoleAPICalled' && (msg.params.type === 'error' || msg.params.type === 'warning')) {
+    const text = (msg.params.args || []).map((a) => a.value !== undefined ? a.value : (a.description || '')).join(' ');
+    consoleLogs.push(text);
+  }
 });
 await new Promise((res, rej) => { ws.addEventListener('open', res); ws.addEventListener('error', rej); });
+await call('Runtime.enable');
 
 const evalRes = await call('Runtime.evaluate', {
   expression: expr,
@@ -49,6 +55,7 @@ if (evalRes.exceptionDetails) {
 } else {
   console.log('EVAL:', JSON.stringify(evalRes.result.value ?? evalRes.result.description));
 }
+if (consoleLogs.length) console.log('CONSOLE:', JSON.stringify(consoleLogs.slice(-8)));
 
 if (out) {
   const shot = await call('Page.captureScreenshot', { format: 'png' });

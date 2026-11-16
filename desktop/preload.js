@@ -125,6 +125,17 @@ if (window.top === window) {
           ? { rs: v.readyState, ct: Math.round((v.currentTime || 0) * 100) / 100, paused: !!v.paused, w: v.videoWidth || 0 }
           : null;
         try { window.parent.postMessage({ __zaiMedia: d }, '*'); } catch (e) {}
+        /* nhplayer signs its CDN URL at request time; the signed URL is the
+           only thing the r2 host accepts (the bare mp4 is 403). Hand it to
+           the app so it can stream through the local /raw twin with native
+           controls instead of leaving the whole title inside the ad-laden
+           third-party shell. */
+        if (v) {
+          var src = v.currentSrc || v.src || '';
+          if (src && /(^|\.)1hanime\.com/i.test(src)) {
+            try { window.parent.postMessage({ __zaiSrc: src }, '*'); } catch (e) {}
+          }
+        }
       } catch (e) {}
       if (MR > 600) clearInterval(mr);
     }, 1000);

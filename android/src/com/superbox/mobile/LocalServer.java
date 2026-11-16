@@ -834,30 +834,52 @@ public class LocalServer {
     }
 
     private static String firstMedia(String s) {
+        /* KVS tubes sign each twin as "..._720p.mp4/?v-acctoken=..." - the
+           slash before the query must stay inside the match or the player
+           receives an unsigned URL and every request answers 403. */
+        /* Some CDNs embed the extension inside a longer path: Hentaicity
+           serves ".../1080p,.mp4.urlset/master.m3u8?validfrom=...&hash=...".
+           A plain lazy match stops at ".mp4" and drops the signed playlist
+           path, so a terminal .mp4/.webm followed by a dot is not a match. */
         Pattern p = Pattern.compile(
-                "https?://[^\\s\"'<>\\\\]+?\\.(?:mp4|webm|m3u8)(?:\\?[^\\s\"'<>\\\\]*)?",
+                "https?://[^\\s\"'<>\\\\]+?\\.(?:(?:mp4|webm)(?!\\.)|m3u8)(?:/)?(?:\\?[^\\s\"'<>\\\\]*)?",
                 Pattern.CASE_INSENSITIVE);
         java.util.regex.Matcher m = p.matcher(s);
         String best = null;
         int bestScore = -1;
         while (m.find()) {
             String u = m.group();
-            if (u.contains("pixel") || u.contains("blank") || u.contains("spacer")) continue;
+            String low = u.toLowerCase(Locale.US);
+            if (low.contains("pixel") || low.contains("blank") || low.contains("spacer")) continue;
+            /* KVS tubes (rule34video) advertise a silent, few-second
+               "_preview.mp4" next to the real 360p/480p/720p twins. It must
+               never become the episode. */
+            if (PREVIEW_MEDIA.matcher(low).find()) continue;
             int score = 0;
-            if (u.contains(".m3u8")) score += 3;
-            if (u.contains("master")) score += 2;
-            if (u.contains("1080")) score += 2;
-            if (u.contains("720")) score += 1;
+            if (low.contains(".m3u8")) score += 20;
+            if (low.contains("master")) score += 6;
+            /* Highest advertised resolution wins; KVS order is worst-first. */
+            if (low.contains("1080")) score += 10;
+            else if (low.contains("720")) score += 9;
+            else if (low.contains("480")) score += 3;
+            else if (low.contains("360")) score += 1;
             if (u.length() > 30) score += 1;
             if (score > bestScore) { bestScore = score; best = u; }
         }
         return best;
     }
 
+    private static final Pattern PREVIEW_MEDIA =
+            Pattern.compile("(?:^|[/_.-])preview(?:[/_.-]|\\.(?:mp4|webm|m3u8))", Pattern.CASE_INSENSITIVE);
+
     private static JSONObject mediaJson(String media, String page) {
         JSONObject r = new JSONObject();
         try {
-            boolean hls = media.toLowerCase(Locale.US).contains(".m3u8");
+            String low = media.toLowerCase(Locale.US);
+            /* Hentaicity serves its master playlist from hls.hentaicity.com
+               under /_hls/... with a cosmetic ".mp4" tail; the body is an
+               Apple HLS manifest, so the player must load it through hls.js. */
+            boolean hls = low.contains(".m3u8") || low.contains("/_hls/");
             r.put("ok", true);
             r.put("type", hls ? "hls" : "direct");
             r.put("file", media);
@@ -1006,6 +1028,7 @@ public class LocalServer {
             c = open(url, ref, range, 10000, 45000);
             int code = c.getResponseCode();
             if (code < 200 || code >= 400) {
+                Log.w(TAG, "passthrough HTTP " + code + " route=" + routeName(url));
                 send(out, 502, "text/plain", bytes("stream unavailable"), null);
                 return;
             }
@@ -1062,7 +1085,10 @@ public class LocalServer {
     private Meta getMeta(String url, String ref) {
         synchronized (metaCache) {
             Meta m = metaCache.get(url);
-            if (m != null && System.currentTimeMillis() - m.at < 10 * 60 * 1000L) return m;
+            if (m != null) {
+                long ttl = m.total > 0 ? 10 * 60 * 1000L : 20 * 1000L;
+                if (System.currentTimeMillis() - m.at < ttl) return m;
+            }
         }
         long total = -1;
         String type = "video/mp4";
@@ -1073,6 +1099,9 @@ public class LocalServer {
         try {
             c = open(url, ref, "bytes=0-1", 9000, 12000);
             int code = c.getResponseCode();
+            if (code != 206 && code != 200) {
+                Log.w(TAG, "meta HTTP " + code + " route=" + routeName(url));
+            }
             if (code == 206 || code == 200) {
                 String cr = c.getHeaderField("Content-Range");
                 if (cr != null) {
@@ -1087,7 +1116,8 @@ public class LocalServer {
                 ranges = code == 206 || "bytes".equalsIgnoreCase(c.getHeaderField("Accept-Ranges"));
                 try { c.getInputStream().read(); } catch (Exception ignored) {}
             }
-        } catch (Exception ignored) {
+        } catch (Exception e) {
+            Log.w(TAG, "meta " + routeName(url) + ": " + e);
         } finally {
             if (c != null) c.disconnect();
         }
@@ -1458,13 +1488,23 @@ public class LocalServer {
 
     /* Moviebox's media CDN rejects WARP egress with 427, exactly like the
        desktop build documents. Catalogue, APIs and artwork stay inside the
-       tunnel; only the signed MP4/HLS byte ranges use the direct route. */
+       tunnel; only the signed MP4/HLS byte ranges use the direct route.
+       nhplayer's r2 CDN (1hanime.com) throttles WARP the same way, so its
+       verified media bytes are fetched directly while player.php, the API
+       and artwork stay on the tunnel. */
     private static Proxy routeFor(String url) {
         String h = hostOf(url);
         if (h != null && (h.equals("hakunaymatata.com") || h.endsWith(".hakunaymatata.com"))) {
             return Proxy.NO_PROXY;
         }
+        if (h != null && (h.equals("1hanime.com") || h.endsWith(".1hanime.com"))) {
+            return Proxy.NO_PROXY;
+        }
         return proxy();
+    }
+
+    private static String routeName(String url) {
+        return routeFor(url) == Proxy.NO_PROXY ? "direct" : "warp";
     }
 
     // ---------------------------------------------------------- http helpers

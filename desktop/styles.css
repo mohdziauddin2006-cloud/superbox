@@ -945,11 +945,13 @@ select.picker:focus { border-color: rgba(168, 224, 99, .45); }
 .vpn-kicker { display: block; font-size: 10.5px; letter-spacing: .22em; color: #ffc105; font-weight: 800; margin: 0 0 7px; }
 .vpn-card h2 { margin: 0 0 8px; font-size: 25px; letter-spacing: -.02em; }
 .vpn-card p { margin: 0 0 17px; color: #9ba1ac; font-size: 13px; line-height: 1.55; }
-.vpn-track { height: 4px; border-radius: 999px; background: #23272f; overflow: hidden; margin: 0 0 19px; }
-.vpn-track i { display: block; height: 100%; width: 34%; border-radius: inherit; background: linear-gradient(90deg,#ffc105,#ff8a00); animation: vpnSlide 1.25s ease-in-out infinite; }
-.vpn-gate.on .vpn-track i { width: 100%; animation: none; }
-.vpn-gate.err .vpn-track i { width: 100%; background: #ff5252; animation: none; }
-@keyframes vpnSlide { 0% { transform: translateX(-110%); } 100% { transform: translateX(320%); } }
+.vpn-track { height: 5px; border-radius: 999px; background: #23272f; overflow: hidden; margin: 0 0 19px; }
+.vpn-track i { display: block; height: 100%; width: 4%; border-radius: inherit; background: linear-gradient(90deg,#ffc105,#ff8a00); transition: width .55s cubic-bezier(.22,.8,.24,1); position: relative; overflow: hidden; }
+.vpn-track i::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgba(255,255,255,.42), transparent); animation: vpnShimmer 1.35s linear infinite; }
+.vpn-gate.on .vpn-track i { width: 100%; }
+.vpn-gate.on .vpn-track i::after, .vpn-gate.err .vpn-track i::after { display: none; }
+.vpn-gate.err .vpn-track i { width: 100%; background: #ff5252; }
+@keyframes vpnShimmer { 0% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }
 .vpn-facts { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: #23272f; border: 1px solid #23272f; border-radius: 12px; overflow: hidden; margin: 0 0 18px; }
 .vpn-facts div { background: #121419; padding: 11px 13px; min-width: 0; }
 .vpn-facts span { display: block; color: #7f8590; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; margin: 0 0 3px; }
