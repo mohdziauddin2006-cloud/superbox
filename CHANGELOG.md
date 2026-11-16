@@ -4,6 +4,79 @@ All notable changes to SuperBox are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [1.3.0] — 2026-11-12
+
+The everywhere release: an embedded open-source VPN, Moviebox restored on both
+platforms, all 47 `source.txt` catalogues and a native MangaDex/WEBTOON
+Reading room.
+
+### Added
+
+- Shield VPN: bundled `usque` v4.2.1 (GPL-3.0) speaking Cloudflare WARP over
+  MASQUE, with anonymous registration and a UI gate that stays closed until
+  `warp=true`.
+- 13 region profiles (Global, US, Canada, UK, Australia, India, Germany, Japan,
+  Singapore, Hong Kong, South Korea, France, Brazil), 12 endpoint profiles per
+  region, rotated for redundancy.
+- Desktop VPN transport: hidden `usque l4-http-proxy` on `127.0.0.1:46950`,
+  `undici` proxy agent for Node and `session.setProxy` for Chromium.
+- Android VPN transport: `libusque.so` per ABI, `LocalServer` upstream proxy
+  and `androidx.webkit` `ProxyController` for the WebView.
+- Moviebox Spotlight on desktop and Android: hero, 50-card front page, 16 rows,
+  detail pages, seasons, episodes and audio tracks.
+- Moviebox media proxy with a 2 MB first window, 8 MB follow-ups, 128 KB chunks
+  and 24 parallel range workers; scoped direct split tunnel for the CDN.
+- 47-source directory: 23 movies/TV, 10 anime and 14 manga/manhwa, searchable
+  and grouped, with every URL from `source.txt`.
+- Reading room: MangaDex API catalogue (49,463 titles at verification),
+  WEBTOON catalogue, genre/age filters, cached covers and pages, native readers
+  and an external-chapter fallback card.
+- Reading filters: choose a language (English first), a format (Manga, Manhwa,
+  Manhua, Other) and a genre; requests are sequenced and aborted so rapid
+  changes can never paint a stale result.
+- IPv6-first Shield transport on both platforms: `2606:4700:103::2` is tried
+  first (10 s budget), then the IPv4 ladder.
+- Hentai.tv signed-URL probe: an offscreen iframe on desktop and a 1×1 WebView
+  on Android capture the short-lived `?verify=` URL minted by nhplayer.
+- Rule34 quality ladder parsing (`_360`, `_480p`, `_720p`, …) with the signed
+  `?v-acctoken` preserved, and de-duplicated rows.
+- Universal Android APK with all four ABIs, bundled VPN per ABI and
+  `versionCode=4`.
+- `docs/RELEASE_NOTES_v1.3.0.md` and a rewritten `docs/VERIFY.md`.
+
+### Changed
+
+- Auto-region switching is preference-only while the tunnel is healthy; a
+  healthy tunnel is no longer torn down mid-session.
+- VPN stop/restart waits for port release (desktop 2.6 s, Android 1.2 s plus
+  900 ms between endpoint attempts).
+- MangaDex covers are rewritten to the working at-home host, learned once and
+  cached in `localStorage`.
+- MangaDex catalogue requests retry once after 1.4 s to survive rate limits.
+
+### Fixed
+
+- Android Moviebox media path: signed `&t=` URLs are used unescaped, and
+  `/raw` returns real `206 video/mp4` windows instead of anti-bot HTML.
+- Desktop Moviebox retry bookkeeping (`session.tried[q.id]`) and stale play
+  payload handling.
+- Android image cache rejects anti-bot HTML with magic-byte sniffing instead of
+  painting a broken image.
+- External-only MangaDex chapters no longer open a blank reader.
+- Rule34 rows no longer repeat titles or show model/category tiles, and play
+  the highest signed rendition instead of the 360p default.
+- Hentaicity 3D / CG and Futanari rows use the final `videos/straight/*` URLs
+  instead of the `301` redirect targets.
+- Hentaicity playback on Android: the signed
+  `.../.mp4.urlset/master.m3u8?hash=` URL is preserved end to end and loaded
+  through hls.js instead of being truncated to `.mp4`.
+- Android Home / Movies / Series / Anime shelves tag every TMDB and archive
+  descriptor with its resolver, so no header row is left empty.
+- Hentai.tv playback on Android: the bare r2 mp4 is replaced by the signed
+  `?verify=` URL captured from nhplayer and played directly in the WebView
+  (the r2 CDN rejects Java's TLS fingerprint).
+- Hentai.tv page-two row no longer duplicates the newest row.
+
 ## [1.2.0] — 2026-11-09
 
 The hardening release: faster cold starts, self-healing artwork, a universal

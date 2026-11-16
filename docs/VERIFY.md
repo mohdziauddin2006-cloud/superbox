@@ -1,21 +1,21 @@
-# Release verification — v1.2.0
+# Release verification — v1.3.0
 
 Everything below was checked on the artifacts in `dist/`. The Windows Setup was
-installed silently and launched headless; the APK was installed on the
-`WatchAnyBoxAVD` Android 14 emulator and driven through Chrome DevTools.
+installed and launched headless; the APK was installed on the `WatchAnyBoxAVD`
+Android 14 emulator and driven through its loopback BFF and UI.
 
 ## Checksums
 
 | Artifact | Size | SHA-256 |
 |---|---:|---|
-| `SuperBox-Setup-1.2.0.exe` | 121,464,282 B | `95FA0DB168BC53E2AA29F1241179A7BE691CACAD4D04A199E6CA045230B77209` |
-| `SuperBox-1.2.0.apk` | 227,029,978 B | `43E4E24C583B558EA53841D7FC7F2FD309E0F9AD85A40875C87CDA0338CE0D49` |
+| `SuperBox-Setup-1.3.0.exe` | 125,591,521 B | `A21067CCC181088F62A03538FD3E4840B07B8BCDD6EECF191D4E2428875AD778` |
+| `SuperBox-1.3.0.apk` | 277,497,277 B | `1BB79E6230A9EEDB8DD54E6CFA5A9E29F1D85EAB764032AB607EADDA0E4C4D6B` |
 
 Verify on Windows:
 
 ```powershell
-Get-FileHash .\SuperBox-Setup-1.2.0.exe -Algorithm SHA256
-Get-FileHash .\SuperBox-1.2.0.apk -Algorithm SHA256
+Get-FileHash .\SuperBox-Setup-1.3.0.exe -Algorithm SHA256
+Get-FileHash .\SuperBox-1.3.0.apk -Algorithm SHA256
 ```
 
 ## Android signature and package
@@ -26,35 +26,34 @@ Signer #1 certificate SHA-256 digest: 5a59f92f2526dbdd47b679510ac9ec1754aa479330
 ```
 
 ```powershell
-apksigner verify --verbose --print-certs .\SuperBox-1.2.0.apk
-aapt2 dump badging .\SuperBox-1.2.0.apk
+apksigner verify --verbose --print-certs .\SuperBox-1.3.0.apk
+aapt2 dump badging .\SuperBox-1.3.0.apk
 ```
 
 ```
-package: name='com.superbox.mobile' versionCode='3' versionName='1.2.0'
+package: name='com.superbox.mobile' versionCode='4' versionName='1.3.0'
 sdkVersion:'23'
 targetSdkVersion:'34'
 application-label:'SuperBox'
 native-code: 'arm64-v8a' 'armeabi-v7a' 'x86' 'x86_64'
 ```
 
-Signature schemes v1, v2 and v3 all verify.
+Signature schemes v1, v2 and v3 all verify. Package inspection:
 
-Package inspection:
-
-- 48 uncompressed `lib/<abi>/*.so` entries across the four ABIs;
-- `assets/ffmpeg/ffmpeg-kit-full-gpl-6.0.LTS.aar` (73,596,363 B) bundled as an
-  on-device decoder archive;
+- four ABIs with uncompressed native libraries, including the bundled
+  `libusque.so` VPN engine per ABI;
+- `assets/ffmpeg/ffmpeg-kit-full-gpl-6.0.LTS.aar` bundled as an on-device
+  decoder archive;
 - one `classes.dex`;
-- no plain `.js` entries — only the six AES-GCM `.js.enc` assets;
+- no plain `.js` entries — only the AES-GCM `.js.enc` assets;
 - R8 shrinking/optimization applied.
 
 ## Windows installer
 
 ```
 ProductName    : SuperBox
-ProductVersion : 1.2.0.0
-FileVersion    : 1.2.0
+ProductVersion : 1.3.0.0
+FileVersion    : 1.3.0
 Install path   : C:\Program Files\SuperBox
 ```
 
@@ -65,31 +64,39 @@ process level, and queried over CDP on port 9333.
 
 | Area | Result |
 |---|---|
-| Windows install | silent Setup install completed; installed app reports 1.2.0 |
-| Windows cold paint | 276 ms to first cards, 104 cards rendered |
-| Windows lazy rows | first four eager, remaining rows hydrate on scroll |
-| Windows playback | Rule34, MMS/JAV, AWS MP4, Hentai and AI lanes started muted; all torn down ≤1 s |
+| Windows install | Setup installed successfully; installed app reports 1.3.0 |
+| Windows Shield | gate hidden, `warp=ON`, egress `IN` |
+| Windows Moviebox | Spotlight hero, 50 cards, 16 rows; detail with episodes |
+| Windows playback | `readyState=4`, 1152×480, muted, player closed cleanly |
+| Windows Reading | 24 cards, 24 covers, 32 chapters, page rendered at 768×1024 |
+| Windows WEBTOON | 30 cards, 30 covers, 10 chapters |
+| Windows sources | 47 cards in 3 groups; iframe opens `netmirror.plus` |
 | Android install | `adb install -r` succeeded on the Android 14 emulator |
-| Android cold start | launched in 4.5 s, home catalogue and hero rendered |
-| Android artwork | initials placeholder first, then all visible posters resolved as the disk cache warmed |
-| Android MP4 | native player advanced 0 → 1.0 s → 2.5 s, then stopped |
-| Android HLS | native player advanced 0 → 0.9 s → 2.8 s, then stopped |
+| Android Shield | bundled usque starts, `ready egress=IN warp=true`, IPv6 anchor `2606:4700:103::2`; gate blocks the UI until then |
+| Android Moviebox | `Daayra [Hindi]`, 853×480 decoder, 8,373 s, playing through `/stream` with the CDN on the direct split |
+| Android Hentai.tv | offscreen challenge captured the signed r2 URL in ~4 s; 1,167 s, playing |
+| Android Hentaicity | signed `.mp4.urlset/master.m3u8` playlist preserved; 1,416 s, playing through hls.js |
+| Android Reading | 24 cards, 32 chapters, 768 px reader pages, 24 images loaded |
+| Android sources | 47 cards, 3 groups, 4 filter chips |
 | Android audio | emulator launched with `-no-audio`; every probe stayed silent |
-| Media ceiling | no test stream ran longer than 10 seconds |
+| Media ceiling | no test stream ran longer than 9 seconds, then was force-stopped |
 | APK signature | `apksigner verify` passes v1/v2/v3 |
-| APK contents | four ABIs, 48 native libraries, decoder archive, one dex |
 
-## Known limits
+## Pinned source coverage
 
-- Provider streams depend on host availability, region and network conditions.
-  A source that refuses connections cannot be made playable by the app.
-- Android runtime testing used a single emulator profile; physical-device
-  hardware decoding follows the installed WebView.
-- First artwork loads can still take several seconds while the disk cache warms;
-  the retry chain fills them in automatically.
-- Live HLS startup is segment-bound and depends on the playlist host.
-- Provider subtitle URLs can expire or reject requests; subtitle support varies
-  by title.
-- The Android build is a pure-Java WebView shell, not a native ExoPlayer app.
-- The Windows build targets x64. Windows 11 on ARM runs it through x64
-  emulation.
+`source.txt` contains 47 unique URLs after normalisation. The Sources hub has
+47 cards: 23 movies/TV, 10 anime and 14 manga/manhwa. A normalised diff against
+`source.txt` reports no missing and no extra entries.
+
+## Known production limits
+
+- **WARP is anycast.** A requested region selects an endpoint pool; it cannot
+  guarantee the egress country. The status object always reports the actual
+  egress.
+- **Moviebox media CDN blocks WARP** with `427 Forbidden`. Catalogue, API and
+  artwork stay behind the tunnel; media bytes use the scoped direct split.
+- **Third-party availability:** Comick's API was down, ManhuaUS serves a JS
+  verification page, and Asura relies on unscraped Astro data. Those sources
+  open in the VPN-routed in-app browser.
+- **External chapters:** MangaDex chapters that only expose an `externalUrl`
+  show the publisher link instead of inventing pages.
