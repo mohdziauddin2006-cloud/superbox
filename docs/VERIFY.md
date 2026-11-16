@@ -1,8 +1,8 @@
 # Release verification — v1.3.0
 
 Everything below was checked on the artifacts in `dist/`. The Windows Setup was
-installed and launched headless; the APK was installed on the `WatchAnyBoxAVD`
-Android 14 emulator and driven through its loopback BFF and UI.
+installed and launched headless; the APK was installed on a clean Android 14
+emulator and driven through its loopback BFF and UI.
 
 ## Checksums
 
