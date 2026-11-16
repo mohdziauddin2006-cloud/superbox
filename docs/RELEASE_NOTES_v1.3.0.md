@@ -77,6 +77,9 @@ entries.
   …), keeping the signed `?v-acctoken`; the highest rendition is played.
 - Hentaicity rows point at the final `videos/straight/*-popular.html` URLs
   because `/search/video/3d` and `/search/video/futanari` answer `301`.
+- Hentaicity playback preserves the signed
+  `.../.mp4.urlset/master.m3u8?validfrom=…&hash=…` playlist end to end and
+  loads it through hls.js; the extractor no longer truncates it to `.mp4`.
 - Hentai.tv has non-repeating rows (newest plus page two) and plays through the
   nhplayer signed-URL probe (offscreen iframe on desktop, 1×1 WebView on
   Android). The ad-laden nhplayer shell remains the fallback.
