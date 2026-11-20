@@ -4,6 +4,36 @@ All notable changes to SuperBox are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- Native Reading adapters for all 13 remaining `source.txt` providers
+  (Asura, Flame, Vortex, HiveToons, Comix, ManhuaUS, NeloManga, Tappytoon,
+  Tapas, AllManga, MangaFire, ToonSutra, Hentai20), with in-app catalogues,
+  detail pages, chapter lists and readers. No provider website is opened.
+- Interactive VPN panel on desktop and Android: live state, country/city,
+  real-time ping, Auto-Region Routing and a searchable 13-server selector.
+- Tapas catalogue now reads the public JSON catalogue directly, so titles and
+  covers render without a hidden browser.
+
+### Changed
+
+- The Sources hub was removed from both platforms; `/sources` returns Home and
+  no provider domain or "Open on ..." action is exposed in the UI.
+- Reading language filtering is strict: MangaDex feeds request
+  `translatedLanguage[]=<lang>` with `includeExternalUrl=0`, and both the feed
+  and client keep only chapters that have hosted pages in the selected language.
+- Manual VPN OFF switches Node, Chromium and the Android WebView to direct
+  routing instead of leaving requests pointed at a stopped local proxy.
+
+### Fixed
+
+- Dropped TLS sockets no longer terminate the process with
+  `TypeError: terminated`; every outbound fetch has a timeout, retry budget and
+  stream error handler, and a failed request only logs instead of raising the
+  crash dialog.
+
 ## [1.3.0] — 2026-11-12
 
 The everywhere release: an embedded open-source VPN, Moviebox restored on both

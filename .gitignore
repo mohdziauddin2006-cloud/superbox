@@ -9,6 +9,8 @@ android/build/
 android/_backup_assets_*/
 *.blockmap
 *.idsig
+*.exe
+*.apk
 
 # Local dev archive
 _archive/
