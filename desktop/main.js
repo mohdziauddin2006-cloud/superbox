@@ -117,7 +117,28 @@ function showFatal(title, message, err) {
   } catch (e) {}
 }
 
+/* A dropped TLS socket is not a crash. undici reports every reset as
+   `TypeError: terminated` with the real code tucked inside `cause`, and an
+   uncaught one used to pop the modal "SuperBox - Crash" box. Classify the
+   whole family once and treat it as a logged network event. */
+function isTransientNetError(err) {
+  if (!err) return false;
+  var parts = [];
+  try {
+    parts.push(String(err.code || ''), String(err.message || err));
+    if (err.cause) parts.push(String(err.cause.code || ''), String(err.cause.message || err.cause));
+    if (err.errors && err.errors.length) {
+      err.errors.slice(0, 3).forEach(function (e) { parts.push(String((e && (e.code || e.message)) || '')); });
+    }
+  } catch (e) {}
+  return /terminated|UND_ERR|ECONNRESET|ECONNABORTED|EPIPE|ETIMEDOUT|ESOCKETTIMEDOUT|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH|ENOTFOUND|socket hang up|other side closed|client network socket disconnected|premature close|aborted|TLS|SSL|EPROTO|ECONNREFUSED|net::ERR_/i
+    .test(parts.join(' '));
+}
 process.on('uncaughtException', function (err) {
+  if (isTransientNetError(err)) {
+    logLine('WARN', 'Ignored network stream error: ' + String((err && (err.code || err.message)) || err).slice(0, 180));
+    return;
+  }
   if (err && (err.code === 'EPIPE' || err.code === 'ECONNRESET')) {
     logLine('WARN', 'Ignored stream error: ' + err.code);
     return;
@@ -125,6 +146,10 @@ process.on('uncaughtException', function (err) {
   showFatal('Crash', 'The application hit an unrecoverable error.', err);
 });
 process.on('unhandledRejection', function (reason) {
+  if (isTransientNetError(reason)) {
+    logLine('WARN', 'Network request ended early: ' + String((reason && (reason.code || reason.message)) || reason).slice(0, 180));
+    return;
+  }
   logLine('ERROR', 'Unhandled promise rejection', reason);
 });
 
@@ -339,6 +364,29 @@ app.whenReady().then(function () {
   /* Shield first: hidden provisioning/tunnel process, then point the whole
      Chromium session at the local proxy. The renderer gate polls
      /vpn/status and only opens the catalogue once WARP reports warp=on. */
+  const SHIELD_PROXY_RULES = 'http=127.0.0.1:46950;https=127.0.0.1:46950;socks=127.0.0.1:46950';
+  const SHIELD_BYPASS = '127.0.0.1,localhost,::1,*.hakunaymatata.com,*.1hanime.com';
+  let shieldDirect = false;
+  /* Manual OFF must switch Chromium itself, not only the Node dispatcher:
+     otherwise the UI would claim honest direct routing while every <img>,
+     iframe and media request still aimed at a dead proxy port. */
+  vpn.setListener(function (st) {
+    const direct = !!(st && (st.off || st.state === 'off' || st.enabled === false));
+    if (direct === shieldDirect) return;
+    shieldDirect = direct;
+    try {
+      session.defaultSession.setProxy(direct
+        ? { mode: 'direct' }
+        : { proxyRules: SHIELD_PROXY_RULES, proxyBypassRules: SHIELD_BYPASS }
+      ).then(function () {
+        logLine('INFO', direct ? 'Chromium session switched to direct routing' : 'Chromium session routed through SuperBox Shield');
+      }).catch(function (e) {
+        logLine('ERROR', 'session proxy switch failed: ' + String((e && e.message) || e));
+      });
+    } catch (e) {
+      logLine('ERROR', 'session proxy switch setup failed: ' + String((e && e.message) || e));
+    }
+  });
   vpn.start(process.env.SB_VPN_REGION || 'auto').then(function (st) {
     logLine('INFO', 'Shield ready: ' + JSON.stringify(st));
   }).catch(function (e) {
@@ -346,14 +394,14 @@ app.whenReady().then(function () {
   });
   try {
     session.defaultSession.setProxy({
-      proxyRules: 'http=127.0.0.1:46950;https=127.0.0.1:46950;socks=127.0.0.1:46950',
+      proxyRules: SHIELD_PROXY_RULES,
       /* Moviebox's media CDN rejects Cloudflare WARP egress with 427, and
          nhplayer's r2 host throttles the WARP path to a few KB/s while the
          media element waits for the MP4 index. The catalogue, API, artwork,
          player page and every challenge still ride the Shield; only these
          signed media hosts are fetched directly so playback works.
          The player also tries /raw, whose grab() mirrors the Moviebox bypass. */
-      proxyBypassRules: '127.0.0.1,localhost,::1,*.hakunaymatata.com,*.1hanime.com'
+      proxyBypassRules: SHIELD_BYPASS
     }).then(function () {
       logLine('INFO', 'Chromium session routed through SuperBox Shield');
     }).catch(function (e) {

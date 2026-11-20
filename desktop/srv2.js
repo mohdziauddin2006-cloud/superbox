@@ -47,6 +47,9 @@ process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 // srv2.js - SuperBox local proxy + extractor (ports 46901-46903)
 const http = require('http');
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
 const { Readable } = require('stream');
 const { URL } = require('url');
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
@@ -391,6 +394,116 @@ function hgResolve(html, pageUrl) {
   if (!pool.length) return null;
   const ep = pool.filter(function (u) { return /drama-episodes|\/episodes?\//i.test(u); })[0];
   return { type: 'direct', file: ep || pool[0], source: 'huangguodrama' };
+}
+
+/* ---------------------------------------------------------------------------
+   Local image cache. Reading pages, posters and chapter pages are fetched once
+   and stored on disk, so a re-opened chapter paints instantly and works on a
+   flaky tunnel. Only image bytes are cached; the provider Referer still rides
+   every miss so hotlink-protected CDNs behave exactly like the browser. */
+const IMG_CACHE_DIR = process.env.SB_IMG_CACHE ||
+  path.join(process.env.LOCALAPPDATA || os.tmpdir(), 'SuperBox', 'imgcache');
+const IMG_CACHE_MAX_FILES = 1600;
+const IMG_CACHE_MAX_BYTES = 280 * 1024 * 1024;
+let imgCacheReady = false;
+let imgCacheWrites = 0;
+function imgCacheKey(url) {
+  return crypto.createHash('sha1').update(String(url)).digest('hex');
+}
+function imgCacheEnsure() {
+  if (imgCacheReady) return true;
+  try { fs.mkdirSync(IMG_CACHE_DIR, { recursive: true }); imgCacheReady = true; } catch (e) {}
+  return imgCacheReady;
+}
+function imgCacheRead(url) {
+  if (!imgCacheEnsure()) return null;
+  const key = imgCacheKey(url);
+  try {
+    const meta = JSON.parse(fs.readFileSync(path.join(IMG_CACHE_DIR, key + '.json'), 'utf8'));
+    const buf = fs.readFileSync(path.join(IMG_CACHE_DIR, key + '.bin'));
+    if (!buf || buf.length < 64) return null;
+    return { buf: buf, mime: /^image\//i.test(meta.mime || '') ? meta.mime : 'image/jpeg' };
+  } catch (e) { return null; }
+}
+function imgCachePrune() {
+  try {
+    const names = fs.readdirSync(IMG_CACHE_DIR).filter(function (n) { return /\.bin$/i.test(n); });
+    if (names.length <= IMG_CACHE_MAX_FILES) return;
+    const rows = names.map(function (n) {
+      try { const st = fs.statSync(path.join(IMG_CACHE_DIR, n)); return { n: n, t: st.mtimeMs, s: st.size }; }
+      catch (e) { return null; }
+    }).filter(Boolean).sort(function (a, b) { return a.t - b.t; });
+    let total = rows.reduce(function (n, r) { return n + r.s; }, 0);
+    let count = rows.length;
+    for (let i = 0; i < rows.length && (count > IMG_CACHE_MAX_FILES || total > IMG_CACHE_MAX_BYTES); i++) {
+      try {
+        fs.unlinkSync(path.join(IMG_CACHE_DIR, rows[i].n));
+        fs.unlinkSync(path.join(IMG_CACHE_DIR, rows[i].n.replace(/\.bin$/i, '.json')));
+      } catch (e) {}
+      count--; total -= rows[i].s;
+    }
+  } catch (e) {}
+}
+function imgCacheWrite(url, mime, buf) {
+  if (!imgCacheEnsure() || !buf || buf.length < 64) return;
+  const key = imgCacheKey(url);
+  try {
+    const bin = path.join(IMG_CACHE_DIR, key + '.bin');
+    const tmp = bin + '.' + process.pid + '.tmp';
+    fs.writeFileSync(tmp, buf);
+    fs.renameSync(tmp, bin);
+    fs.writeFileSync(path.join(IMG_CACHE_DIR, key + '.json'),
+      JSON.stringify({ mime: mime || 'image/jpeg', size: buf.length, at: Date.now() }));
+    if (++imgCacheWrites % 25 === 0) imgCachePrune();
+  } catch (e) {}
+}
+function reqBody(req, maxBytes, ms) {
+  return new Promise(function (resolve, reject) {
+    var chunks = [], total = 0, done = false;
+    var timer = setTimeout(function () {
+      if (done) return;
+      done = true;
+      try { req.destroy(); } catch (e) {}
+      reject(new Error('request body timeout'));
+    }, ms || 12000);
+    function finish(err, buf) {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      if (err) reject(err); else resolve(buf);
+    }
+    req.on('data', function (c) {
+      if (done) return;
+      total += c.length;
+      if (total > (maxBytes || 1024 * 1024)) {
+        finish(new Error('request body too large'));
+        try { req.destroy(); } catch (e) {}
+        return;
+      }
+      chunks.push(c);
+    });
+    req.on('end', function () { finish(null, Buffer.concat(chunks)); });
+    req.on('error', function (e) { finish(e); });
+  });
+}
+async function bodyBuffer(r, maxBytes, ms) {
+  if (!r || !r.body) return null;
+  let timer = 0;
+  try {
+    const buf = await Promise.race([
+      r.arrayBuffer().then(function (a) { return Buffer.from(a); }),
+      new Promise(function (_z, reject) {
+        timer = setTimeout(function () { reject(new Error('image body timeout')); }, ms || 25000);
+      })
+    ]);
+    if (timer) clearTimeout(timer);
+    if (!buf || !buf.length || buf.length > (maxBytes || 24 * 1024 * 1024)) return null;
+    return buf;
+  } catch (e) {
+    if (timer) clearTimeout(timer);
+    try { if (r.body && r.body.cancel) r.body.cancel().catch(function () {}); } catch (e2) {}
+    return null;
+  }
 }
 
 /* ---------------------------------------------------------------------------
@@ -1966,6 +2079,12 @@ async function r34Feed(tags) {
   return { ok: false, posts: [] };
 }
 
+function sendJSON(res, code, obj) {
+  try {
+    res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+    res.end(JSON.stringify(obj));
+  } catch (e) {}
+}
 function hdr(res){
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Headers', '*');
@@ -1983,11 +2102,19 @@ function cookFor(host) {
    Forbidden, while the same URL plays from the host connection. Keep the
    catalogue/API behind the Shield but fetch only this media host directly.
    Chromium gets the same exception through the session proxy bypass list in
-   main.js, so the direct <video> path and the /raw fallback agree. */
+   main.js, so the direct <video> path and the /raw fallback agree.
+
+   MangaDex's API also refuses WARP egress with "Bot challenge not passed"
+   while the same request succeeds from the host connection. Its catalogue,
+   feed and cover hosts therefore ride the direct agent too. */
 const MEDIA_DIRECT_RE = /(^|\.)hakunaymatata\.com$/i;
+const API_DIRECT_RE = /(^|\.)mangadex\.org$/i;
 let directAgent = null;
 function isMediaDirect(url) {
-  try { return MEDIA_DIRECT_RE.test(new URL(url).hostname); } catch (e) { return false; }
+  try {
+    const h = new URL(url).hostname;
+    return MEDIA_DIRECT_RE.test(h) || API_DIRECT_RE.test(h);
+  } catch (e) { return false; }
 }
 function directFetch(url, init) {
   try {
@@ -1999,10 +2126,59 @@ function directFetch(url, init) {
   }
 }
 
+/* A dropped TLS socket must never escape as an unhandled rejection. undici
+   reports those as `TypeError: terminated`, `UND_ERR_SOCKET`, `ECONNRESET`
+   and friends. Classify them once so every fetch layer can retry quietly. */
+function isTransientNetError(e) {
+  var code = String((e && e.code) || '');
+  var msg = String((e && e.message) || e || '');
+  return /terminated|UND_ERR|ECONNRESET|ECONNABORTED|EPIPE|ETIMEDOUT|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH|ENOTFOUND|socket hang up|other side closed|aborted|TLS|SSL|network|fetch failed/i
+    .test(code + ' ' + msg);
+}
+function netSleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+/* Generic fetch wrapper: bounded retries on a reset socket. The caller's own
+   AbortSignal wins, so an intentional renderer cancel is never retried. */
+async function robustFetch(url, init, retries) {
+  var max = retries == null ? 2 : retries;
+  var last = null;
+  for (var i = 0; i <= max; i++) {
+    try {
+      return await fetch(url, init);
+    } catch (e) {
+      last = e;
+      var sig = init && init.signal;
+      if (sig && sig.aborted) throw e;
+      if (i >= max || !isTransientNetError(e)) throw e;
+      await netSleep(250 + i * 500);
+    }
+  }
+  throw last;
+}
+/* Stream a fetch body to an HTTP response without ever letting a socket
+   reset become an uncaught `error` event on either side. A browser that
+   closes a media seek halfway is completely normal. */
+function pipeBody(r, res) {
+  if (!r || !r.body) { try { res.end(); } catch (e) {} return; }
+  var src = null;
+  try { src = Readable.fromWeb(r.body); } catch (e) { try { res.end(); } catch (e2) {} return; }
+  var dead = false;
+  var kill = function () {
+    if (dead) return;
+    dead = true;
+    try { src.destroy(); } catch (e) {}
+    try { if (r.body && r.body.cancel) r.body.cancel().catch(function () {}); } catch (e) {}
+  };
+  res.on('close', kill);
+  res.on('error', kill);
+  src.on('error', function (e) {
+    try { if (global.__superboxLog) global.__superboxLog('WARN', 'stream closed: ' + String((e && e.message) || e).slice(0, 180)); } catch (e2) {}
+    try { res.destroy(); } catch (e2) {}
+  });
+  try { src.pipe(res); } catch (e) { kill(); try { res.end(); } catch (e2) {} }
+}
+
 async function grab(url, referer, range, ua, ms, externalSignal){
   const budget = ms || 12000;
-  const ctl = new AbortController();
-  const t = setTimeout(() => ctl.abort(), budget);
   /* MangaDex's API turns a browser UA away with a bot-challenge redirect
      ("if this isn't a browser, don't send a browser UA"), which left the
      Reading room empty. Its API wants an honest client identifier; every
@@ -2025,44 +2201,98 @@ async function grab(url, referer, range, ua, ms, externalSignal){
     if (ck) h['Cookie'] = ck;
   } catch (e) {}
   if (range) h.Range = range;
-  let r;
-  try {
-    const doFetch = isMediaDirect(url) ? directFetch : fetch;
-    const sig = externalSignal ? AbortSignal.any([ctl.signal, externalSignal]) : ctl.signal;
-    r = await doFetch(url, { headers: h, redirect: 'follow', signal: sig });
-  } catch (e) { clearTimeout(t); throw e; }
-  clearTimeout(t);
+
+  /* Every attempt gets a FRESH AbortController. Reusing an already-aborted
+     signal was what made the old retry silently fail. Two retries are
+     attempted for socket resets only; a real timeout or caller cancel is
+     reported immediately. */
+  let r = null;
+  const doFetch = isMediaDirect(url) ? directFetch : fetch;
+  try { if (global.__superboxLog) global.__superboxLog('GRAB', (doFetch === directFetch ? 'direct ' : 'proxy ') + String(url).slice(0, 120)); } catch (e) {}
+  async function open() {
+    let lastErr = null;
+    for (let attempt = 0; attempt <= 2; attempt++) {
+      const ctl = new AbortController();
+      const timer = setTimeout(function () { try { ctl.abort(); } catch (e) {} }, budget);
+      try {
+        const sig = externalSignal ? AbortSignal.any([ctl.signal, externalSignal]) : ctl.signal;
+        const resp = await doFetch(url, { headers: h, redirect: 'follow', signal: sig });
+        clearTimeout(timer);
+        try { if (global.__superboxLog) global.__superboxLog('GRAB', 'ok ' + resp.status + ' ' + String(url).slice(0, 100)); } catch (e) {}
+        return resp;
+      } catch (e) {
+        clearTimeout(timer);
+        lastErr = e;
+        try { if (global.__superboxLog) global.__superboxLog('GRAB', 'err ' + String((e && e.message) || e).slice(0, 140) + ' ' + String(url).slice(0, 100)); } catch (e2) {}
+        if (externalSignal && externalSignal.aborted) throw e;
+        if (attempt >= 2 || !isTransientNetError(e)) throw e;
+        try { if (global.__superboxLog) global.__superboxLog('WARN', 'fetch retry ' + (attempt + 1) + '/2: ' + String((e && e.message) || e).slice(0, 140)); } catch (e2) {}
+        await netSleep(300 + attempt * 600);
+      }
+    }
+    throw lastErr || new Error('network error');
+  }
+  r = await open();
+
   /* A server can answer the headers and then stall the body forever. Keep
      every buffered read inside its own hard budget: on timeout the stream is
      cancelled so the fetch cannot pin the process, and the caller sees a
-     clean rejection instead of an infinite "Loading..." row. Streaming
-     consumers (/raw, /img) keep using r.body directly and are unaffected. */
-  const body = r.body;
-  if (body) {
-    const budget2 = Math.max(4000, budget);
-    const wrap = function (orig) {
-      return function () {
-        return new Promise(function (resolve, reject) {
-          let done = false;
-          const bt = setTimeout(function () {
-            if (done) return;
-            done = true;
-            try { body.cancel(); } catch (e) {}
-            reject(new Error('body timeout'));
-          }, budget2);
-          orig.call(r).then(function (v) {
-            if (done) return;
-            done = true; clearTimeout(bt); resolve(v);
-          }, function (e) {
-            if (done) return;
-            done = true; clearTimeout(bt); reject(e);
-          });
-        });
-      };
+     clean rejection instead of an infinite "Loading..." row. A reset during
+     the body is retried from scratch (up to twice), which is what makes the
+     `terminated` class of failures invisible to the user. */
+  const budget2 = Math.max(4000, budget);
+  /* Keep the response's OWN reader methods: overriding r.text/r.json below
+     would otherwise make the wrapper call itself and recurse until the stack
+     dies ("Maximum call stack size exceeded"). */
+  let rawRead = null;
+  function bindRaw() {
+    rawRead = {
+      text: r.text.bind(r),
+      arrayBuffer: r.arrayBuffer.bind(r),
+      json: r.json.bind(r)
     };
-    r.text = wrap(r.text);
-    r.arrayBuffer = wrap(r.arrayBuffer);
-    r.json = wrap(r.json);
+  }
+  bindRaw();
+  function readOnce(kind) {
+    return new Promise(function (resolve, reject) {
+      let done = false;
+      const bt = setTimeout(function () {
+        if (done) return;
+        done = true;
+        try { r.body.cancel(); } catch (e) {}
+        reject(new Error('body timeout'));
+      }, budget2);
+      rawRead[kind]().then(function (v) {
+        if (done) return;
+        done = true; clearTimeout(bt); resolve(v);
+      }, function (e) {
+        if (done) return;
+        done = true; clearTimeout(bt); reject(e);
+      });
+    });
+  }
+  function wrappedRead(kind) {
+    return async function () {
+      let tries = 0;
+      for (;;) {
+        try { return await readOnce(kind); }
+        catch (e) {
+          if (tries >= 2 || !isTransientNetError(e)) throw e;
+          tries++;
+          try { if (r.body) await r.body.cancel(); } catch (e2) {}
+          try { if (global.__superboxLog) global.__superboxLog('WARN', 'body retry ' + tries + '/2: ' + String((e && e.message) || e).slice(0, 140)); } catch (e2) {}
+          r = await open();
+          bindRaw();
+        }
+      }
+    };
+  }
+  if (r.body) {
+    r.text = wrappedRead('text');
+    r.arrayBuffer = wrappedRead('arrayBuffer');
+    r.json = wrappedRead('json');
+    /* A streaming consumer may cancel the body; that rejection is expected. */
+    try { if (r.body && r.body.cancel && !r.body.__sbQuiet) { r.body.__sbQuiet = 1; } } catch (e) {}
   }
   return r;
 }
@@ -2581,7 +2811,8 @@ async function handle(req, res){
      ensure: bring the tunnel up (optionally pinned to a region)
      switch: reconnect through a different regional endpoint profile
      reconnect: hard restart of the local proxy process */
-  if (path === '/vpn/status' || path === '/vpn/switch' || path === '/vpn/reconnect' || path === '/vpn/ensure') {
+  if (path === '/vpn/status' || path === '/vpn/switch' || path === '/vpn/reconnect' ||
+      path === '/vpn/ensure' || path === '/vpn/off' || path === '/vpn/on' || path === '/vpn/ping') {
     const v = shield();
     const send = function (code, obj) {
       res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
@@ -2590,6 +2821,12 @@ async function handle(req, res){
     if (!v) return send(503, { ok: false, state: 'unavailable', error: 'Shield core is not running in this process' });
     try {
       const region = u.searchParams.get('region') || u.searchParams.get('r') || '';
+      if (path === '/vpn/off') return send(200, await v.manualOff());
+      if (path === '/vpn/on') return send(200, await v.manualOn(region || v.preferred || 'auto'));
+      if (path === '/vpn/ping') {
+        const p = await v.pingNow();
+        return send(200, Object.assign({}, p, { status: v.status() }));
+      }
       if (path === '/vpn/switch') return send(200, await v.switchRegion(region || 'auto'));
       if (path === '/vpn/reconnect') {
         const keep = region || v.region || 'auto';
@@ -3287,7 +3524,7 @@ async function handle(req, res){
                   isolated: targetUrl ? ('http://' + (ALT_OK ? '127.0.0.2' : '127.0.0.1') + ':' + LIVE_PORT + '/page?url=' + encodeURIComponent(targetUrl) + '&hide=1') : '' });
   }
 
-  if (!t){ res.writeHead(400); return res.end('missing url'); }
+  if (!t && path !== '/reading/net'){ res.writeHead(400); return res.end('missing url'); }
   let url = t; try { if (!/^https?:\/\//i.test(url)) url = decodeURIComponent(url); } catch (e) {}
   let autoRef = '';
   try {
@@ -3296,6 +3533,7 @@ async function handle(req, res){
     else if (/(^|\.)googlevideo\.com$/i.test(hh)) autoRef = 'https://www.youtube.com/';
     else if (/(^|\.)mangadex\.(?:org|network)$/i.test(hh)) autoRef = 'https://mangadex.org/';
     else if (/(^|\.)(?:pstatic\.net|webtoons\.com|naver\.com)$/i.test(hh)) autoRef = 'https://www.webtoons.com/';
+    else if (/(^|\.)tapas\.io$/i.test(hh)) autoRef = 'https://tapas.io/';
   } catch (e) {}
   try {
     if (path === '/img'){
@@ -3307,12 +3545,31 @@ async function handle(req, res){
         res.writeHead(200, {'Content-Type':'image/gif', 'Content-Length':px.length, 'Cache-Control':'public, max-age=600'});
         res.end(px);
       };
+      if (!/^https?:/i.test(url)) return blank();
+      const cached = imgCacheRead(url);
+      if (cached) {
+        res.writeHead(200, {
+          'Content-Type': cached.mime,
+          'Content-Length': cached.buf.length,
+          'Cache-Control': 'public, max-age=604800',
+          'X-SB-Img': 'hit'
+        });
+        return res.end(cached.buf);
+      }
       let r = null;
       try { r = await grab(url, pRef || autoRef || undefined, undefined, pUA || undefined); } catch (e) {}
       const ct = r ? String(r.headers.get('content-type') || '') : '';
       if (!r || r.status >= 400 || !r.body || !/^image\//i.test(ct)) return blank();
-      res.writeHead(r.status, {'Content-Type': ct || 'image/jpeg', 'Cache-Control':'public, max-age=86400'});
-      return Readable.fromWeb(r.body).pipe(res);
+      const buf = await bodyBuffer(r, 24 * 1024 * 1024, 25000);
+      if (!buf) return blank();
+      imgCacheWrite(url, ct, buf);
+      res.writeHead(200, {
+        'Content-Type': ct || 'image/jpeg',
+        'Content-Length': buf.length,
+        'Cache-Control': 'public, max-age=604800',
+        'X-SB-Img': 'miss'
+      });
+      return res.end(buf);
     }
     if (path === '/raw'){
       /* Chromium opens a media file with an OPEN-ENDED range (`bytes=0-`).
@@ -3369,7 +3626,7 @@ async function handle(req, res){
         const dcl = rd.headers.get('content-length'); if (dcl) hd['Content-Length'] = dcl;
         res.writeHead(rd.status, hd);
         if (!rd.body) return res.end();
-        return Readable.fromWeb(rd.body).pipe(res);
+        return pipeBody(rd, res);
       }
       let total = Number(u.searchParams.get('size')) || 0;
       if (!total) total = await probeMediaSize(url, ref, pUA || undefined);
@@ -3390,7 +3647,7 @@ async function handle(req, res){
       const cl = r.headers.get('content-length'); if (cl) h['Content-Length'] = cl;
       res.writeHead(r.status, h);
       if (!r.body) return res.end();
-      return Readable.fromWeb(r.body).pipe(res);
+      return pipeBody(r, res);
     }
     /* Eporner stream twin: every byte-range request replays the captured
        session cookie + the eporner referer, so the signed CDN serves the
@@ -3465,7 +3722,7 @@ async function handle(req, res){
       const cl2 = r.headers.get('content-length'); if (cl2) out['Content-Length'] = cl2;
       res.writeHead(r.status === 206 ? 206 : (r.status === 200 ? 200 : (r.status || 502)), out);
       if (!r.body) return res.end();
-      return Readable.fromWeb(r.body).pipe(res);
+      return pipeBody(r, res);
     }
     if (path === '/hls'){
       const r = await grab(url, pRef || undefined, undefined, pUA || undefined);
@@ -3508,6 +3765,114 @@ async function handle(req, res){
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' });
       return res.end(html);
     }
+    /* Native Reading room: a small, host-allowlisted JSON proxy. Some reading
+       providers expose an API that answers Node but needs a precise
+       Authorization/device header; the browser renderer cannot call it
+       cross-origin. Only reading hosts may be reached, cookies/forwarded
+       headers are stripped, and every fetch is bounded. */
+    if (path === '/reading/net' && req.method === 'POST') {
+      let body = null;
+      try { body = await reqBody(req, 2 * 1024 * 1024, 12000); }
+      catch (e) { return sendJSON(res, 413, { ok: false, error: String(e.message || e) }); }
+      let p = {};
+      try { p = JSON.parse(String(body || '{}')); } catch (e) { return sendJSON(res, 400, { ok: false, error: 'bad json' }); }
+      const netUrl = String(p.url || '');
+      const rr = require('./reading-render.js');
+      if (!rr.allowed(netUrl)) return sendJSON(res, 403, { ok: false, error: 'host not allowed' });
+      const method = String(p.method || 'GET').toUpperCase();
+      if (method !== 'GET' && method !== 'POST') return sendJSON(res, 400, { ok: false, error: 'method not allowed' });
+      const h = {
+        'User-Agent': (function () {
+          try { return new URL(netUrl).hostname.toLowerCase() === 'api.mangadex.org' ? 'SuperBox/1.3 (+https://github.com/mohdziauddin2006-cloud/superbox)' : UA; }
+          catch (e) { return UA; }
+        })(),
+        'Accept': 'application/json,text/plain;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Cache-Control': 'no-cache'
+      };
+      if (p.headers && typeof p.headers === 'object') {
+        Object.keys(p.headers).forEach(function (k) {
+          if (!/^(accept|accept-language|authorization|auth|os|content-type|x-[a-z0-9-]{1,60})$/i.test(k)) return;
+          const v = String(p.headers[k] || '');
+          if (v && v.length < 4096 && !/[\r\n]/.test(v)) h[k] = v;
+        });
+      }
+      try {
+        const nh = new URL(netUrl).hostname.toLowerCase();
+        const siteOrigin = /toonsutra\.com$/.test(nh) ? 'https://www.toonsutra.com'
+          : /allanime\.day$/.test(nh) ? 'https://allmanga.to'
+            : /(^|\.)tapas\.io$/.test(nh) ? 'https://tapas.io'
+              : new URL(netUrl).origin;
+        h.Referer = siteOrigin + '/';
+        if (p.headers && p.headers.origin) h.Origin = String(p.headers.origin);
+        else h.Origin = siteOrigin;
+      } catch (e) {}
+      const ctl = new AbortController();
+      const tm = setTimeout(function () { try { ctl.abort(); } catch (e) {} }, 24000);
+      let r = null;
+      try {
+        const netInit = {
+          method: method, headers: h, signal: ctl.signal,
+          body: method === 'POST' ? String(p.body || '') : undefined,
+          redirect: 'follow'
+        };
+        /* MangaDex refuses WARP egress with a bot challenge; its hosts ride
+           the direct agent even while the Shield is on. */
+        if (isMediaDirect(netUrl)) {
+          const undici = require('undici');
+          directAgent = directAgent || new undici.Agent({ connect: { timeout: 20000 } });
+          netInit.dispatcher = directAgent;
+        }
+        r = await robustFetch(netUrl, netInit, 1);
+        const buf = await bodyBuffer(r, 8 * 1024 * 1024, 22000);
+        if (!buf) throw new Error('empty response');
+        clearTimeout(tm);
+        return sendJSON(res, 200, {
+          ok: r.status >= 200 && r.status < 300,
+          status: r.status, url: r.url,
+          contentType: r.headers.get('content-type') || '',
+          body: buf.toString('utf8')
+        });
+      } catch (e) {
+        clearTimeout(tm);
+        return sendJSON(res, 502, { ok: false, error: String((e && e.message) || e).slice(0, 240) });
+      }
+    }
+    /* Capture signed XHR bodies from a page loaded by the app's hidden window.
+       `match` is a plain expression supplied by reading.js and is bounded; the
+       target host is checked by reading-render before a window is created. */
+    if (path === '/reading/capture' && req.method === 'GET') {
+      let target = String(u.searchParams.get('url') || '');
+      const raw = String(u.searchParams.get('match') || '');
+      if (!raw || raw.length > 220) return sendJSON(res, 400, { ok: false, error: 'bad matcher' });
+      let re = null;
+      try { re = new RegExp(raw, 'i'); } catch (e) { return sendJSON(res, 400, { ok: false, error: 'bad matcher' }); }
+      const want = Math.max(1, Math.min(8, Number(u.searchParams.get('want')) || 1));
+      let out;
+      try {
+        out = await require('./reading-render.js').capture(target, {
+          match: re, want: want, cap: Number(u.searchParams.get('cap')) || 24000
+        });
+      } catch (e) {
+        out = { ok: false, error: String((e && e.message) || e), bodies: [] };
+      }
+      return sendJSON(res, out && out.ok ? 200 : 502, out);
+    }
+    /* Native Reading room: render a JS-built catalogue/detail/chapter page in
+       a hidden, muted window and hand the rendered DOM back to reading.js.
+       This is the app's own Chromium (not an external browser), so the reader
+       stays fully in-app while bot-gated providers still work. */
+    if (path === '/render' || path === '/reading/render') {
+      const kind = String(u.searchParams.get('kind') || 'catalog');
+      let out;
+      try {
+        out = await require('./reading-render.js').render(url, { kind: kind });
+      } catch (e) {
+        out = { ok: false, error: String((e && e.message) || e) };
+      }
+      res.writeHead(out && out.ok ? 200 : 502, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+      return res.end(JSON.stringify(out));
+    }
     if (path === '/page'){
       /* Catalogue APIs answer with big list payloads: MangaDex's 24-title
          collection is roughly 450 KB and WARP throughput varies. The old fixed
@@ -3526,10 +3891,17 @@ async function handle(req, res){
       const got = await within(pageBudget, async function () {
         const r = await grab(url, pRef || undefined, undefined, pUA || undefined,
           pageBudget, pageCtl.signal);
+        let ab;
+        try { ab = await r.arrayBuffer(); }
+        catch (e) {
+          try { if (global.__superboxLog) global.__superboxLog('PAGE', 'body err ' + String(e && e.message || e).slice(0, 120)); } catch (e2) {}
+          throw e;
+        }
+        try { if (global.__superboxLog) global.__superboxLog('PAGE', 'body ' + ab.byteLength + ' ' + String(url).slice(0, 90)); } catch (e2) {}
         return {
           status: r.status,
           ctype: r.headers.get('content-type') || '',
-          html: Buffer.from(await r.arrayBuffer()).toString('utf8')
+          html: Buffer.from(ab).toString('utf8')
         };
       }, null);
       res.removeListener('close', onGone);
