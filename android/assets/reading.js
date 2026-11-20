@@ -66,9 +66,9 @@
   }
 
   /* ------------------------------------------------------------- transport */
-  async function page(url, ms, signal) {
+  async function page(url, ms, signal, ref) {
     var B = await base();
-    var r = await withTimeout(fetch(B + '/page?url=' + enc(url), { cache: 'no-store', signal: signal }), ms || 26000);
+    var r = await withTimeout(fetch(B + '/page?url=' + enc(url) + (ref ? '&ref=' + enc(ref) : ''), { cache: 'no-store', signal: signal }), ms || 26000);
     if (!r.ok) throw new Error('proxy HTTP ' + r.status);
     var body = await withTimeout(r.text(), ms || 26000);
     if (!body || body.indexOf('PROXY_ERROR') === 0 || body.length < 2) {
@@ -126,19 +126,6 @@
     if (!BASE) return url;
     var r = ref || imgRef(url);
     return withToken(BASE + '/img?u=' + enc(url) + (r ? '&ref=' + enc(r) : '') + '&cv=3');
-  }
-  function openSite(url, title) {
-    if (!url) return;
-    if (window.SBAndroid && window.SBAndroid.openWeb) {
-      try { window.SBAndroid.openWeb(url, title || 'SuperBox'); return; } catch (e) {}
-    }
-    if (typeof window.SBOpenWeb === 'function') {
-      try { window.SBOpenWeb(url, title || 'SuperBox'); return; } catch (e) {}
-    }
-    if (window.bridge && window.bridge.openExternal) {
-      try { window.bridge.openExternal(url); return; } catch (e) {}
-    }
-    try { window.open(url, '_blank', 'noopener'); } catch (e) {}
   }
 
   /* -------------------------------------------------------------- md tags */
@@ -253,10 +240,13 @@
     return WT_LOCALES[state.lang] || 'en';
   }
   function typesForSource() {
-    return state.source === 'md' ? MD_TYPES : WT_TYPES;
+    if (state.source === 'md') return MD_TYPES;
+    if (state.source === 'wt') return WT_TYPES;
+    return [{ c: '', n: 'All titles' }];
   }
   function typeForSource(code) {
-    var allowed = state.source === 'md' ? ['', 'manga', 'manhwa', 'manhua', 'other'] : ['', 'originals', 'canvas'];
+    var allowed = state.source === 'md' ? ['', 'manga', 'manhwa', 'manhua', 'other']
+      : state.source === 'wt' ? ['', 'originals', 'canvas'] : [''];
     return allowed.indexOf(code) >= 0 ? code : '';
   }
 
@@ -414,18 +404,20 @@
   }
 
   function mdFeed(manga, offset, append) {
-    function feed(lang) {
-      var pairs = [
-        ['limit', '500'],
-        ['offset', String(offset || 0)],
-        ['order[chapter]', 'desc'],
-        ['includes[]', 'scanlation_group']
-      ];
-      if (lang) pairs.splice(2, 0, ['translatedLanguage[]', lang]);
-      return api('https://api.mangadex.org/manga/' + manga.id + '/feed?' + qs(pairs));
-    }
-    function mapAll(j) {
-      return (j.data || []).map(function (c) {
+    var lang = state.lang || 'en';
+    var pairs = [
+      ['limit', '500'],
+      ['offset', String(offset || 0)],
+      ['order[chapter]', 'desc'],
+      ['translatedLanguage[]', lang],
+      ['includeExternalUrl', '0'],
+      ['includes[]', 'scanlation_group']
+    ];
+    /* Strict language contract: no cross-language fallback and no external
+       official links. An empty feed means "no chapters in this language",
+       which the detail page says plainly instead of quietly showing Japanese. */
+    return api('https://api.mangadex.org/manga/' + manga.id + '/feed?' + qs(pairs)).then(function (j) {
+      var list = (j.data || []).map(function (c) {
         var a = c.attributes || {};
         var group = '';
         (c.relationships || []).forEach(function (r) {
@@ -436,35 +428,19 @@
           chapter: a.chapter || '',
           title: a.title || '',
           pages: a.pages || 0,
-          lang: a.translatedLanguage || 'en',
+          lang: a.translatedLanguage || '',
           date: a.publishAt || '',
           group: group
         };
+      }).filter(function (c) {
+        return c.pages > 0 && String(c.lang).toLowerCase() === lang.toLowerCase();
       });
-    }
-    function readable(j) {
-      return mapAll(j).filter(function (c) { return c.pages > 0; });
-    }
-    /* The reader's language wins. A title whose releases in that language are
-       all official links (externalUrl, pages 0) falls back to every language,
-       and finally to the unfiltered list, otherwise its detail page shows a
-       blank chapter box even though MangaDex returned chapters. */
-    return feed(state.lang || 'en').then(function (j) {
-      var list = readable(j);
-      if (!append && !offset && !list.length) {
-        return feed('').then(function (j2) {
-          var l2 = readable(j2);
-          return { j: j2, list: l2.length ? l2 : mapAll(j2) };
-        });
-      }
-      return { j: j, list: list };
-    }).then(function (r) {
-      var j = r.j;
-      var list = r.list;
       if (append) manga.chapters = (manga.chapters || []).concat(list);
       else manga.chapters = list;
       manga.feedOffset = (offset || 0) + (j.data || []).length;
       manga.feedTotal = Number(j.total) || manga.chapters.length;
+      manga.emptyFeed = !manga.chapters.length;
+      manga.feedLang = lang;
       return manga;
     });
   }
@@ -628,6 +604,869 @@
     return series;
   }
 
+  /* ------------------------------------------------------- native providers
+     Every reading provider named in source.txt gets a native adapter. The
+     catalogue, series metadata and chapter strip are fetched by SuperBox
+     through /page or /reading/net and rendered by the in-app reader; no
+     provider website is ever shown or linked. Sites that sign requests in
+     page JavaScript (MangaFire, Tappytoon viewer) answer with a plain
+     in-app explanation instead of opening an external browser. */
+  async function readNetJSON(url, opts) {
+    var B = await base();
+    var r = await withTimeout(fetch(B + '/reading/net', {
+      method: 'POST', cache: 'no-store',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(Object.assign({ url: url }, opts || {}))
+    }), 30000);
+    var raw = await withTimeout(r.text(), 30000);
+    var j;
+    try { j = JSON.parse(raw); } catch (e) { throw new Error('reading bridge returned no data'); }
+    if (!j || !j.ok) throw new Error((j && j.error) || 'source unavailable');
+    try { return JSON.parse(j.body); } catch (e) { throw new Error('bad response from source'); }
+  }
+
+  var NATIVE_PROVIDERS = [
+    {
+      id: 'asura', name: 'Asura Scans', short: 'ASURA', ref: 'https://asurascans.com/',
+      home: 'https://asurascans.com/browse',
+      search: function (q) { return 'https://asurascans.com/browse?search=' + enc(q); },
+      seriesRe: /\/comics\/[^/?#]+\/?$/i,
+      chapterRe: /\/comics\/[^/?#]+\/chapter\/[^/?#]+/i,
+      imgRe: /asura-images\/chapters\//i,
+      render: true
+    },
+    {
+      id: 'flame', name: 'Flame Comics', short: 'FLAME', ref: 'https://flamecomics.xyz/',
+      home: 'https://flamecomics.xyz/browse',
+      search: function (q) { return 'https://flamecomics.xyz/browse?search=' + enc(q); },
+      seriesRe: /\/series\/\d+\/?$/i,
+      chapterRe: /\/series\/\d+\/[a-f0-9]{6,}\/?$/i,
+      imgRe: /cdn\.flamecomics\.xyz\/uploads\/images\/series\/\d+\/[a-f0-9]+\//i,
+      exclude: /cover\.png|thumbnail|read_on_flame|og-default/i
+    },
+    {
+      id: 'vortex', name: 'Vortex Scans', short: 'VORTEX', ref: 'https://vortexscans.org/',
+      home: 'https://vortexscans.org/series',
+      search: function (q) { return 'https://vortexscans.org/series/?searchTerm=' + enc(q); },
+      seriesRe: /\/series\/[^/?#]+\/?$/i,
+      chapterRe: /\/series\/[^/?#]+\/chapter-[\d.]+/i,
+      imgRe: /storage\.vortexscans\.org\/upload\/series\/.+\/page-/i
+    },
+    {
+      id: 'hive', name: 'HiveToons', short: 'HIVE', ref: 'https://hivetoons.org/',
+      home: 'https://hivetoons.org/series',
+      search: function (q) { return 'https://hivetoons.org/series/?searchTerm=' + enc(q); },
+      seriesRe: /\/series\/[^/?#]+\/?$/i,
+      chapterRe: /\/series\/[^/?#]+\/chapter-[\d.]+/i,
+      imgRe: /storage\.hivetoon\.com\/public\/upload\/series\/.+\/page-/i,
+      catalog: hiveCatalog
+    },
+    {
+      id: 'comix', name: 'Comix', short: 'COMIX', ref: 'https://comix.to/',
+      home: 'https://comix.to/',
+      search: function (q) { return 'https://comix.to/browse?q=' + enc(q); },
+      seriesRe: /\/title\/[^/?#]+\/?$/i,
+      chapterRe: /\/title\/[^/?#]+\/[^/?#]*(?:chapter|episode|[\d])[^/?#]*/i,
+      render: true,
+      catalog: comixCatalog
+    },
+    {
+      id: 'manhuaus', name: 'ManhuaUS', short: 'MHUS', ref: 'https://manhuaus.club/',
+      home: 'https://manhuaus.club/',
+      search: function (q) { return 'https://manhuaus.club/?s=' + enc(q) + '&post_type=wp-manga'; },
+      seriesRe: /\/manga\/[^/?#]+\/?$/i,
+      chapterRe: /\/manga\/[^/?#]+\/chapter-[\d.]+\/?$/i,
+      imgRe: /wp-content\/uploads\/WP-manga\/data\//i
+    },
+    {
+      id: 'nelo', name: 'NeloManga', short: 'NELO', ref: 'https://www.nelomanga.net/',
+      home: 'https://www.nelomanga.net/',
+      search: function (q) { return 'https://www.nelomanga.net/?s=' + enc(q); },
+      seriesRe: /\/manga\/[^/?#]+\/?$/i,
+      chapterRe: /\/manga\/[^/?#]+\/chapter-[\d.]+/i,
+      render: true
+    },
+    {
+      id: 'tappytoon', name: 'Tappytoon', short: 'TAPPY', ref: 'https://www.tappytoon.com/',
+      home: 'https://www.tappytoon.com/en/comics/discover',
+      search: function (q) { return 'https://www.tappytoon.com/en/search?keyword=' + enc(q); },
+      seriesRe: /\/en\/(?:book|comics)\/[^/?#]+\/?$/i,
+      chapterRe: /\/en\/chapters?\/\d+/i,
+      render: false,
+      catalog: tappyCatalog, detail: tappyDetail, chapter: tappyChapter
+    },
+    {
+      id: 'tapas', name: 'Tapas', short: 'TAPAS', ref: 'https://tapas.io/',
+      home: 'https://tapas.io/comics?sort=popular',
+      search: function (q) { return 'https://tapas.io/search?q=' + enc(q); },
+      seriesRe: /\/series\/[^/?#]+\/?$/i,
+      chapterRe: /\/episode\/\d+/i,
+      imgRe: /us-a\.tapas\.io\/pc\//i,
+      render: true,
+      catalog: tapasCatalog, detail: tapasDetail, chapter: tapasChapter
+    },
+    {
+      id: 'allmanga', name: 'AllManga', short: 'ALL', ref: 'https://allmanga.to/',
+      home: 'https://allmanga.to/manga',
+      search: function (q) { return 'https://allmanga.to/search?keyword=' + enc(q); },
+      seriesRe: /\/manga\/[A-Za-z0-9]+$/,
+      chapterRe: /(?:chapter|episode)/i,
+      render: true,
+      catalog: allmangaCatalog, detail: allmangaDetail, chapter: allmangaChapter
+    },
+    {
+      id: 'mangafire', name: 'MangaFire', short: 'MFIRE', ref: 'https://mangafire.to/',
+      home: 'https://mangafire.to/',
+      search: function (q) { return 'https://mangafire.to/filter?keyword=' + enc(q); },
+      seriesRe: /\/title\/[^/?#]+\/?$/i,
+      chapterRe: /\/title\/[^/?#]+\/chapter\/\d+/i,
+      render: true,
+      catalog: mangafireCatalog,
+      detail: mangafireDetail, chapter: mangafireChapter
+    },
+    {
+      id: 'toonsutra', name: 'ToonSutra', short: 'TOON', ref: 'https://www.toonsutra.com/',
+      home: 'https://www.toonsutra.com/manhwa',
+      search: function (q) { return 'https://www.toonsutra.com/search?q=' + enc(q); },
+      seriesRe: /(?:comic|series|title|manga)\/[^/?#]+$/i,
+      chapterRe: /(?:chapter|episode)/i,
+      render: false,
+      catalog: toonCatalog, detail: toonDetail, chapter: toonChapter
+    },
+    {
+      id: 'hentai20', name: 'Hentai20', short: 'H20', ref: 'https://hentai20.io/',
+      home: 'https://hentai20.io/home1/',
+      search: function (q) { return 'https://hentai20.io/?s=' + enc(q); },
+      seriesRe: /\/manga\/[^/?#]+\/?$/i,
+      chapterRe: /\/[^/?#]+-chapter-[\d.]+\/?$/i,
+      imgRe: /img\.hentai1\.io\/.+\/chapter-/i,
+      adult: true
+    }
+  ];
+  function providerById(id) {
+    return NATIVE_PROVIDERS.filter(function (p) { return p.id === id; })[0] || null;
+  }
+  function sourceName(source) {
+    if (source === 'md') return 'MangaDex';
+    if (source === 'wt') return 'WEBTOON';
+    var p = providerById(source);
+    return p ? p.name : 'Source';
+  }
+  function sourceShort(source) {
+    if (source === 'md') return 'MD';
+    if (source === 'wt') return 'WT';
+    var p = providerById(source);
+    return p ? p.short : 'SRC';
+  }
+  function isNativeSource(source) {
+    return !!(source && source !== 'md' && source !== 'wt' && providerById(source));
+  }
+  function sourceRef(source) {
+    if (source === 'md') return 'https://mangadex.org/';
+    if (source === 'wt') return 'https://www.webtoons.com/';
+    var p = providerById(source);
+    return p ? p.ref : '';
+  }
+  function allSources() {
+    return [{ id: 'md', name: 'MangaDex', short: 'MD' }, { id: 'wt', name: 'WEBTOON', short: 'WT' }]
+      .concat(NATIVE_PROVIDERS.map(function (p) { return { id: p.id, name: p.name, short: p.short }; }));
+  }
+
+  function absolute(u, baseUrl) {
+    try {
+      var a = new URL(String(u || '').replace(/&amp;/g, '&'), baseUrl || location.href).toString();
+      return /^https?:/i.test(a) ? a : '';
+    } catch (e) { return ''; }
+  }
+  function firstSrc(im) {
+    var attrs = ['data-src', 'data-lazy-src', 'data-original', 'data-url', 'data-image', 'src', 'data-cfsrc'];
+    for (var i = 0; i < attrs.length; i++) {
+      var v = im.getAttribute(attrs[i]);
+      if (v && !/^data:image\/(?:gif|svg)/i.test(v) && !/blank|placeholder|spacer|transparent/i.test(v)) return v;
+    }
+    var ss = im.getAttribute('srcset') || im.getAttribute('data-srcset') || '';
+    if (ss) { var p = ss.split(',').pop().trim().split(/\s+/)[0]; if (p) return p; }
+    return '';
+  }
+  function snapHtml(html, url) {
+    var doc = new DOMParser().parseFromString(String(html || ''), 'text/html');
+    var out = {
+      url: url, html: String(html || ''), title: text(doc.querySelector('title')),
+      h1: text(doc.querySelector('h1')),
+      og: absolute((doc.querySelector('meta[property="og:image"]') || {}).content, url),
+      desc: (doc.querySelector('meta[name="description"]') || {}).content || '',
+      anchors: [], images: [], readers: [],
+      text: text(doc.body).slice(0, 4000)
+    };
+    var seenA = {};
+    $$('a[href]', doc).forEach(function (a) {
+      var h = absolute(a.getAttribute('href'), url);
+      if (!h || seenA[h]) return;
+      seenA[h] = 1;
+      var im = a.querySelector('img');
+      out.anchors.push({
+        h: h, t: text(a).slice(0, 180),
+        a: im ? String(im.getAttribute('alt') || '').replace(/\s+/g, ' ').trim().slice(0, 180) : '',
+        i: im ? absolute(firstSrc(im), url) : ''
+      });
+    });
+    var seenI = {};
+    $$('img', doc).forEach(function (im) {
+      var s = absolute(firstSrc(im), url);
+      if (!s || seenI[s]) return;
+      seenI[s] = 1;
+      out.images.push({
+        s: s, a: String(im.getAttribute('alt') || '').slice(0, 160),
+        w: parseInt(im.getAttribute('width') || '0', 10) || 0,
+        h: parseInt(im.getAttribute('height') || '0', 10) || 0
+      });
+    });
+    var readerSel = '#images img, .reading-content img, .chapter-content img, .entry-content img, ' +
+      '.page-break img, .view-chapter img, [class*="reader"] img, [class*="chapter"] img, ' +
+      '[class*="page"] img, [class*="comic"] img, [class*="manga"] img';
+    var seenR = {};
+    $$(readerSel, doc).forEach(function (im) {
+      var s = absolute(firstSrc(im), url);
+      if (!s || seenR[s]) return;
+      seenR[s] = 1;
+      out.readers.push({ s: s, w: parseInt(im.getAttribute('width') || '0', 10) || 0, h: parseInt(im.getAttribute('height') || '0', 10) || 0 });
+    });
+    return out;
+  }
+  async function nativeSnap(p, url, kind) {
+    var html = await page(url, 34000, null, p.ref);
+    if (!html || html.length < 400) throw new Error('source returned an empty page');
+    /* A page can mention "Enable JavaScript" in a noscript block and still be
+       fully server-rendered. Only treat a challenge as blocking when the body
+       also has no real links to read. */
+    if (/Just a moment|challenge-platform|cf-mitigated/i.test(html) && !/<a\s[^>]*href=/i.test(html)) {
+      throw new Error('source is blocking automated reads right now');
+    }
+    var snap = snapHtml(html, url);
+    if (kind === 'catalog' && !snap.anchors.length) throw new Error('source returned a client shell');
+    return snap;
+  }
+  function cleanTitle(v) {
+    return String(v || '').replace(/\s+/g, ' ')
+      .replace(/^\d+\s+/, '')
+      .replace(/\s+(?:Hot|New|Top|Trending|Completed|Ongoing|UP)\b.*$/i, '')
+      .replace(/\s+\d+(?:\.\d+)?\s+\d+[dhm]\s+ago.*$/i, '')
+      .trim();
+  }
+  function slugOf(url) {
+    try {
+      var u = new URL(url);
+      var parts = u.pathname.replace(/\/+$/, '').split('/').filter(Boolean);
+      return parts[parts.length - 1] || u.hostname;
+    } catch (e) { return String(url || '').slice(-40); }
+  }
+  function badImage(u) {
+    return /logo|favicon|avatar|icon|banner|thumbnail|thumb|cover|profile|emoji|placeholder|spacer|loading|transparent|read_on_|discord|patreon|ko-fi|kofi|twitter|facebook|reddit|ads?\.|doubleclick|analytics|pixel|1x1|blank\./i.test(String(u || ''));
+  }
+  function nonEnglishLabel(v) {
+    return /(?:^|\s|\()(?:raw|raws)(?:$|\s|\))|\[(?:ES|PT|FR|DE|ID|IT|RU|TH|VI|JA|KO|ZH|AR|TR)\]/i.test(String(v || ''));
+  }
+  function chapterLabelOf(t, fallback) {
+    var s = String(t || '').replace(/\s+/g, ' ').trim();
+    var m = /(?:chapter|episode|ch\.?|ep\.?)\s*([\d.]+)/i.exec(s);
+    if (m) return 'Chapter ' + m[1];
+    if (s) return s.slice(0, 90);
+    return fallback || 'Chapter';
+  }
+  function chapterNoOf(t, u) {
+    var m = /(?:chapter|episode|ch\.?|ep\.?)\s*([\d.]+)/i.exec(String(t || ''));
+    if (m) return parseFloat(m[1]);
+    m = /(?:chapter|episode|ch|ep)[-_/]?([\d.]+)/i.exec(String(u || ''));
+    if (m) return parseFloat(m[1]);
+    m = /[-_/]([\d.]+)(?:[./?#]|$)/.exec(String(u || ''));
+    return m ? parseFloat(m[1]) : 1e9;
+  }
+  function parseNativeCatalog(snap, p) {
+    var out = [], seen = {};
+    (snap.anchors || []).forEach(function (a) {
+      var u = String(a.h || '').replace(/[?#].*$/, '');
+      if (!p.seriesRe.test(u)) return;
+      if (p.chapterRe && p.chapterRe.test(u)) return;
+      if (u === p.home || /\/search|\/browse\/?$|\/filter\?/i.test(u)) return;
+      if (seen[u]) return;
+      var title = cleanTitle(a.a || a.t || '');
+      if (!title || /^(home|browse|search|login|sign in|sign up|register|discord|random|series|manga|comics?|all)$/i.test(title)) return;
+      seen[u] = 1;
+      out.push({
+        source: p.id, id: slugOf(u), title: title,
+        cover: a.i || '', url: u, ref: p.ref, adult: !!p.adult
+      });
+    });
+    return out.slice(0, 48);
+  }
+  function parseNativeDetail(snap, item, p) {
+    var d = {
+      source: p.id, id: item.id || slugOf(item.url), title: cleanTitle(snap.h1) || cleanTitle(snap.title) || item.title,
+      cover: snap.og || item.cover || '', desc: String(snap.desc || '').trim(),
+      author: p.name, genre: '', tags: [], url: item.url, ref: p.ref,
+      chapters: [], more: false, chapterMode: 'native'
+    };
+    if (!d.cover) {
+      var im = (snap.images || []).filter(function (x) {
+        return x.w >= 200 && x.h >= 200 && !/logo|avatar|icon|banner|emoji/i.test(x.s);
+      })[0];
+      if (im) d.cover = im.s;
+    }
+    var seen = {}, seenNo = {};
+    (snap.anchors || []).forEach(function (a) {
+      var u = String(a.h || '').replace(/#.*$/, '');
+      if (!p.chapterRe.test(u)) return;
+      if (u.replace(/\/+$/, '') === String(item.url).replace(/\/+$/, '')) return;
+      if (seen[u]) return;
+      var label = a.t || a.a || '';
+      if (nonEnglishLabel(label)) return;
+      var no = chapterNoOf(label, u);
+      var keyNo = (no < 1e9 ? String(no) : u) + '|' + label.replace(/\s+\d+\s+(?:hour|day|week|month|year)s?\s+ago.*$/i, '').trim();
+      if (seenNo[keyNo]) return;
+      seenNo[keyNo] = 1;
+      seen[u] = 1;
+      d.chapters.push({
+        id: u, url: u, title: chapterLabelOf(label, 'Chapter'),
+        no: no, lang: 'en'
+      });
+    });
+    d.chapters.sort(function (x, y) { return (x.no - y.no) || String(x.url).localeCompare(String(y.url)); });
+    return d;
+  }
+  function parseNativeChapter(snap, p, chapterUrl) {
+    var urls = [], seen = {};
+    function push(raw, relaxed) {
+      var u = absolute(raw, chapterUrl);
+      if (!u || seen[u]) return;
+      if (/^data:/i.test(u)) return;
+      if (p.exclude && p.exclude.test(u)) return;
+      if (badImage(u)) return;
+      if (p.imgRe && !p.imgRe.test(u) && !relaxed) return;
+      seen[u] = 1;
+      urls.push(u);
+    }
+    var readers = (snap.readers || []).map(function (r) { return r.s || r; }).filter(Boolean);
+    readers.forEach(function (u) { push(u, false); });
+    if (!urls.length) readers.forEach(function (u) { push(u, true); });
+    if (!urls.length) {
+      (snap.images || []).forEach(function (im) {
+        if (im.w >= 280 && im.h >= 220) push(im.s, true);
+      });
+    }
+    if (!urls.length) (snap.images || []).forEach(function (im) { push(im.s, true); });
+    if (!urls.length && snap.html) {
+      var raw = String(snap.html).replace(/\\\//g, '/').replace(/\\u0026/gi, '&').replace(/&amp;/g, '&');
+      var re = /https?:\/\/[^"'\s<>\\]+?\.(?:jpe?g|png|webp|avif)(?:\?[^"'\s<>\\]*)?/gi, m;
+      while ((m = re.exec(raw)) && urls.length < 400) push(m[0].replace(/[),.;]+$/, ''), true);
+    }
+    function order(u) {
+      var m = /(?:page|p|ch|chapter|ep|episode)[-_]?0*(\d{1,4})/i.exec(u) || /\/0*(\d{1,4})\.(?:jpe?g|png|webp)/i.exec(u);
+      return m ? parseInt(m[1], 10) : 0;
+    }
+    var nums = urls.map(order);
+    if (nums.some(function (n) { return n > 0; }) && new Set(nums).size > 1) {
+      urls = urls.map(function (u, i) { return { u: u, n: nums[i] || (i + 1) }; })
+        .sort(function (x, y) { return x.n - y.n; }).map(function (x) { return x.u; });
+    }
+    return urls;
+  }
+
+  /* --- generic provider adapters --- */
+  async function hiveCatalog(q) {
+    var snap = await nativeSnap(providerById('hive'), 'https://hivetoons.org/series', 'catalog');
+    var out = [], seen = {};
+    (snap.anchors || []).forEach(function (a) {
+      var u = String(a.h || '').replace(/[?#].*$/, '').replace(/\/+$/, '');
+      if (!/^https:\/\/hivetoons\.org\/series\/[^/?#]+$/i.test(u)) return;
+      if (seen[u]) return;
+      var title = cleanTitle(a.a || '');
+      if (!title || /^(read series|series|browse|home)$/i.test(title)) return;
+      seen[u] = 1;
+      out.push({ source: 'hive', id: slugOf(u), title: title, cover: a.i || '', url: u, ref: 'https://hivetoons.org/', adult: false });
+    });
+    if (q) {
+      var needle = q.toLowerCase();
+      out = out.filter(function (x) { return x.title.toLowerCase().indexOf(needle) >= 0; });
+    }
+    return out.slice(0, 48);
+  }
+  function comixSlugTitle(u) {
+    var m = /\/title\/([^/?#]+)/i.exec(String(u || ''));
+    if (!m) return '';
+    var slug = m[1].replace(/^[a-z0-9]{4,6}-/i, '').replace(/-+/g, ' ').replace(/\s+/g, ' ').trim();
+    return cleanTitle(slug.replace(/\b[a-z]/g, function (c) { return c.toUpperCase(); }));
+  }
+  async function comixCatalog(q) {
+    var url = q ? 'https://comix.to/browse?q=' + enc(q) : 'https://comix.to/';
+    var snap = await nativeSnap(providerById('comix'), url, 'catalog');
+    var out = [], seen = {};
+    (snap.anchors || []).forEach(function (a) {
+      var u = String(a.h || '').replace(/[?#].*$/, '');
+      if (!/^https:\/\/comix\.to\/title\/[^/?#]+$/i.test(u)) return;
+      if (seen[u]) return;
+      seen[u] = 1;
+      var title = cleanTitle(a.a || '') || comixSlugTitle(u);
+      if (!title) return;
+      out.push({ source: 'comix', id: slugOf(u), title: title, cover: a.i || '', url: u, ref: 'https://comix.to/', adult: false });
+    });
+    if (q) {
+      var needle = q.toLowerCase();
+      out = out.filter(function (x) { return x.title.toLowerCase().indexOf(needle) >= 0; });
+    }
+    return out.slice(0, 48);
+  }
+
+  /* --- ToonSutra (public app API) --- */
+  var TS_AUTH_KEY = 'sb.read.toonsutra.auth';
+  function tsAuth() {
+    var a = lsGet(TS_AUTH_KEY, null);
+    return a && a.access ? a : null;
+  }
+  function tsSaveAuth(a) { lsSet(TS_AUTH_KEY, a || null); }
+  async function tsSignup() {
+    var dev = lsGet('sb.read.toonsutra.device', '');
+    if (!dev) {
+      try { dev = window.crypto && crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2); } catch (e) { dev = String(Date.now()); }
+      lsSet('sb.read.toonsutra.device', dev);
+    }
+    var j = await readNetJSON('https://api.toonsutra.com/api/v4.0/user/sign-up-guest-user', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ device_id: dev })
+    });
+    var t = (j && j.data && j.data.tokens) || {};
+    if (!t.accessToken || !t.oldApiAccessToken) throw new Error('ToonSutra guest sign-in failed');
+    var a = { access: t.accessToken, old: t.oldApiAccessToken, at: Date.now() };
+    tsSaveAuth(a);
+    return a;
+  }
+  async function tsApi(path) {
+    var a = tsAuth() || await tsSignup();
+    for (var attempt = 0; attempt < 2; attempt++) {
+      var j = await readNetJSON('https://api.toonsutra.com/api/' + path, {
+        headers: { authorization: a.access, auth: a.old, os: 'web' }
+      });
+      if (j && j.statusCode !== 400 && j.statusCode !== 401 && j.statusCode !== 403) return j;
+      if (attempt === 0) { tsSaveAuth(null); a = await tsSignup(); }
+    }
+    throw new Error('ToonSutra refused the request');
+  }
+  function toonTitle(c) {
+    var t = c && (c.comic_english_alias || c.english_alias || c.comic_name_with_language || c.english_name || c.name || '');
+    return cleanTitle(String(t || '').replace(/\s*\((?:English|Hindi|Indonesian)\)\s*$/i, '')) || 'Untitled';
+  }
+  function toonCard(c) {
+    var id = String(c.comic_id || c.id || '');
+    return {
+      source: 'toonsutra', id: id, title: toonTitle(c),
+      cover: String(c.comic_thumbnail || c.thumbnailUrl || c.cover || ''),
+      desc: stripHtml(c.comic_discription || c.description || c.synopsis || ''),
+      author: String(c.author_name || c.publisher_name || ''),
+      tags: (c.comic_genre_list || c.genre_list || []).map(function (g) { return g.genre_name || g.name || ''; }).filter(Boolean),
+      url: 'https://www.toonsutra.com/comic/' + enc(id), ref: 'https://www.toonsutra.com/', adult: false
+    };
+  }
+  async function toonCatalog(q) {
+    var j = await tsApi('v3.0/mobile-app/comic?filter[language_id]=1&page=1&limit=24&sort=popular');
+    var list = ((j.result && j.result.list) || []).map(toonCard);
+    if (q) {
+      var needle = q.toLowerCase();
+      var hit = list.filter(function (it) { return it.title.toLowerCase().indexOf(needle) >= 0; });
+      if (!hit.length) {
+        var j2 = await tsApi('v3.0/mobile-app/comic?filter[language_id]=1&page=2&limit=60&sort=popular');
+        hit = ((j2.result && j2.result.list) || []).map(toonCard).filter(function (it) { return it.title.toLowerCase().indexOf(needle) >= 0; });
+      }
+      list = hit;
+    }
+    return list;
+  }
+  async function toonDetail(item) {
+    var id = enc(String(item.id));
+    var pair = await Promise.all([
+      tsApi('v3.0/mobile-app/comic?filter[comic_id]=' + id),
+      tsApi('v3.0/mobile-app/chapter?filter[comic_id]=' + id)
+    ]);
+    var c = ((pair[0].result && pair[0].result.list) || [])[0] || {};
+    var chapters = ((pair[1].result && pair[1].result.list) || []).map(function (ch) {
+      var images = (ch.comic_episode_urls || []).map(function (x) { return x.chapter_image || x.chapter_image_url || ''; }).filter(Boolean);
+      if (!images.length && ch.comic_chapter_url) images = [ch.comic_chapter_url];
+      var no = Number(ch.chapter_num);
+      return {
+        id: String(ch.chapter_id || no), url: 'https://www.toonsutra.com/comic/' + id + '/chapter/' + enc(String(ch.chapter_id || no)),
+        title: 'Chapter ' + (isFinite(no) ? no : (ch.sequence_number || ch.name || '')),
+        no: isFinite(no) ? no : 1e9, lang: 'en', images: images
+      };
+    }).filter(function (ch) { return ch.images && ch.images.length; });
+    chapters.sort(function (a, b) { return a.no - b.no; });
+    return {
+      source: 'toonsutra', id: String(c.comic_id || item.id), title: toonTitle(c) || item.title,
+      cover: String(c.comic_thumbnail || item.cover || ''),
+      desc: stripHtml(c.description || c.comic_discription || item.desc || ''),
+      author: String(c.author_name || c.publisher_name || ''), genre: '',
+      tags: (c.comic_genre_list || []).map(function (g) { return g.genre_name || ''; }).filter(Boolean),
+      url: item.url, ref: 'https://www.toonsutra.com/', chapters: chapters,
+      more: false, chapterMode: 'native'
+    };
+  }
+  function toonChapter(_detail, chapter) {
+    if (chapter.images && chapter.images.length) return Promise.resolve(chapter.images);
+    throw new Error('No chapter pages');
+  }
+
+  /* --- AllManga (public GraphQL) --- */
+  var AM_API = 'https://api.allanime.day/api';
+  async function amGql(query, variables) {
+    var j = await readNetJSON(AM_API, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: query, variables: variables || {} })
+    });
+    if (j.errors && j.errors.length) throw new Error(j.errors[0].message || 'AllManga API error');
+    return j.data || {};
+  }
+  function amCover(u) {
+    var v = String(u || '');
+    if (/^https?:/i.test(v)) return v;
+    return v ? 'https://wp.allmanga.to/' + v.replace(/^\/+/, '') : '';
+  }
+  function amCard(x) {
+    return {
+      source: 'allmanga', id: String(x._id || ''), title: cleanTitle(x.englishName || x.name) || 'Untitled',
+      cover: amCover(x.thumbnail), desc: stripHtml(x.description || ''),
+      author: 'AllManga', tags: (x.genres || []).slice(0, 8), genre: '',
+      url: 'https://allmanga.to/manga/' + enc(String(x._id || '')),
+      ref: 'https://allmanga.to/', adult: false
+    };
+  }
+  async function allmangaCatalog(q) {
+    var g = await amGql('query($search:SearchInput,$limit:Int,$page:Int){mangas(search:$search,limit:$limit,page:$page){edges{_id name englishName thumbnail description status genres availableChapters availableChaptersDetail}}}',
+      { search: { query: String(q || ''), allowAdult: false }, limit: 30, page: 1 });
+    return (((g.mangas || {}).edges) || []).map(amCard).filter(function (x) { return x.id; });
+  }
+  async function allmangaDetail(item) {
+    var g = await amGql('query($id:String!){manga(_id:$id){_id name englishName thumbnail description status genres availableChaptersDetail}}', { id: item.id });
+    var m = g.manga || {};
+    var subs = ((m.availableChaptersDetail || {}).sub) || [];
+    var chapters = subs.map(function (n) {
+      return {
+        id: String(n), no: parseFloat(n), title: 'Chapter ' + n,
+        url: 'https://allmanga.to/manga/' + enc(item.id) + '/chapter-' + enc(String(n)) + '-sub', lang: 'en'
+      };
+    }).sort(function (a, b) { return (a.no || 0) - (b.no || 0); });
+    return {
+      source: 'allmanga', id: item.id, title: cleanTitle(m.englishName || m.name || item.title),
+      cover: amCover(m.thumbnail) || item.cover, desc: stripHtml(m.description || item.desc || ''),
+      author: 'AllManga', genre: '', tags: (m.genres || []).slice(0, 8),
+      url: item.url, ref: 'https://allmanga.to/', chapters: chapters, more: false, chapterMode: 'native'
+    };
+  }
+  async function allmangaChapter(detail, chapter) {
+    try {
+      var g = await amGql('query($mangaId:String!,$translationType:VaildTranslationTypeMangaEnumType!,$chapterString:String!,$page:Int,$limit:Int,$offset:Int,$queryAt:String){chapterPages(mangaId:$mangaId,translationType:$translationType,chapterString:$chapterString,page:$page,limit:$limit,offset:$offset,queryAt:$queryAt){edges{pictureUrls pictureUrlsProcessed pictureUrlHead}pageInfo{total}}}',
+        { mangaId: detail.id, translationType: 'sub', chapterString: String(chapter.id), limit: 100, offset: 0, queryAt: new Date().toISOString() });
+      var edges = (((g.chapterPages || {}).edges) || []);
+      var urls = [];
+      edges.forEach(function (e) {
+        var head = String(e.pictureUrlHead || '');
+        var list = e.pictureUrls;
+        if (typeof list === 'string') { try { list = JSON.parse(list); } catch (x) { list = [list]; } }
+        (Array.isArray(list) ? list : []).forEach(function (u) {
+          var v = String(u || '');
+          if (!v) return;
+          if (!/^https?:/i.test(v)) v = head ? head.replace(/\/+$/, '') + '/' + v.replace(/^\/+/, '') : v;
+          if (/^https?:/i.test(v)) urls.push(v);
+        });
+      });
+      urls = urls.filter(function (u, i, a) { return a.indexOf(u) === i; });
+      if (urls.length) return urls;
+    } catch (e) {}
+    throw new Error('AllManga gates this chapter behind a challenge. Try another source or chapter.');
+  }
+
+  /* --- Tapas --- */
+  function tapasSeriesUrl(u) {
+    var m = /\/series\/([^/?#]+)/i.exec(String(u || ''));
+    return m ? 'https://tapas.io/series/' + m[1] : String(u || '');
+  }
+  function tapasImageTitle(u) {
+    var m = /\/(?:c2_)?([^/?#]+?)\.(?:png|jpe?g|webp)(?:[?#]|$)/i.exec(String(u || ''));
+    if (!m) return '';
+    var s = decodeURIComponent(m[1]).replace(/_s\d+$/i, '');
+    s = s.replace(/_s_/g, "'s ").replace(/__+/g, ' - ').replace(/_+/g, ' ').replace(/\s+/g, ' ').trim();
+    return s ? cleanTitle(s) : '';
+  }
+  /* Tapas stores cover paths without an extension; the CDN serves the real
+     file at the same path with `.webp` appended. */
+  function tapasCover(u) {
+    u = String(u || '');
+    if (!u) return '';
+    return /\.(?:jpe?g|png|webp|gif)$/i.test(u) ? u : u + '.webp';
+  }
+  function tapasCardTitle(a) {
+    var text = cleanTitle(a.a || a.t || '');
+    if (text && /[a-z]{3,}/i.test(text) && !/^(read|tapas|series|comics?|home|search|login|sign up)$/i.test(text)) return text;
+    return tapasImageTitle(a.i) || text;
+  }
+  async function tapasCatalog(q) {
+    /* Tapas' HTML shell only contains skeleton cards; its grid is hydrated
+       from a public JSON catalogue. Use that API so Android has a native,
+       server-rendered catalogue with covers and real titles. */
+    var out = [], seen = {}, pages = q ? 3 : 1;
+    for (var pg = 0; pg < pages; pg++) {
+      var j = await readNetJSON('https://story-api.tapas.io/cosmos/api/v1/landing/free?category_type=COMIC&subtab_id=7&sort_option=POPULAR&page=' + pg + '&size=50', {
+        headers: { 'Accept': 'application/json', origin: 'https://tapas.io' }
+      });
+      var items = (j && j.data && j.data.items) || [];
+      items.forEach(function (it) {
+        var id = String(it.seriesId || '');
+        if (!id || seen[id]) return;
+        var title = cleanTitle(it.title);
+        if (!title) return;
+        if (q && title.toLowerCase().indexOf(String(q).toLowerCase()) < 0) return;
+        var ap = it.assetProperty || {};
+        var cover = tapasCover((ap.bookCoverImage && ap.bookCoverImage.path) ||
+          (ap.thumbnailImage && ap.thumbnailImage.path) || '');
+        seen[id] = 1;
+        out.push({
+          source: 'tapas', id: id, title: title, cover: cover,
+          url: 'https://tapas.io/series/' + id, ref: 'https://tapas.io/',
+          adult: !!it.mature, desc: String(it.description || '').slice(0, 600)
+        });
+      });
+    }
+    return out.slice(0, 48);
+  }
+  async function tapasDetail(item) {
+    var url = tapasSeriesUrl(item.url).replace(/\/+$/, '') + '/info';
+    var snap = await nativeSnap(providerById('tapas'), url, 'detail');
+    var doc = new DOMParser().parseFromString(String(snap.html || ''), 'text/html');
+    var og = doc.querySelector('meta[property="og:image"]');
+    var fromPage = String(snap.title || '').replace(/^Read\s+/i, '').replace(/\s*\|\s*Tapas.*$/i, '');
+    var title = cleanTitle(snap.h1) || cleanTitle(fromPage) || cleanTitle(item.title);
+    var chapters = [], seen = {};
+    (snap.anchors || []).forEach(function (a) {
+      var m = /\/episode\/(\d+)/.exec(a.h || '');
+      if (!m || seen[m[1]]) return;
+      seen[m[1]] = 1;
+      var label = String(a.a || a.t || '');
+      var no = null;
+      var em = /(?:ep|episode|chapter)\s*\.?\s*(\d+(?:\.\d+)?)/i.exec(label);
+      if (em) no = parseFloat(em[1]);
+      if (no == null) no = chapters.length + 1;
+      chapters.push({ id: m[1], no: no, title: 'Episode ' + no, url: 'https://tapas.io/episode/' + m[1], lang: 'en' });
+    });
+    if (!chapters.length) throw new Error('Tapas returned no episode list');
+    chapters.sort(function (a, b) { return a.no - b.no; });
+    return {
+      source: 'tapas', id: item.id, title: title,
+      cover: (og && og.getAttribute('content')) || snap.og || item.cover || '',
+      desc: String(snap.desc || '').slice(0, 1200),
+      author: 'Tapas', genre: '', tags: [], url: item.url,
+      ref: 'https://tapas.io/', chapters: chapters, more: false, chapterMode: 'native'
+    };
+  }
+  async function tapasChapter(_detail, chapter) {
+    var snap = await nativeSnap(providerById('tapas'), chapter.url, 'chapter');
+    var urls = [], seen = {};
+    function add(u) {
+      u = String(u || '').replace(/\\\//g, '/').replace(/\\u0026/gi, '&').replace(/&amp;/g, '&');
+      if (!/^https?:\/\/[^"'\s]+$/i.test(u)) return;
+      if (!/tapas\.io\/|\.(?:jpe?g|png|webp|gif)(?:\?|$)/i.test(u)) return;
+      if (/logo|avatar|icon|cover|thumb|emoji/i.test(u)) return;
+      if (seen[u]) return;
+      seen[u] = 1; urls.push(u);
+    }
+    (snap.readers || []).forEach(function (r) { add(r.s || r); });
+    (snap.images || []).forEach(function (im) { if ((im.w || 0) >= 480) add(im.s); });
+    var s = String(snap.html || '').replace(/\\\//g, '/').replace(/\\u0026/gi, '&');
+    var re = /https:\/\/us-a\.tapas\.io\/pc\/[^"'\s<>\\]+/gi, m;
+    while ((m = re.exec(s))) add(m[0].replace(/[),.;]+$/, ''));
+    if (!urls.length) throw new Error('Tapas returned no pages');
+    return urls;
+  }
+
+  /* --- Tappytoon (Next.js state; the reader manifest needs a browser
+         signature, so locked chapters explain themselves in-app) --- */
+  function jsonAttr(html, id) {
+    try {
+      var doc = new DOMParser().parseFromString(String(html || ''), 'text/html');
+      var el = doc.getElementById(id);
+      return el ? JSON.parse(el.textContent) : null;
+    } catch (e) { return null; }
+  }
+  function tappyState(html) {
+    var j = jsonAttr(html, '__NEXT_DATA__');
+    return (j && j.props && j.props.initialState) || null;
+  }
+  function tappyCard(c) {
+    return {
+      source: 'tappytoon', id: String(c.slug || c.id || ''), title: cleanTitle(c.title) || 'Untitled',
+      cover: String(c.coverImageUrl || c.thumbnailUrl || ''), desc: stripHtml(c.longDescription || c.synopsis || ''),
+      author: (c.authors || []).map(function (a) { return a.name || a; }).filter(Boolean).join(', '),
+      tags: (c.genres || []).map(function (g) { return g.name || g; }).filter(Boolean),
+      url: 'https://www.tappytoon.com/en/book/' + enc(String(c.slug || c.id || '')),
+      ref: 'https://www.tappytoon.com/', adult: !!c.isMature
+    };
+  }
+  async function tappyCatalog(q) {
+    var snap = await nativeSnap(providerById('tappytoon'), 'https://www.tappytoon.com/en/comics/discover', 'catalog');
+    var st = tappyState(snap.html || '');
+    if (!st) throw new Error('Tappytoon returned no catalogue');
+    var comics = (st.entities && st.entities.comics) || {};
+    var list = Object.keys(comics).map(function (k) { return tappyCard(comics[k]); });
+    if (q) {
+      var needle = q.toLowerCase();
+      list = list.filter(function (it) { return it.title.toLowerCase().indexOf(needle) >= 0; });
+    }
+    return list.filter(function (x) { return x.id; }).slice(0, 48);
+  }
+  async function tappyDetail(item) {
+    var snap = await nativeSnap(providerById('tappytoon'), item.url, 'detail');
+    var st = tappyState(snap.html || '');
+    if (!st) throw new Error('Tappytoon returned no metadata');
+    var comics = st.entities.comics || {};
+    var cid = String(item.id);
+    var c = Object.keys(comics).map(function (k) { return comics[k]; }).filter(function (x) {
+      return String(x.slug || '') === cid || String(x.id || '') === cid;
+    })[0] || Object.keys(comics).map(function (k) { return comics[k]; })[0];
+    if (!c) throw new Error('Tappytoon title missing');
+    var chapters = Object.keys(st.entities.chapters || {}).map(function (k) { return st.entities.chapters[k]; }).filter(function (ch) {
+      return !ch.comicId || String(ch.comicId) === String(c.id);
+    }).map(function (ch) {
+      var no = Number(ch.order);
+      return {
+        id: String(ch.id), no: isFinite(no) ? no : 1e9,
+        title: ch.title || ('Episode ' + (isFinite(no) ? no + 1 : ch.id)),
+        url: 'https://www.tappytoon.com/en/chapters/' + enc(String(ch.id)),
+        lang: 'en', free: !!ch.isFree
+      };
+    });
+    chapters.sort(function (a, b) { return a.no - b.no; });
+    return {
+      source: 'tappytoon', id: String(c.slug || item.id), title: cleanTitle(c.title) || item.title,
+      cover: String(c.coverImageUrl || item.cover || ''), desc: stripHtml(c.longDescription || c.synopsis || item.desc || ''),
+      author: (c.authors || []).map(function (a) { return a.name || a; }).filter(Boolean).join(', '),
+      genre: '', tags: (c.genres || []).map(function (g) { return g.name || g; }).filter(Boolean),
+      url: item.url, ref: 'https://www.tappytoon.com/', chapters: chapters,
+      more: false, chapterMode: 'native'
+    };
+  }
+  async function tappyChapter(_detail, chapter) {
+    var snap = await nativeSnap(providerById('tappytoon'), chapter.url, 'chapter');
+    var urls = parseNativeChapter(snap, providerById('tappytoon'), chapter.url);
+    if (!urls.length) throw new Error('Tappytoon locks this chapter in its own signed viewer. Try a free chapter.');
+    return urls;
+  }
+
+  /* --- MangaFire (catalogue only; page API needs a browser signature) --- */
+  async function mangafireCatalog(q) {
+    var url = q ? 'https://mangafire.to/filter?keyword=' + enc(q) : 'https://mangafire.to/';
+    var snap = await nativeSnap(providerById('mangafire'), url, 'catalog');
+    return parseNativeCatalog(snap, providerById('mangafire'));
+  }
+  async function mangafireDetail(item) {
+    var snap = await nativeSnap(providerById('mangafire'), item.url, 'detail');
+    var d = parseNativeDetail(snap, item, providerById('mangafire'));
+    if (!d.chapters.length) throw new Error('MangaFire hides its chapter list behind a signed request. Try another source.');
+    return d;
+  }
+  async function mangafireChapter() {
+    throw new Error('MangaFire hides its page list behind a signed request. Try another source.');
+  }
+
+  async function nativeLoad(append) {
+    var req = ++state.req;
+    var p = providerById(state.source);
+    if (!p) return;
+    if (state.ctl) { try { state.ctl.abort(); } catch (e) {} }
+    var ctl = new AbortController();
+    state.ctl = ctl;
+    state.loading = true;
+    state.more = false;
+    if (!append) { state.items = []; state.offset = 0; }
+    paintBody();
+    try {
+      var list = null;
+      if (p.catalog) {
+        try { list = await p.catalog(state.q); }
+        catch (e) { list = null; }
+      }
+      if (!list) {
+        var url = state.q && p.search ? p.search(state.q) : p.home;
+        var snap = await nativeSnap(p, url, 'catalog');
+        list = parseNativeCatalog(snap, p);
+      }
+      if (req !== state.req) return;
+      list = list.filter(ratingAllowed);
+      if (state.q && !p.catalog) {
+        var q = state.q.toLowerCase();
+        var hit = list.filter(function (it) { return it.title.toLowerCase().indexOf(q) >= 0; });
+        if (hit.length) list = hit;
+      }
+      state.items = list;
+      state.total = list.length;
+    } catch (e) {
+      if (req !== state.req) return;
+      state.items = [];
+      state.total = 0;
+      if (e && e.name === 'AbortError') return;
+      toast((e && e.message) ? p.name + ': ' + e.message : p.name + ' is unavailable');
+    }
+    state.loading = false;
+    paintBody();
+  }
+  async function nativeDetail(item) {
+    var p = providerById(item.source);
+    if (!p) throw new Error('Unknown provider');
+    if (p.detail) {
+      try {
+        var d0 = await p.detail(item);
+        if (d0 && d0.chapters && d0.chapters.length) return d0;
+      } catch (e) {}
+    }
+    var snap = await nativeSnap(p, item.url, 'detail');
+    var d = parseNativeDetail(snap, item, p);
+    if (!d.cover) d.cover = item.cover || '';
+    return d;
+  }
+  async function openNativeChapter(detail, chapter) {
+    state.detail = detail;
+    detail.chapters = detail.chapters || [];
+    var idx = detail.chapters.findIndex(function (c) { return c.url === chapter.url; });
+    var prev = idx > 0 ? {
+      label: '‹ Prev',
+      run: function () { openNativeChapter(detail, detail.chapters[idx - 1]); }
+    } : null;
+    var next = idx >= 0 && idx < detail.chapters.length - 1 ? {
+      label: 'Next ›',
+      run: function () { openNativeChapter(detail, detail.chapters[idx + 1]); }
+    } : null;
+    readerKey = chapter.url;
+    readerShell(detail.title, chapter.title, prev, next, '');
+    saveProgress({
+      source: detail.source, id: detail.id, title: detail.title, cover: detail.cover,
+      desc: detail.desc, seriesUrl: detail.url, ref: detail.ref, chapterId: chapter.url,
+      chapterLabel: chapter.title, page: 0
+    });
+    var p = providerById(detail.source);
+    try {
+      var urls = null;
+      if (p.chapter) {
+        try { urls = await p.chapter(detail, chapter); } catch (e0) { urls = null; }
+      }
+      if (!urls || !urls.length) {
+        var snap = await nativeSnap(p, chapter.url, 'chapter');
+        urls = parseNativeChapter(snap, p, chapter.url);
+      }
+      if (!urls.length) throw new Error('No pages found');
+      readerImages(urls, p.ref);
+    } catch (e) {
+      var body = readerEl && $('#rdRBody', readerEl);
+      if (body) body.innerHTML = '<div class="rd-empty" style="margin:60px auto;max-width:520px">This chapter could not be loaded from ' +
+        esc(sourceName(detail.source)) + '.<br><span style="font-size:12px;color:#6f7681">No external browser is opened. Try another chapter or source.</span><br><br>' +
+        '<button class="rd-btn gold" type="button" id="rdRClose">Back to chapters</button></div>';
+      var b = readerEl && $('#rdRClose', readerEl);
+      if (b) b.onclick = function () { closeReader(); };
+    }
+  }
+
   /* ---------------------------------------------------------------- toast */
   var toastTimer = 0;
   function toast(msg) {
@@ -772,14 +1611,17 @@
   function shellHtml() {
     return '<div class="rd-shell">' +
       '<div class="rd-hero"><div><h1>Reading <em>room</em></h1>' +
-      '<p>Manga, manhwa and webcomics from MangaDex and WEBTOON, delivered through the Shield tunnel. Every page is cached, nothing is tracked.</p></div>' +
-      '<div class="rd-stat"><span>MangaDex API</span><span>WEBTOON</span><span>VPN routed</span><span>Offline cache</span></div></div>' +
+      '<p>Manga, manhwa and webcomics from every native reading source, delivered through the Shield tunnel. Every page is cached, nothing is tracked, and no provider website ever opens.</p></div>' +
+      '<div class="rd-stat"><span>Native catalogues</span><span>In-app reader</span><span>VPN routed</span><span>Offline cache</span></div></div>' +
       '<div class="rd-source" role="tablist">' +
-      '<button data-rd-source="md" role="tab" aria-selected="' + (state.source === 'md') + '" class="' + (state.source === 'md' ? 'on' : '') + '">MangaDex</button>' +
-      '<button data-rd-source="wt" role="tab" aria-selected="' + (state.source === 'wt') + '" class="' + (state.source === 'wt' ? 'on' : '') + '">WEBTOON</button>' +
+      allSources().map(function (s) {
+        return '<button data-rd-source="' + s.id + '" role="tab" aria-selected="' + (state.source === s.id) + '" class="' + (state.source === s.id ? 'on' : '') + '">' + esc(s.name) + '</button>';
+      }).join('') +
       '</div>' +
       '<div class="rd-tools"><form class="rd-search" id="rdForm">' +
-      '<input id="rdSearch" type="search" autocomplete="off" placeholder="' + (state.source === 'md' ? 'Search manga, manhwa, titles...' : 'Search WEBTOON series...') + '" value="' + esc(state.q) + '">' +
+      '<input id="rdSearch" type="search" autocomplete="off" placeholder="' + (state.source === 'md'
+        ? 'Search manga, manhwa, titles...'
+        : state.source === 'wt' ? 'Search WEBTOON series...' : 'Search ' + esc(sourceName(state.source)) + '...') + '" value="' + esc(state.q) + '">' +
       '<button class="rd-btn gold" type="submit">Search</button></form>' +
       '<div class="rd-rating" role="group" aria-label="Age rating">' +
       '<button data-rd-rating="safe" class="' + (state.rating === 'safe' ? 'on' : '') + '">All ages</button>' +
@@ -787,12 +1629,16 @@
       '<button data-rd-rating="mature" class="' + (state.rating === 'mature' ? 'on' : '') + '">18+</button>' +
       '</div></div>' +
       '<div class="rd-filters">' +
-      '<label>Language<select id="rdLang" aria-label="Reading language">' + optionHtml(LANGUAGES, state.lang) + '</select></label>' +
-      '<label>' + (state.source === 'md' ? 'Type' : 'Format') + '<select id="rdType" aria-label="Title type">' + optionHtml(typesForSource(), state.type) + '</select></label>' +
+      (isNativeSource(state.source)
+        ? '<span class="rd-fnote">' + esc(sourceName(state.source)) + ' · native English catalogue</span>'
+        : '<label>Language<select id="rdLang" aria-label="Reading language">' + optionHtml(LANGUAGES, state.lang) + '</select></label>' +
+          '<label>' + (state.source === 'md' ? 'Type' : 'Format') + '<select id="rdType" aria-label="Title type">' + optionHtml(typesForSource(), state.type) + '</select></label>') +
       '<button type="button" class="rd-btn ghost" id="rdReset">Reset filters</button>' +
       '<span class="rd-fnote">' + (state.source === 'md'
         ? 'Showing titles with ' + esc(langLabel(state.lang)) + ' chapters'
-        : 'WEBTOON catalogue: ' + esc(WT_LOCALES[state.lang] ? langLabel(state.lang) : 'English')) + '</span>' +
+        : state.source === 'wt'
+          ? 'WEBTOON catalogue: ' + esc(WT_LOCALES[state.lang] ? langLabel(state.lang) : 'English')
+          : 'Catalogue, chapters and pages are fetched natively by SuperBox') + '</span>' +
       '</div>' +
       '<div class="rd-chips" id="rdChips"></div>' +
       '<div id="rdBody"></div></div>';
@@ -805,7 +1651,10 @@
       }) : [];
       return [{ g: '', n: 'All genres' }].concat(list.map(function (g) { return { g: g, n: g }; }));
     }
-    return [{ g: '', n: 'All genres' }].concat(WT_GENRES.map(function (g) { return { g: g.s, n: g.n }; }));
+    if (state.source === 'wt') {
+      return [{ g: '', n: 'All genres' }].concat(WT_GENRES.map(function (g) { return { g: g.s, n: g.n }; }));
+    }
+    return [{ g: '', n: 'All titles' }];
   }
   function paintChips() {
     var box = root && $('#rdChips', root);
@@ -817,11 +1666,17 @@
   }
 
   function cardHtml(it) {
-    var badge = it.source === 'md' ? 'MD' : (it.adult ? '18+' : 'WT');
-    var sub = it.source === 'md' ? [it.year, it.status, (it.tags || []).slice(0, 2).join(' · ')].filter(Boolean).join(' · ') : (it.genre || it.author || 'WEBTOON');
+    var badge = sourceShort(it.source);
+    var native = isNativeSource(it.source);
+    var sub = it.source === 'md'
+      ? [it.year, it.status, (it.tags || []).slice(0, 2).join(' · ')].filter(Boolean).join(' · ')
+      : it.source === 'wt'
+        ? (it.genre || it.author || 'WEBTOON')
+        : [it.author, (it.tags || []).slice(0, 2).join(' · ')].filter(Boolean).join(' · ');
+    var cover = img(it.cover, it.ref || sourceRef(it.source));
     return '<button class="rd-card" type="button" data-rd-open="' + it.source + ':' + esc(it.id) + '">' +
-      '<span class="rd-cover"><img loading="lazy" decoding="async" src="' + esc(img(it.cover)) + '" alt="' + esc(it.title) + '" onerror="this.style.display=\'none\'">' +
-      '<span class="rd-badge' + (it.source === 'wt' ? ' green' : '') + '">' + badge + '</span></span>' +
+      '<span class="rd-cover"><img loading="lazy" decoding="async" src="' + esc(cover) + '" alt="' + esc(it.title) + '" onerror="this.style.display=\'none\'">' +
+      '<span class="rd-badge' + (native ? ' green' : (it.source === 'wt' ? ' green' : '')) + '">' + badge + '</span></span>' +
       '<b>' + esc(it.title) + '</b><span>' + esc(sub || ' ') + '</span></button>';
   }
   function skeletonHtml(n) {
@@ -835,7 +1690,7 @@
     return '<div class="rd-sec"><h2>Continue reading</h2><span class="muted">' + list.length + ' title' + (list.length === 1 ? '' : 's') + '</span></div>' +
       '<div class="rd-row">' + list.map(function (h) {
         return '<button class="rd-item" type="button" data-rd-hist="' + esc(h.source + ':' + h.id) + '">' +
-          '<span class="rd-cover"><img loading="lazy" decoding="async" src="' + esc(img(h.cover)) + '" alt="' + esc(h.title) + '" onerror="this.style.display=\'none\'"></span>' +
+          '<span class="rd-cover"><img loading="lazy" decoding="async" src="' + esc(img(h.cover, h.ref || sourceRef(h.source))) + '" alt="' + esc(h.title) + '" onerror="this.style.display=\'none\'"></span>' +
           '<b>' + esc(h.title) + '</b><span>' + esc(h.chapterLabel || ('Episode ' + (h.ep || ''))) + '</span></button>';
       }).join('') + '</div>';
   }
@@ -845,23 +1700,28 @@
     if (!body) return;
     if (state.view === 'detail') { paintDetail(body); return; }
     var head = historyRow();
+    var srcName = sourceName(state.source);
+    var native = isNativeSource(state.source);
     if (state.loading && !state.items.length) {
-      body.innerHTML = head + '<div class="rd-sec"><h2>' + (state.source === 'md' ? 'MangaDex catalogue' : 'WEBTOON originals') + '</h2><span class="muted">Loading · ' + esc(langLabel(state.lang)) + '</span></div><div class="rd-grid">' + skeletonHtml(12) + '</div>';
+      body.innerHTML = head + '<div class="rd-sec"><h2>' + esc(srcName) + ' catalogue</h2><span class="muted">Loading · ' +
+        esc(native ? 'English' : langLabel(state.lang)) + '</span></div><div class="rd-grid">' + skeletonHtml(12) + '</div>';
       return;
     }
     if (!state.items.length) {
-      var filtered = !!(state.q || state.genre || state.type || state.lang !== 'en');
+      var filtered = !!(state.q || state.genre || state.type || (!native && state.lang !== 'en'));
       body.innerHTML = head + '<div class="rd-empty">' + (state.q
-        ? 'Nothing matched that search in ' + esc(langLabel(state.lang)) + '.'
-        : 'No ' + esc(langLabel(state.lang)) + ' titles for this filter yet.') +
-        '<br><span style="font-size:12px;color:#6f7681">Try another language, type or genre.</span>' +
+        ? 'Nothing matched that search on ' + esc(srcName) + '.'
+        : 'No titles from ' + esc(srcName) + ' for this filter yet.') +
+        '<br><span style="font-size:12px;color:#6f7681">Try another source, search or filter.</span>' +
         (filtered ? '<div class="rd-more"><button class="rd-btn" type="button" data-rd-reset="1">Reset filters</button></div>' : '') +
         '</div>';
       return;
     }
     var heading = state.q ? 'Results for “' + esc(state.q) + '”' : (state.source === 'md'
       ? ['Popular on MangaDex', state.type ? typeLabel(state.type) : '', esc(state.genre || ''), state.lang !== 'en' ? langLabel(state.lang) : ''].filter(Boolean).join(' · ')
-      : ['WEBTOON', state.type === 'canvas' ? 'Canvas' : 'Originals', esc(state.genre || ''), WT_LOCALES[state.lang] ? langLabel(state.lang) : 'English'].filter(Boolean).join(' · '));
+      : state.source === 'wt'
+        ? ['WEBTOON', state.type === 'canvas' ? 'Canvas' : 'Originals', esc(state.genre || ''), WT_LOCALES[state.lang] ? langLabel(state.lang) : 'English'].filter(Boolean).join(' · ')
+        : [esc(srcName), state.genre ? esc(state.genre) : 'Popular'].filter(Boolean).join(' · '));
     body.innerHTML = head +
       '<div class="rd-sec"><h2>' + heading + '</h2>' +
       '<span class="muted">' + (state.total ? state.total + ' titles' : state.items.length + ' titles') + '</span></div>' +
@@ -872,7 +1732,7 @@
     if (more) more.onclick = function () {
       if (state.loading) return;
       if (state.source === 'md') mdLoad(true);
-      else toast('Open a genre on WEBTOON for the full list');
+      else toast('Use search to narrow this source');
     };
   }
 
@@ -881,38 +1741,37 @@
     var d = state.detail;
     if (!d) return '';
     var prog = progressOf(d.source, d.id);
+    var native = isNativeSource(d.source);
     var label = '';
-    if (prog && prog.chapterLabel && d.source === 'md') label = 'Continue · ' + prog.chapterLabel;
-    if (prog && prog.ep && d.source === 'wt') label = 'Continue · Episode ' + prog.ep;
+    if (prog && prog.chapterLabel) {
+      if (d.source === 'md' || native) label = 'Continue · ' + prog.chapterLabel;
+      else if (d.source === 'wt') label = 'Continue · Episode ' + prog.ep;
+    }
     return '<div class="rd-dactions">' +
       (label ? '<button class="rd-btn gold" type="button" data-rd-continue="1">' + esc(label) + '</button>' : '') +
-      '<button class="rd-btn" type="button" data-rd-first="1">' + (d.source === 'md' ? 'Read first chapter' : 'Read episode 1') + '</button>' +
-      '<button class="rd-btn ghost" type="button" data-rd-site="1">Open on ' + (d.source === 'md' ? 'MangaDex' : 'WEBTOON') + '</button>' +
+      '<button class="rd-btn" type="button" data-rd-first="1">' + (d.source === 'wt' ? 'Read episode 1' : 'Read first chapter') + '</button>' +
       '</div>';
   }
   function paintDetail(body) {
     var d = state.detail;
     if (!d) { state.view = 'browse'; paintBody(); return; }
+    var native = isNativeSource(d.source);
+    var chapWord = d.source === 'wt' ? 'Episodes' : 'Chapters';
     var tags = (d.tags || []).map(function (t) { return '<span>' + esc(t) + '</span>'; }).join('');
     body.innerHTML = '<div class="rd-detail"><button class="rd-back" type="button" id="rdBack">← Back to reading</button>' +
-      '<div class="rd-dhead"><div class="rd-dcover"><img src="' + esc(img(d.cover)) + '" alt="' + esc(d.title) + '" onerror="this.style.display=\'none\'"></div>' +
+      '<div class="rd-dhead"><div class="rd-dcover"><img src="' + esc(img(d.cover, d.ref || sourceRef(d.source))) + '" alt="' + esc(d.title) + '" onerror="this.style.display=\'none\'"></div>' +
       '<div class="rd-dinfo"><h1>' + esc(d.title) + '</h1>' +
-      '<p class="by">' + esc(d.author || (d.source === 'md' ? 'MangaDex' : 'WEBTOON')) + (d.genre ? ' · ' + esc(d.genre) : '') + '</p>' +
+      '<p class="by">' + esc(d.author || sourceName(d.source)) + (d.genre ? ' · ' + esc(d.genre) : '') + '</p>' +
       '<div class="rd-dmeta">' + (d.year ? '<span>' + esc(d.year) + '</span>' : '') + (d.status ? '<span>' + esc(d.status) + '</span>' : '') +
-      (d.source === 'md' ? '<span>MangaDex</span>' : '<span>WEBTOON</span>') + '</div>' +
+      '<span>' + esc(sourceName(d.source)) + '</span></div>' +
       (d.desc ? '<p class="rd-desc">' + esc(d.desc) + '</p>' : '') +
       (tags ? '<div class="rd-dmeta">' + tags + '</div>' : '') +
       detailActions() + '</div></div>' +
-      '<div class="rd-chapbar"><h2>' + (d.source === 'md' ? 'Chapters' : 'Episodes') + '</h2>' +
-      '<input class="rd-chapsearch" id="rdChapSearch" type="search" placeholder="Filter ' + (d.source === 'md' ? 'chapters' : 'episodes') + '..." /></div>' +
+      '<div class="rd-chapbar"><h2>' + chapWord + '</h2>' +
+      '<input class="rd-chapsearch" id="rdChapSearch" type="search" placeholder="Filter ' + chapWord.toLowerCase() + '..." /></div>' +
       '<div id="rdChapList"></div></div>';
     var back = $('#rdBack', body);
     if (back) back.onclick = function () { state.view = 'browse'; state.detail = null; paint(); };
-    var site = $('[data-rd-site]', body);
-    if (site) site.onclick = function () {
-      var u = d.source === 'md' ? 'https://mangadex.org/title/' + d.id : d.url;
-      openSite(u, d.title);
-    };
     var first = $('[data-rd-first]', body);
     if (first) first.onclick = function () { openFirst(d); };
     var cont = $('[data-rd-continue]', body);
@@ -925,9 +1784,13 @@
         mdFeed(d, 0, false).then(function () {
           paintChapters('');
         }).catch(function () {
-          $('#rdChapList', body).innerHTML = '<div class="rd-empty">Chapters could not be loaded. Open MangaDex directly instead.</div>';
+          $('#rdChapList', body).innerHTML = '<div class="rd-empty">Chapters could not be loaded. Try again in a moment.</div>';
         });
       } else paintChapters('');
+    } else if (d.source === 'wt') {
+      paintChapters('');
+    } else if (native) {
+      paintChapters('');
     } else {
       paintChapters('');
     }
@@ -944,6 +1807,11 @@
         if (!f) return true;
         return ('ch ' + c.chapter + ' ' + c.title + ' ' + c.group).toLowerCase().indexOf(f) >= 0;
       });
+      if (!list.length && !f) {
+        host.innerHTML = '<div class="rd-empty"><b>No ' + esc(langLabel(d.feedLang || state.lang)) +
+          ' chapters</b><span>This title has no readable chapters in the selected language. Pick another language above.</span></div>';
+        return;
+      }
       host.innerHTML = '<div class="rd-chaps">' + list.slice(0, 400).map(function (c) {
         var label = c.chapter ? 'Ch. ' + c.chapter : 'Oneshot';
         var done = prog && prog.chapterId === c.id;
@@ -960,6 +1828,24 @@
         more.textContent = 'Loading...';
         mdFeed(d, d.feedOffset || 0, true).then(function () { paintChapters(filter); }).catch(function () { more.disabled = false; more.textContent = 'Retry'; });
       };
+    } else if (isNativeSource(d.source)) {
+      var chs = (d.chapters || []).filter(function (c) {
+        if (!f) return true;
+        return ('ch ' + c.no + ' ' + c.title + ' ' + c.id).toLowerCase().indexOf(f) >= 0;
+      });
+      if (!chs.length && !f) {
+        host.innerHTML = '<div class="rd-empty"><b>No chapters listed</b><span>' + esc(sourceName(d.source)) +
+          ' did not return a chapter list for this title. Try another source.</span></div>';
+        return;
+      }
+      host.innerHTML = '<div class="rd-chaps">' + chs.map(function (c) {
+        var done = prog && String(prog.chapterId) === String(c.url);
+        return '<button class="rd-chap" type="button" data-rd-nat="' + esc(c.url) + '">' +
+          '<span class="n">' + esc(c.no < 1e9 ? 'Ch. ' + c.no : 'Ch.') + '</span>' +
+          '<span class="t">' + esc(c.title || 'Chapter') + '</span>' +
+          '<span class="g">' + esc(sourceShort(d.source)) + ' · EN</span><span class="d"></span>' +
+          (done ? '<span class="done">✓</span>' : '') + '</button>';
+      }).join('') + '</div>';
     } else {
       var eps = (d.episodes || []).filter(function (e) {
         if (!f) return true;
@@ -993,6 +1879,13 @@
         var no = parseInt(epb.getAttribute('data-rd-ep'), 10);
         var ep = (d.episodes || []).filter(function (x) { return Number(x.no) === no; })[0];
         if (ep) openWtChapter(d, ep);
+        return;
+      }
+      var nb = e.target.closest('[data-rd-nat]');
+      if (nb && isNativeSource(d.source)) {
+        var cu = nb.getAttribute('data-rd-nat');
+        var chn = (d.chapters || []).filter(function (c) { return String(c.url) === cu; })[0];
+        if (chn) openNativeChapter(d, chn);
       }
     };
   }
@@ -1002,6 +1895,9 @@
       if (!d.chapters || !d.chapters.length) { toast('Chapters are still loading'); return; }
       var ch = d.chapters[d.chapters.length - 1];
       openMdChapter(d, ch);
+    } else if (isNativeSource(d.source)) {
+      if (!d.chapters || !d.chapters.length) { toast('Chapters are still loading'); return; }
+      openNativeChapter(d, d.chapters[0]);
     } else {
       var ep = { no: 1, title: 'Episode 1', url: wtSeriesUrlFrom(d.url, 1) };
       openWtChapter(d, ep);
@@ -1016,6 +1912,16 @@
       toast('Chapter list is still loading');
       if (d.chapters) { openFirst(d); return; }
       mdFeed(d, 0, false).then(function () { continueReading(d); }).catch(function () { openFirst(d); });
+    } else if (isNativeSource(d.source)) {
+      var nch = (d.chapters || []).filter(function (c) { return String(c.url) === String(p.chapterId); })[0];
+      if (nch) { openNativeChapter(d, nch); return; }
+      if (d.chapters && d.chapters.length) { openFirst(d); return; }
+      nativeDetail(d).then(function (fresh) {
+        state.detail = fresh;
+        if (state.view === 'detail') paint();
+        var hit = (fresh.chapters || []).filter(function (c) { return String(c.url) === String(p.chapterId); })[0];
+        openNativeChapter(fresh, hit || (fresh.chapters || [])[0]);
+      }).catch(function () { toast('This chapter could not be reopened'); });
     } else {
       var ep = (d.episodes || []).filter(function (e) { return Number(e.no) === Number(p.ep); })[0] ||
         { no: Number(p.ep) || 1, title: 'Episode ' + (p.ep || 1), url: wtSeriesUrlFrom(d.url, p.ep || 1) };
@@ -1033,6 +1939,12 @@
         source: 'md', id: h.id, title: h.title, cover: h.cover, desc: h.desc || '',
         tags: h.tags || [], year: h.year || '', status: h.status || '', author: h.author || ''
       };
+    } else if (isNativeSource(source)) {
+      state.detail = {
+        source: source, id: h.id, title: h.title, cover: h.cover, desc: h.desc || '',
+        tags: h.tags || [], url: h.seriesUrl || '', ref: h.ref || sourceRef(source),
+        chapters: [], more: false, chapterMode: 'native'
+      };
     } else {
       state.detail = {
         source: 'wt', id: h.id, title: h.title, cover: h.cover, desc: h.desc || '',
@@ -1047,6 +1959,14 @@
         state.detail = s;
         if (state.view === 'detail') paint();
       }).catch(function () {});
+    } else if (isNativeSource(source) && h.seriesUrl) {
+      nativeDetail({ source: source, id: h.id, title: h.title, cover: h.cover, url: h.seriesUrl, ref: h.ref || sourceRef(source) })
+        .then(function (fresh) {
+          state.detail = fresh;
+          if (state.view === 'detail') paint();
+          var ch = (fresh.chapters || []).filter(function (c) { return String(c.url) === String(h.chapterId); })[0];
+          if (ch) openNativeChapter(fresh, ch);
+        }).catch(function () {});
     }
   }
 
@@ -1168,10 +2088,10 @@
       readerImages(urls, 'https://mangadex.org/');
     } catch (e) {
       var body = readerEl && $('#rdRBody', readerEl);
-      if (body) body.innerHTML = '<div class="rd-empty" style="margin:60px auto;max-width:520px">This chapter could not be loaded.<br><br>' +
-        '<button class="rd-btn gold" type="button" id="rdROpen">Open on MangaDex</button></div>';
-      var b = readerEl && $('#rdROpen', readerEl);
-      if (b) b.onclick = function () { openSite('https://mangadex.org/chapter/' + chapter.id, manga.title); };
+      if (body) body.innerHTML = '<div class="rd-empty" style="margin:60px auto;max-width:520px">This chapter could not be loaded. Try again in a moment.<br><br>' +
+        '<button class="rd-btn gold" type="button" id="rdRClose">Back to chapters</button></div>';
+      var b = readerEl && $('#rdRClose', readerEl);
+      if (b) b.onclick = function () { closeReader(); };
     }
   }
 
@@ -1216,10 +2136,10 @@
       readerImages(urls, 'https://www.webtoons.com/');
     } catch (e) {
       var body = readerEl && $('#rdRBody', readerEl);
-      if (body) body.innerHTML = '<div class="rd-empty" style="margin:60px auto;max-width:520px">This episode could not be loaded.<br><br>' +
-        '<button class="rd-btn gold" type="button" id="rdROpen">Open on WEBTOON</button></div>';
-      var b = readerEl && $('#rdROpen', readerEl);
-      if (b) b.onclick = function () { openSite(ep.url, series.title); };
+      if (body) body.innerHTML = '<div class="rd-empty" style="margin:60px auto;max-width:520px">This episode could not be loaded. Try again in a moment.<br><br>' +
+        '<button class="rd-btn gold" type="button" id="rdRClose">Back to episodes</button></div>';
+      var b = readerEl && $('#rdRClose', readerEl);
+      if (b) b.onclick = function () { closeReader(); };
     }
   }
 
@@ -1245,6 +2165,15 @@
       } catch (e) {
         if (state.view === 'detail') paint();
       }
+    } else if (isNativeSource(item.source)) {
+      try {
+        var nd = await nativeDetail(item);
+        state.detail = nd;
+        if (state.view === 'detail') paint();
+      } catch (e) {
+        if (state.view === 'detail') paint();
+        toast((e && e.message) || (sourceName(item.source) + ' could not be opened'));
+      }
     } else {
       try {
         var s = await wtSeries(item.url);
@@ -1267,7 +2196,9 @@
   function bind() {
     if (!root) return;
     function reload() {
-      if (state.source === 'md') mdLoad(false); else wtLoad();
+      if (state.source === 'md') mdLoad(false);
+      else if (state.source === 'wt') wtLoad();
+      else nativeLoad(false);
     }
     function resetFilters() {
       state.q = '';
@@ -1393,7 +2324,9 @@
           if (root && state.source === 'md' && state.view === 'browse') paintChips();
         });
         if (!state.items.length) {
-          if (state.source === 'md') mdLoad(false); else wtLoad();
+          if (state.source === 'md') mdLoad(false);
+          else if (state.source === 'wt') wtLoad();
+          else nativeLoad(false);
         }
       });
     },

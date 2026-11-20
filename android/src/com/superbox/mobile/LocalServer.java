@@ -268,24 +268,33 @@ public class LocalServer {
             /* Kill switch: every upstream route is closed until WARP is up.
                Local assets (HTML/JS/CSS) keep loading so the gate can paint. */
             boolean upstream = "/img".equals(path) || "/page".equals(path)
-                    || "/extract".equals(path) || path.startsWith("/tmdb/3/")
+                    || "/reading/net".equals(path) || "/extract".equals(path)
+                    || path.startsWith("/tmdb/3/")
                     || path.startsWith("/api/home") || path.startsWith("/api/trending")
                     || path.startsWith("/api/detail") || path.startsWith("/api/play")
                     || path.startsWith("/api/rec") || path.startsWith("/api/search")
                     || "/stream".equals(path) || "/raw".equals(path)
                     || "/hls".equals(path) || "/hlsseg".equals(path)
                     || "/dash".equals(path) || "/dashseg".equals(path);
-            if (upstream && (vpn == null || !vpn.isOn())) {
+            /* A manual OFF is an explicit direct route, not an offline state.
+               Every other upstream route still waits for the tunnel. */
+            boolean bypass = vpn != null && vpn.isBypassed();
+            if (upstream && (vpn == null || (!vpn.isOn() && !bypass))) {
                 send(out, 503, "application/json; charset=utf-8",
                         bytes("{\"error\":\"vpn_offline\",\"message\":\"SuperBox Shield is not connected. Upstream routes stay closed until the tunnel is up.\"}"),
                         "Cache-Control: no-store\r\nRetry-After: 4\r\n");
                 return;
             }
 
+            if ("/reading/net".equals(path)) {
+                byte[] body = readRequestBody(in, headers);
+                handleReadingNet(out, body);
+                return;
+            }
             if ("/img".equals(path)) {
                 String iu = qs.get("u");
                 if (iu == null || iu.isEmpty()) iu = qs.get("url");
-                handleImage(out, iu);
+                handleImage(out, iu, qs.get("ref"));
                 return;
             }
             if ("/page".equals(path)) {
@@ -332,6 +341,131 @@ public class LocalServer {
         }
     }
 
+    // ------------------------------------------------------------ reading net
+
+    /* The reading bridge reaches provider APIs that need a specific header
+       (ToonSutra auth, AllManga GraphQL). Only reading hosts are allowed and
+       the request headers are sanitized, so this can never become a general
+       purpose proxy. */
+    private static final Pattern READING_HOST_RE = Pattern.compile(
+            "(^|\\.)(asurascans\\.com|asuracomic\\.net|flamecomics\\.xyz|vortexscans\\.org|"
+            + "hivetoons\\.org|comix\\.to|manhuaus\\.club|nelomanga\\.net|tappytoon\\.com|"
+            + "tapas\\.io|allmanga\\.to|allanime\\.day|mangafire\\.to|toonsutra\\.com|"
+            + "hentai20\\.io|mangadex\\.org|mangadex\\.network|webtoons\\.com|naver\\.com|"
+            + "mangapark\\.net|batoto\\.com)$", Pattern.CASE_INSENSITIVE);
+
+    private static byte[] readRequestBody(InputStream in, Map<String, String> headers)
+            throws IOException {
+        int len = 0;
+        try {
+            len = Integer.parseInt(String.valueOf(headers.get("content-length")));
+        } catch (Exception ignored) {}
+        if (len <= 0) return new byte[0];
+        if (len > 2 * 1024 * 1024) throw new IOException("request body too large");
+        byte[] buf = new byte[len];
+        int off = 0;
+        while (off < len) {
+            int n = in.read(buf, off, len - off);
+            if (n < 0) break;
+            off += n;
+        }
+        return buf;
+    }
+
+    private void handleReadingNet(OutputStream out, byte[] raw) throws IOException {
+        JSONObject p;
+        try {
+            p = new JSONObject(new String(raw, java.nio.charset.StandardCharsets.UTF_8));
+        } catch (Exception e) {
+            sendJson(out, 400, "{\"ok\":false,\"error\":\"bad json\"}");
+            return;
+        }
+        String netUrl = p.optString("url", "");
+        String host = hostOf(netUrl);
+        if (host == null || !READING_HOST_RE.matcher(host).find()) {
+            sendJson(out, 403, "{\"ok\":false,\"error\":\"host not allowed\"}");
+            return;
+        }
+        String method = p.optString("method", "GET").toUpperCase(Locale.US);
+        if (!"GET".equals(method) && !"POST".equals(method)) {
+            sendJson(out, 400, "{\"ok\":false,\"error\":\"method not allowed\"}");
+            return;
+        }
+        HttpURLConnection c = null;
+        try {
+            c = (HttpURLConnection) new URL(netUrl).openConnection(routeFor(netUrl));
+            c.setConnectTimeout(12000);
+            c.setReadTimeout(24000);
+            c.setInstanceFollowRedirects(true);
+            c.setUseCaches(false);
+            c.setRequestMethod(method);
+            boolean mangadex = "api.mangadex.org".equalsIgnoreCase(host);
+            c.setRequestProperty("User-Agent", mangadex
+                    ? "SuperBox/1.3 (+https://github.com/mohdziauddin2006-cloud/superbox)" : UA);
+            c.setRequestProperty("Accept", "application/json,text/plain;q=0.9,*/*;q=0.8");
+            c.setRequestProperty("Accept-Language", "en-US,en;q=0.9");
+            c.setRequestProperty("Cache-Control", "no-cache");
+            c.setRequestProperty("Connection", "close");
+            JSONObject wanted = p.optJSONObject("headers");
+            if (wanted != null) {
+                java.util.Iterator<String> keys = wanted.keys();
+                while (keys.hasNext()) {
+                    String k = keys.next();
+                    if (!k.matches("(?i)accept|accept-language|authorization|auth|os|content-type|x-[a-z0-9-]{1,60}")) continue;
+                    String v = wanted.optString(k, "");
+                    if (v.isEmpty() || v.length() > 4096 || v.indexOf('\r') >= 0 || v.indexOf('\n') >= 0) continue;
+                    c.setRequestProperty(k, v);
+                }
+            }
+            String origin = "https://www.toonsutra.com/";
+            if (host.endsWith("allanime.day") || host.endsWith("allmanga.to")) origin = "https://allmanga.to/";
+            else if (host.endsWith("mangadex.org")) origin = "https://mangadex.org/";
+            else if (host.equals("tapas.io") || host.endsWith(".tapas.io")) origin = "https://tapas.io/";
+            else {
+                try { origin = new URL(netUrl).getProtocol() + "://" + host + "/"; } catch (Exception ignored) {}
+            }
+            c.setRequestProperty("Referer", origin);
+            c.setRequestProperty("Origin", origin.replaceAll("/$", ""));
+            if ("POST".equals(method)) {
+                c.setDoOutput(true);
+                byte[] body = p.optString("body", "").getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                c.setFixedLengthStreamingMode(body.length);
+                OutputStream os = c.getOutputStream();
+                os.write(body);
+                os.close();
+            }
+            int code = c.getResponseCode();
+            InputStream is = code >= 200 && code < 300 ? c.getInputStream() : c.getErrorStream();
+            ByteArrayOutputStream buf = new ByteArrayOutputStream();
+            if (is != null) {
+                byte[] chunk = new byte[8192];
+                int n;
+                while ((n = is.read(chunk)) > 0) {
+                    buf.write(chunk, 0, n);
+                    if (buf.size() > 8 * 1024 * 1024) break;
+                }
+                is.close();
+            }
+            JSONObject j = new JSONObject();
+            j.put("ok", code >= 200 && code < 300);
+            j.put("status", code);
+            j.put("url", netUrl);
+            j.put("contentType", String.valueOf(c.getContentType()));
+            j.put("body", new String(buf.toByteArray(), java.nio.charset.StandardCharsets.UTF_8));
+            sendJson(out, 200, j.toString());
+        } catch (Exception e) {
+            Log.w(TAG, "reading net " + host + ": " + e.getMessage());
+            JSONObject j = new JSONObject();
+            try {
+                j.put("ok", false);
+                j.put("error", String.valueOf(e.getMessage()));
+            } catch (Exception ignored) {}
+            sendJson(out, 502, j.toString());
+        } finally {
+            if (c != null) c.disconnect();
+        }
+    }
+
     // ---------------------------------------------------------------- VPN
 
     private void handleVpn(OutputStream out, String path, Map<String, String> qs)
@@ -345,6 +479,18 @@ public class LocalServer {
         try {
             if ("/api/vpn/status".equals(path)) {
                 sendJson(out, 200, vpn.status().toString());
+                return;
+            }
+            if ("/api/vpn/off".equals(path)) {
+                sendJson(out, 200, vpn.off().toString());
+                return;
+            }
+            if ("/api/vpn/on".equals(path)) {
+                sendJson(out, 200, vpn.enable(region).toString());
+                return;
+            }
+            if ("/api/vpn/ping".equals(path)) {
+                sendJson(out, 200, vpn.measurePing().toString());
                 return;
             }
             if ("/api/vpn/switch".equals(path)) {
@@ -505,7 +651,7 @@ public class LocalServer {
 
     // ------------------------------------------------------------- images
 
-    private void handleImage(OutputStream out, String url) throws IOException {
+    private void handleImage(OutputStream out, String url, String refHint) throws IOException {
         url = normalizeUrl(url);
         if (url == null || url.isEmpty() || !isSafeUrl(url)) {
             send(out, 404, "text/plain", bytes("missing image"), null);
@@ -523,6 +669,7 @@ public class LocalServer {
             return;
         }
         String referer = imageReferer(url);
+        if (refHint != null && refHint.startsWith("http")) referer = refHint;
         String[] refs = referer == null ? new String[]{null, SITE + "/"} : new String[]{referer, null, SITE + "/"};
         for (String ref : refs) {
             HttpURLConnection c = null;
@@ -624,6 +771,19 @@ public class LocalServer {
         if (host.contains("wikipedia") || host.contains("wikimedia")) return "https://en.wikipedia.org/";
         if (host.contains("mangadex")) return "https://mangadex.org/";
         if (host.contains("pstatic") || host.contains("webtoons") || host.contains("naver")) return "https://www.webtoons.com/";
+        if (host.contains("asura")) return "https://asurascans.com/";
+        if (host.contains("flamecomics")) return "https://flamecomics.xyz/";
+        if (host.contains("vortexscans")) return "https://vortexscans.org/";
+        if (host.contains("hivetoon")) return "https://hivetoons.org/";
+        if (host.contains("comix")) return "https://comix.to/";
+        if (host.contains("manhuaus")) return "https://manhuaus.club/";
+        if (host.contains("nelomanga")) return "https://www.nelomanga.net/";
+        if (host.contains("tappytoon")) return "https://www.tappytoon.com/";
+        if (host.contains("tapas")) return "https://tapas.io/";
+        if (host.contains("allmanga") || host.contains("allanime")) return "https://allmanga.to/";
+        if (host.contains("mangafire")) return "https://mangafire.to/";
+        if (host.contains("toonsutra")) return "https://www.toonsutra.com/";
+        if (host.contains("hentai1") || host.contains("hentai20")) return "https://hentai20.io/";
         return originOf(url);
     }
 
@@ -655,7 +815,7 @@ public class LocalServer {
     }
 
     private HttpURLConnection openImage(String url, String ref) throws IOException {
-        HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection(proxy());
+        HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection(routeFor(url));
         c.setConnectTimeout(9000);
         c.setReadTimeout(18000);
         c.setInstanceFollowRedirects(true);
@@ -892,7 +1052,7 @@ public class LocalServer {
     private static final Pattern HTTP_RE = Pattern.compile("^https?://", Pattern.CASE_INSENSITIVE);
 
     private HttpURLConnection openWeb(String url, String ref) throws IOException {
-        HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection(proxy());
+        HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection(routeFor(url));
         c.setConnectTimeout(12000);
         c.setReadTimeout(25000);
         c.setInstanceFollowRedirects(true);
@@ -1480,8 +1640,10 @@ public class LocalServer {
         return sec + "," + md5;
     }
 
-    /** Every upstream connection rides the embedded tunnel, never the raw NIC. */
-    private static Proxy proxy() {
+    /** Every upstream connection rides the embedded tunnel unless the user
+        explicitly turned the Shield off. */
+    private Proxy proxy() {
+        if (vpn != null && vpn.isBypassed()) return Proxy.NO_PROXY;
         return new Proxy(Proxy.Type.HTTP,
                 new InetSocketAddress(VpnManager.HOST, VpnManager.PORT));
     }
@@ -1492,7 +1654,7 @@ public class LocalServer {
        nhplayer's r2 CDN (1hanime.com) throttles WARP the same way, so its
        verified media bytes are fetched directly while player.php, the API
        and artwork stay on the tunnel. */
-    private static Proxy routeFor(String url) {
+    private Proxy routeFor(String url) {
         String h = hostOf(url);
         if (h != null && (h.equals("hakunaymatata.com") || h.endsWith(".hakunaymatata.com"))) {
             return Proxy.NO_PROXY;
@@ -1500,10 +1662,17 @@ public class LocalServer {
         if (h != null && (h.equals("1hanime.com") || h.endsWith(".1hanime.com"))) {
             return Proxy.NO_PROXY;
         }
+        /* MangaDex rejects WARP egress with a bot challenge. Its API, at-home
+           image hosts and cover uploads use the direct route while the Shield
+           stays on; the rest of the app keeps the tunnel. */
+        if (h != null && (h.equals("mangadex.org") || h.endsWith(".mangadex.org")
+                || h.equals("mangadex.network") || h.endsWith(".mangadex.network"))) {
+            return Proxy.NO_PROXY;
+        }
         return proxy();
     }
 
-    private static String routeName(String url) {
+    private String routeName(String url) {
         return routeFor(url) == Proxy.NO_PROXY ? "direct" : "warp";
     }
 
