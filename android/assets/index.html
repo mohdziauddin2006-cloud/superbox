@@ -52,6 +52,10 @@ window.__SB_TOKEN__ = "__SB_TOKEN_VALUE__";
       <span class="brand-word">SUPER<span>BOX</span></span>
     </button>
     <div class="top-actions">
+      <button id="vpnChip" class="vpn-chip" type="button" aria-haspopup="dialog" aria-label="VPN control">
+        <span class="vpn-chip-dot" id="vpnChipDot"></span>
+        <span class="vpn-chip-text"><b id="vpnChipLabel">Shield</b><i id="vpnChipPing">—</i></span>
+      </button>
       <button id="searchBtn" class="icon-btn" aria-label="Search">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.2-3.2"></path></svg>
       </button>
@@ -81,10 +85,6 @@ window.__SB_TOKEN__ = "__SB_TOKEN_VALUE__";
     <button class="tab" data-tab="reading" aria-label="Reading">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15.5H6.5A2.5 2.5 0 0 0 4 21V5.5Z"></path><path d="M4 5.5V21M8 7h8M8 11h6"></path></svg>
       <span>Reading</span>
-    </button>
-    <button class="tab" data-tab="sources" aria-label="Sources">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M3.5 9h17M3.5 15h17M12 3c2.5 2.6 3.8 5.6 3.8 9S14.5 18.4 12 21c-2.5-2.6-3.8-5.6-3.8-9S9.5 5.6 12 3Z"></path></svg>
-      <span>Sources</span>
     </button>
     <button class="tab" data-tab="me" aria-label="Me">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"></circle><path d="M4.5 21c.7-4 3.5-6.2 7.5-6.2s6.8 2.2 7.5 6.2"></path></svg>
@@ -211,7 +211,6 @@ window.__SB_TOKEN__ = "__SB_TOKEN_VALUE__";
 
 <script src="/sources.js"></script>
 <script src="/libraries.js"></script>
-<script src="/sources-hub.js"></script>
 <script src="/reading.js"></script>
 <script src="/app.js"></script>
 <script src="/library.js"></script>

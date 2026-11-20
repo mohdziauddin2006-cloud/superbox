@@ -27,12 +27,15 @@ const fs = require('fs');
 const net = require('net');
 const path = require('path');
 const { app } = require('electron');
-const { ProxyAgent, fetch: proxyFetch, setGlobalDispatcher } = require('undici');
+const { ProxyAgent, fetch: proxyFetch, setGlobalDispatcher, Agent } = require('undici');
 
 const PROXY_HOST = '127.0.0.1';
 const PROXY_PORT = 46950;
 const PROXY_URL = 'http://' + PROXY_HOST + ':' + PROXY_PORT;
 const TRACE_URL = 'https://www.cloudflare.com/cdn-cgi/trace';
+/* Captured before installDispatcher() swaps globalThis.fetch, so a manual
+   "VPN OFF" can send every request straight out of the host connection. */
+const BASE_FETCH = globalThis.fetch.bind(globalThis);
 
 /* Public Cloudflare WARP MASQUE endpoints. Only the `.2`/`.3` addresses in
    these anycast ranges speak MASQUE over TLS/443; the older `.1` addresses
@@ -63,6 +66,20 @@ const REGION_LABEL = {
   auto: 'Global', us: 'United States', ca: 'Canada', uk: 'United Kingdom',
   au: 'Australia', in: 'India', de: 'Germany', jp: 'Japan',
   sg: 'Singapore', hk: 'Hong Kong', kr: 'South Korea', fr: 'France', br: 'Brazil'
+};
+/* Cloudflare's trace reports an edge airport code (colo). Translate the ones
+   the regional profiles usually land on into a city for the live panel. */
+const COLO_CITY = {
+  BOM: 'Mumbai', DEL: 'New Delhi', MAA: 'Chennai', BLR: 'Bengaluru',
+  IAD: 'Ashburn', EWR: 'Newark', LAX: 'Los Angeles', SJC: 'San Jose',
+  ORD: 'Chicago', DFW: 'Dallas', MIA: 'Miami', SEA: 'Seattle',
+  YYZ: 'Toronto', YVR: 'Vancouver', YUL: 'Montreal',
+  LHR: 'London', LGW: 'London', MAN: 'Manchester',
+  SYD: 'Sydney', MEL: 'Melbourne', BNE: 'Brisbane',
+  FRA: 'Frankfurt', MUC: 'Munich', DUS: 'Düsseldorf',
+  NRT: 'Tokyo', KIX: 'Osaka', SIN: 'Singapore', HKG: 'Hong Kong',
+  ICN: 'Seoul', CDG: 'Paris', MRS: 'Marseille', GRU: 'São Paulo',
+  AMS: 'Amsterdam', MAD: 'Madrid', FCO: 'Rome', WAW: 'Warsaw'
 };
 
 const START_ATTEMPTS = 6;        /* endpoint profiles tried on a cold start */
@@ -96,10 +113,14 @@ function normRegion(r) {
 class VpnManager {
   constructor() {
     this.child = null;
-    this.state = 'idle';          /* idle | provisioning | connecting | on | error */
+    this.state = 'idle';          /* idle | provisioning | connecting | on | error | off */
+    this.enabled = true;          /* manual OFF clears this until the user re-enables */
+    this.ping = 0;
     this.region = 'auto';
     this.preferred = 'auto';      /* region a source asked for; applied on reconnect */
     this.actual = '';
+    this.colo = '';
+    this.city = '';
     this.ip = '';
     this.warp = false;
     this.error = '';
@@ -158,6 +179,17 @@ class VpnManager {
     return this._agent;
   }
 
+  /* Honest host routing for manual OFF. The global undici dispatcher stays
+     pointed at the Shield while the app runs, so a direct request must opt out
+     explicitly instead of inheriting the dead proxy. */
+  directAgent() {
+    if (!this._directAgent) {
+      try { this._directAgent = new Agent({ connect: { timeout: 20000 } }); }
+      catch (e) { this._directAgent = null; }
+    }
+    return this._directAgent;
+  }
+
   log(line) {
     try {
       var file = path.join(this.dataDir(), 'shield.log');
@@ -178,6 +210,7 @@ class VpnManager {
     if (state) this.state = state;
     if (phase) this.phase = phase;
     if (typeof progress === 'number') this.progress = Math.max(0, Math.min(100, progress));
+    this.notify();
   }
 
   /* Install one process-wide dispatch rule. Local control-plane requests stay
@@ -188,8 +221,15 @@ class VpnManager {
     this._dispatcherInstalled = true;
     try { setGlobalDispatcher(this.agent()); } catch (e) { this.log('dispatcher: ' + e.message); }
     var nativeFetch = globalThis.fetch;
+    var self = this;
     globalThis.fetch = function (input, init) {
       var u = typeof input === 'string' ? input : (input && input.url) || '';
+      /* Manual OFF means honest direct routing: no dead local proxy in the
+         path, no accidental kill-switch. Local control-plane stays native. */
+      if (!self.enabled) {
+        var d = self.directAgent();
+        return d ? BASE_FETCH(input, Object.assign({}, init, { dispatcher: d })) : BASE_FETCH(input, init);
+      }
       if (/^https?:\/\/(?:127\.0\.0\.1|localhost)(?::|\/|$)/i.test(u)) {
         return nativeFetch(input, init);
       }
@@ -334,9 +374,16 @@ class VpnManager {
       var ctl = new AbortController();
       var tm = setTimeout(function () { try { ctl.abort(); } catch (e) {} }, 12000);
       try {
-        var r = await proxyFetch(TRACE_URL, { dispatcher: self.agent(), signal: ctl.signal });
+        /* Manual OFF means there is no tunnel to ask: measure the host route
+           so ping/latency stays honest while disconnected. */
+        var direct = !self.enabled || self.state === 'off';
+        var t0 = Date.now();
+        var r = direct
+          ? await BASE_FETCH(TRACE_URL, { signal: ctl.signal, cache: 'no-store' })
+          : await proxyFetch(TRACE_URL, { dispatcher: self.agent(), signal: ctl.signal });
         if (!r.ok) throw new Error('trace HTTP ' + r.status);
         var text = await r.text();
+        self.ping = Math.max(1, Date.now() - t0);
         var map = {};
         text.split(/\r?\n/).forEach(function (line) {
           var i = line.indexOf('=');
@@ -344,9 +391,11 @@ class VpnManager {
         });
         self.warp = map.warp === 'on';
         self.actual = String(map.loc || '').toUpperCase();
+        self.colo = String(map.colo || '').toUpperCase();
+        self.city = COLO_CITY[self.colo] || '';
         self.ip = String(map.ip || '');
         self.lastProbe = Date.now();
-        return self.warp;
+        return direct ? true : self.warp;
       } finally {
         clearTimeout(tm);
         self.probing = null;
@@ -395,6 +444,7 @@ class VpnManager {
      rotation, sleep/resume, network change). When three probes in a row fail
      the manager rebuilds it without waiting for the user to notice. */
   async watch() {
+    if (!this.enabled) return;
     if (this._watchBusy || this._starting) return;
     if (this.state !== 'on') return;
     if (!this.child) { this.recover('Shield process disappeared'); return; }
@@ -415,6 +465,7 @@ class VpnManager {
   }
 
   async recover(reason) {
+    if (!this.enabled) return this.status();
     if (this._recovering || this._starting) return this._recovering;
     this.log('self-repair: ' + reason);
     this.error = reason || 'Reconnecting the Shield';
@@ -428,6 +479,7 @@ class VpnManager {
   }
 
   async _bringUp(region, fresh) {
+    if (!this.enabled) return this.status();
     var wanted = normRegion(region || this.region);
     this.installDispatcher();
     this.stopWatchdog();
@@ -435,6 +487,8 @@ class VpnManager {
     this.error = '';
     this.warp = false;
     this.actual = '';
+    this.colo = '';
+    this.city = '';
     this.ip = '';
     this.region = wanted;
     try {
@@ -533,7 +587,9 @@ class VpnManager {
   }
 
   async start(region) {
+    if (!this.enabled) return this.status();
     if (this._starting) return this._starting;
+    try { setGlobalDispatcher(this.agent()); } catch (e) {}
     var self = this;
     this._starting = (async function () {
       try {
@@ -554,7 +610,72 @@ class VpnManager {
     this.stop();
   }
 
+  /* Manual OFF: the user asked for clean direct routing. Tear the tunnel down,
+     tell the host session to stop using the local proxy, and report a real
+     "disconnected" state (not an error) everywhere. */
+  async manualOff() {
+    this.log('manual OFF - direct routing');
+    this.enabled = false;
+    this.stopWatchdog();
+    this._watchFails = 0;
+    this.killChild();
+    try { await this.waitPortFree(5000); } catch (e) {}
+    try { setGlobalDispatcher(this.directAgent()); } catch (e) {}
+    this.state = 'off';
+    this.phase = 'Disconnected';
+    this.progress = 0;
+    this.warp = false;
+    this.actual = '';
+    this.colo = '';
+    this.city = '';
+    this.ip = '';
+    this.startedAt = 0;
+    this.error = '';
+    this.notify();
+    return this.status();
+  }
+
+  /* Manual ON: restore the tunnel and, when the host session listens, point
+     Chromium at the local proxy again. */
+  async manualOn(region) {
+    this.enabled = true;
+    this.preferred = normRegion(region || this.preferred || this.region || 'auto');
+    this.log('manual ON - ' + this.preferred);
+    return this.start(this.preferred);
+  }
+
+  /* Host hook (main.js) so the Chromium session proxy follows manual OFF/ON.
+     Called on every phase change; the host coalesces duplicate values. */
+  setListener(fn) { this._onState = typeof fn === 'function' ? fn : null; }
+  notify() {
+    if (!this._onState) return;
+    try { this._onState(this.status()); } catch (e) {}
+  }
+
+  /* Real-time latency through the current route (proxy when connected,
+     host connection when the user disconnected the Shield). */
+  async pingNow() {
+    var t0 = Date.now();
+    var ctl = new AbortController();
+    var tm = setTimeout(function () { try { ctl.abort(); } catch (e) {} }, 4500);
+    try {
+      var opts = { signal: ctl.signal, cache: 'no-store' };
+      var r = this.enabled && this.state === 'on'
+        ? await proxyFetch(TRACE_URL, Object.assign({ dispatcher: this.agent() }, opts))
+        : await BASE_FETCH(TRACE_URL, opts);
+      await r.text();
+      this.ping = Math.max(1, Date.now() - t0);
+      return { ok: true, ping: this.ping, route: this.enabled && this.state === 'on' ? 'shield' : 'direct' };
+    } catch (e) {
+      this.ping = -1;
+      return { ok: false, ping: -1, route: this.enabled ? 'shield' : 'direct', error: String((e && e.message) || e) };
+    } finally {
+      clearTimeout(tm);
+    }
+  }
+
   async switchRegion(region) {
+    if (!this.enabled) return this.status();
     var wanted = normRegion(region);
     this.preferred = wanted;
     if (this.state === 'on' && wanted === this.region && this.warp) return this.status();
@@ -573,6 +694,7 @@ class VpnManager {
   /* Non-disruptive: a source asking for a region records a preference. A
      healthy tunnel is never torn down mid-session just to chase a country. */
   async ensure(region) {
+    if (!this.enabled) return this.status();
     var wanted = normRegion(region);
     this.preferred = wanted;
     if (this.state === 'on' && this.warp) return this.status();
@@ -588,8 +710,12 @@ class VpnManager {
   }
 
   status() {
+    var on = this.state === 'on' && this.warp;
     return {
-      ok: this.state === 'on' && this.warp,
+      ok: on,
+      connected: on,
+      enabled: this.enabled,
+      off: this.state === 'off' || !this.enabled,
       engine: 'usque/WARP MASQUE',
       state: this.state,
       phase: this.phase,
@@ -602,8 +728,11 @@ class VpnManager {
       attempt: this.attempt,
       dns: this.dnsMode,
       egress: this.actual,
+      city: this.city || (on ? (REGION_LABEL[this.region] || '') : ''),
+      colo: this.colo || '',
       ip: this.ip,
       warp: this.warp,
+      ping: this.ping || 0,
       port: PROXY_PORT,
       uptime: this.startedAt ? Math.max(0, Math.round((Date.now() - this.startedAt) / 1000)) : 0,
       error: this.error || '',

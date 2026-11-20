@@ -762,36 +762,10 @@
     App.playDirect(ch.url, ch.name || 'Live TV', { hls: true, ref: ch.ref || '' });
   }
 
-  // ---------------------------------------------------------------- sources
-  function openLibrarySources() {
-    var rows = [
-      ['✦', 'Metadata & discovery', 'TMDB · AniList'],
-      ['▤', 'Web series & cinema', 'XMaal · KatMovieHD · KDramasMaza · HindiDrama'],
-      ['◐', 'Classic animation', 'Internet Archive (archive.org)'],
-      ['▶', 'Tube', 'YouTube'],
-      ['◉', 'Live TV', 'iptv-org · Free-TV'],
-      ['!', '18+ library', 'Eporner · 123av · Rule34 · Hentaicity · Hentai.tv'],
-      ['∞', 'Streams', 'Public embed providers, resolved at play time']
-    ];
-    var html = '<div class="sheet-title">Library sources</div>' +
-      '<div class="sheet-sub">Every catalogue that powers this library.</div>' +
-      '<div class="wa-src-list">' + rows.map(function (r) {
-        return '<div class="wa-src-item"><span class="wa-src-ic">' + r[0] + '</span>' +
-          '<div><b>' + esc(r[1]) + '</b><span>' + esc(r[2]) + '</span></div></div>';
-      }).join('') + '</div>' +
-      '<div class="wa-src-note">SuperBox does not host media. Titles, artwork and streams stay with their sources and play inside the app.</div>';
-    App.openSheet(html);
-  }
-
   // ---------------------------------------------------------------- boot
   function boot() {
     buildDetail();
     document.addEventListener('click', function (e) {
-      if (e.target.closest('[data-lib-sources]')) {
-        e.preventDefault();
-        openLibrarySources();
-        return;
-      }
       var lv = e.target.closest('[data-lib-live]');
       if (lv) { e.preventDefault(); openLive(); return; }
       var ad = e.target.closest('[data-lib-adult]');
@@ -882,7 +856,7 @@
     var body = '<div class="wad-body">' +
       '<div class="wad-actions">' +
       '<button class="btn-primary" data-wad-play>' + iconPlay() + ' ' + (mt === 'tv' ? 'Play S1E1' : 'Play now') + '</button>' +
-      '<button class="btn-ghost" data-wad-src>Sources</button>' +
+      '<button class="btn-ghost" data-wad-src>Choose player</button>' +
       (it.anilist ? '<span class="wa-pill">AniList</span>' : '<span class="wa-pill">TMDB</span>') +
       '</div>' +
       (d.overview ? '<p class="wad-desc">' + esc(d.overview) + '</p>' : '') +
@@ -979,10 +953,9 @@
   function openSources(it) {
     var list = providersFor(it);
     if (!list.length) { App.toast('No sources available'); return; }
-    var html = '<div class="sheet-title">Sources</div><div class="sheet-sub">Provider shells open in the in-app web player. Extracted streams play natively.</div><div class="opt-list">' +
+    var html = '<div class="sheet-title">Choose a player</div><div class="sheet-sub">Every provider stays inside SuperBox. Extracted streams play natively.</div><div class="opt-list">' +
       list.map(function (p, i) {
-        var url = providerUrl(p, it, st.season, st.ep);
-        return '<button class="opt" data-prov="' + i + '"><span class="opt-ic">▶</span><span class="opt-txt"><b>' + esc(p.n) + '</b><span>' + esc(hostOf(url) || 'provider') + '</span></span></button>';
+        return '<button class="opt" data-prov="' + i + '"><span class="opt-ic">▶</span><span class="opt-txt"><b>' + esc(p.n) + '</b><span>In-app player</span></span></button>';
       }).join('') + '</div>';
     App.openSheet(html, function (host) {
       $$('[data-prov]', host).forEach(function (b) {
@@ -1010,7 +983,7 @@
       (!timeBadge && badge ? '<span class="wa-pill">' + esc(badge) + '</span>' : '') +
       '</div>' +
       (desc ? '<p class="wad-desc">' + esc(desc) + '</p>' : '') +
-      '<div class="wa-source">' + esc(hostOf(it.page || it.url) || '') + '</div>' +
+      '<div class="wa-source">In-app source</div>' +
       (series ? '<div class="wad-eplist" id="wadParts">' + (parts && parts.length ? partsHtml(parts) : '<div class="wa-note">Looking for episodes…</div>') + '</div>' : '') +
       '</div>';
     detailEl.innerHTML = '<div class="wad-scroll" id="wadScroll">' + heroHtml(title, it.poster || '', it.poster || '', meta, timeBadge ? 'EPISODE' : (badge || 'SOURCE')) + body + '</div>';
@@ -1022,7 +995,7 @@
       return '<button class="wad-ep" data-wad-part="' + i + '">' +
         '<span class="wad-ep-n">' + (p.n || (i + 1)) + '</span>' +
         '<span class="wad-ep-tx"><b>' + esc(p.t || ('Episode ' + (p.n || (i + 1)))) + '</b>' +
-        '<em>' + esc(hostOf(p.url) || '') + '</em></span>' +
+        '<em>In-app episode</em></span>' +
         '<span class="wad-ep-play">▶</span></button>';
     }).join('');
   }
@@ -1412,7 +1385,6 @@
     openItem: openItem,
     openLive: openLive,
     openAdult: openAdult,
-    openSources: openLibrarySources,
     searchAll: searchAll,
     rowsForTab: rowsForTab,
     cards: cards,

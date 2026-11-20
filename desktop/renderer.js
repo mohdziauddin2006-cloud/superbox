@@ -818,15 +818,16 @@
     if (!/^https?:\/\//i.test(String(url || ''))) return;
     closeSourceFrame();
     heroStop();
+    var returnSec = state.section && state.section !== 'sources' ? state.section : 'home';
     var box = el('div', 'srcframe');
     var bar = el('div', 'srcbar');
     var back = el('button', null, '\u2190 Back');
     back.type = 'button';
-    back.onclick = function () { closeSourceFrame(); renderSection('sources'); };
+    back.onclick = function () { closeSourceFrame(); renderSection(returnSec); };
     var name = el('b', null, title || 'Source');
     var reload = el('button', null, 'Reload');
     reload.type = 'button';
-    var note = el('span', null, 'Shield routed');
+    var note = el('span', null, '');
     var frame = document.createElement('iframe');
     frame.className = 'srcpage';
     frame.setAttribute('allow', 'autoplay *; fullscreen *; encrypted-media *; clipboard-write *');
@@ -845,13 +846,14 @@
     /* A live Shield connection is reused as-is; restarting it here would
        interrupt the page. Only a down tunnel is re-established on open. */
     var wanted = vpnRegionFor(region);
-    note.textContent = 'Shield routed';
-    if (wanted && !(vpnLastStatus && vpnLastStatus.ok)) {
+    var vpnOff = vpnIsOff();
+    note.textContent = vpnOff ? 'Direct' : 'Shield';
+    if (wanted && !vpnOff && !(vpnLastStatus && vpnLastStatus.ok)) {
       note.textContent = 'Switching Shield\u2026';
       vpnApi('/vpn/ensure?region=' + encodeURIComponent(wanted)).then(function (st) {
         note.textContent = 'Shield \u00b7 ' + ((st && (st.egress || st.regionLabel)) || 'on');
       }).catch(function () {
-        note.textContent = 'Shield routed';
+        note.textContent = 'Shield';
       }).then(function () {
         if (sourceFrame === box) go();
       });
@@ -874,6 +876,27 @@
      is measured and reported truthfully by the Shield status. */
   var vpnAutoTimer = 0;
   var vpnLastStatus = null;
+  var VPN_SERVERS = [
+    { id: 'auto', n: 'Global / Automatic', d: 'Fastest anycast anchor' },
+    { id: 'in', n: 'India', d: 'Mumbai · Delhi · Chennai' },
+    { id: 'us', n: 'United States', d: 'Ashburn · New York · Los Angeles' },
+    { id: 'ca', n: 'Canada', d: 'Toronto · Vancouver' },
+    { id: 'uk', n: 'United Kingdom', d: 'London · Manchester' },
+    { id: 'au', n: 'Australia', d: 'Sydney · Melbourne' },
+    { id: 'de', n: 'Germany', d: 'Frankfurt · Munich' },
+    { id: 'jp', n: 'Japan', d: 'Tokyo · Osaka' },
+    { id: 'sg', n: 'Singapore', d: 'Singapore edge' },
+    { id: 'hk', n: 'Hong Kong', d: 'Hong Kong edge' },
+    { id: 'kr', n: 'South Korea', d: 'Seoul edge' },
+    { id: 'fr', n: 'France', d: 'Paris · Marseille' },
+    { id: 'br', n: 'Brazil', d: 'São Paulo edge' }
+  ];
+  function vpnAutoOn() {
+    try { return localStorage.getItem('sb.vpn.auto') !== '0'; } catch (e) { return true; }
+  }
+  function setVpnAuto(on) {
+    try { localStorage.setItem('sb.vpn.auto', on ? '1' : '0'); } catch (e) {}
+  }
   var VPN_REGION_MAP = {
     IN: 'in', US: 'us', CA: 'ca', UK: 'uk', AU: 'au', DE: 'de', JP: 'jp',
     SG: 'sg', HK: 'hk', KR: 'kr', FR: 'fr', BR: 'br'
@@ -882,6 +905,8 @@
     return VPN_REGION_MAP[String((region || '')).toUpperCase()] || '';
   }
   function autoVpnRegion(region) {
+    if (!vpnAutoOn()) return;
+    if (vpnLastStatus && (vpnLastStatus.off || vpnLastStatus.enabled === false)) return;
     var key = vpnRegionFor(region);
     if (!key) return;
     /* The endpoint pool is anycast: restarting a healthy tunnel to chase a
@@ -907,55 +932,202 @@
     }
   }
   var vpnTimer = 0, vpnFast = true;
+  function paintVpnChip(st) {
+    var chip = $('#vpnChip');
+    if (!chip) return;
+    var on = !!(st && st.ok);
+    var off = !!(st && (st.off || st.enabled === false));
+    var failed = !!(st && st.state === 'error');
+    chip.classList.toggle('ok', on);
+    chip.classList.toggle('off', off);
+    chip.classList.toggle('err', failed && !on && !off);
+    var label = $('#vpnChipLabel');
+    var sub = $('#vpnChipSub');
+    var ping = $('#vpnChipPing');
+    if (label) label.textContent = on ? 'Shield · Connected' : off ? 'Shield · Off' : failed ? 'Shield · Retry' : 'Shield · Connecting';
+    if (sub) sub.textContent = on
+      ? [st.egress || st.regionLabel || 'WARP', st.city || ''].filter(Boolean).join(' · ')
+      : off ? 'Direct connection' : ((st && st.phase) || 'Starting…');
+    if (ping) ping.textContent = off ? 'Direct' : (st && st.ping > 0 ? st.ping + ' ms' : '— ms');
+  }
+  function paintVpnServerList(filter) {
+    var host = $('#vpnServerList');
+    if (!host) return;
+    var f = String(filter || '').toLowerCase();
+    var region = (vpnLastStatus && vpnLastStatus.region) || 'auto';
+    var list = VPN_SERVERS.filter(function (s) {
+      if (!f) return true;
+      return (s.n + ' ' + s.id + ' ' + (s.d || '')).toLowerCase().indexOf(f) >= 0;
+    });
+    host.innerHTML = list.map(function (s) {
+      return '<button type="button" class="vpn-server' + (s.id === region ? ' on' : '') + '" data-vpn-region="' + esc(s.id) + '">' +
+        '<span>' + esc(s.n) + '</span><i>' + esc(s.id === region ? 'Active' : (s.d || '')) + '</i></button>';
+    }).join('') || '<div class="vpn-panel-note">No country matches that search.</div>';
+  }
+  function paintVpnPanel(st) {
+    var on = !!(st && st.ok);
+    var off = !!(st && (st.off || st.enabled === false));
+    var failed = !!(st && st.state === 'error');
+    var state = $('#vpnPanelState');
+    if (state) state.textContent = on ? 'Connected' : off ? 'Disconnected' : failed ? 'Needs retry' : ((st && st.phase) || 'Connecting…');
+    var dot = $('#vpnPanelDot');
+    if (dot) {
+      dot.style.background = on ? '#43d17c' : off ? '#7f8590' : failed ? '#ff6b6b' : '#ffc105';
+      dot.style.boxShadow = '0 0 0 4px ' + (on ? 'rgba(67,209,124,.14)' : off ? 'rgba(127,133,144,.14)' : failed ? 'rgba(255,107,107,.14)' : 'rgba(255,193,5,.12)');
+    }
+    var ping = $('#vpnPanelPing');
+    if (ping) ping.textContent = off ? 'Direct route' : (st && st.ping > 0 ? st.ping + ' ms' : '— ms');
+    if ($('#vpnPanelCountry')) $('#vpnPanelCountry').textContent = off ? 'Direct' : ((st && (st.egress || st.regionLabel)) || '—');
+    if ($('#vpnPanelCity')) $('#vpnPanelCity').textContent = off ? '—' : ((st && (st.city || st.colo)) || '—');
+    if ($('#vpnPanelIp')) $('#vpnPanelIp').textContent = off ? 'Host' : ((st && st.ip) || '—');
+    var up = st && st.uptime ? st.uptime : 0;
+    if ($('#vpnPanelUptime')) $('#vpnPanelUptime').textContent = !off && up
+      ? (up > 3600 ? Math.floor(up / 3600) + 'h ' + Math.floor((up % 3600) / 60) + 'm' : Math.floor(up / 60) + 'm ' + (up % 60) + 's')
+      : '—';
+    var toggle = $('#vpnToggle');
+    if (toggle) {
+      toggle.disabled = false;
+      toggle.classList.toggle('off', off);
+      toggle.textContent = off ? 'Connect VPN' : (on ? 'Disconnect VPN' : 'Cancel connection');
+    }
+    var auto = $('#vpnAuto');
+    if (auto) auto.checked = vpnAutoOn();
+    paintVpnServerList($('#vpnServerSearch') ? $('#vpnServerSearch').value : '');
+  }
   function paintVpnStatus(st) {
     var gate = $('#vpnGate');
-    if (!gate) return;
     vpnLastStatus = st || null;
     var on = !!(st && st.ok);
+    var off = !!(st && (st.off || st.enabled === false));
     var failed = !!(st && st.state === 'error');
-    gate.classList.toggle('hidden', on);
-    gate.classList.toggle('on', on);
-    gate.classList.toggle('err', failed);
-    var phase = (st && st.phase) || '';
-    if ($('#vpnTitle')) $('#vpnTitle').textContent = on ? 'Shield connected' :
-      (failed ? 'Shield needs a retry' : (phase || 'Connecting the Shield'));
-    if ($('#vpnMsg')) $('#vpnMsg').textContent = on
-      ? 'Anonymous WARP tunnel is live. Every request in SuperBox rides it.'
-      : (failed
-        ? 'The tunnel did not come up. Retry, or pick another regional profile.'
-        : (phase && /endpoint/i.test(phase)
-          ? 'Trying the fastest MASQUE anchor for ' + ((st && st.regionLabel) || 'your region') + '. This can take a few seconds.'
-          : 'Establishing an anonymous WARP tunnel. Every catalogue, image and stream stays behind it.'));
-    var bar = $('#vpnBar');
-    if (bar) {
-      var pct = st && typeof st.progress === 'number' ? st.progress : (on ? 100 : 4);
-      if (failed) pct = 100;
-      bar.style.width = Math.max(3, Math.min(100, pct)) + '%';
+    if (gate) {
+      gate.classList.toggle('hidden', on || off);
+      gate.classList.toggle('on', on);
+      gate.classList.toggle('err', failed && !off);
+      var phase = (st && st.phase) || '';
+      if ($('#vpnTitle')) $('#vpnTitle').textContent = off ? 'VPN disconnected' : on ? 'Shield connected' :
+        (failed ? 'Shield needs a retry' : (phase || 'Connecting the Shield'));
+      if ($('#vpnMsg')) $('#vpnMsg').textContent = off
+        ? 'The VPN is off. SuperBox is using a clean direct connection until you reconnect.'
+        : on
+          ? 'Anonymous WARP tunnel is live. Every request in SuperBox rides it.'
+          : (failed
+            ? 'The tunnel did not come up. Retry, or pick another regional profile.'
+            : (phase && /endpoint/i.test(phase)
+              ? 'Trying the fastest MASQUE anchor for ' + ((st && st.regionLabel) || 'your region') + '. This can take a few seconds.'
+              : 'Establishing an anonymous WARP tunnel. Every catalogue, image and stream stays behind it.'));
+      var bar = $('#vpnBar');
+      if (bar) {
+        var pct = st && typeof st.progress === 'number' ? st.progress : (on || off ? 100 : 4);
+        if (failed) pct = 100;
+        bar.style.width = Math.max(3, Math.min(100, pct)) + '%';
+      }
+      if ($('#vpnEngine')) $('#vpnEngine').textContent = (st && st.engine) || 'usque · MASQUE';
+      if ($('#vpnRegionLabel')) $('#vpnRegionLabel').textContent = (st && st.regionLabel) || 'Global';
+      if ($('#vpnEgress')) $('#vpnEgress').textContent = off ? 'Direct' : ((st && (st.egress || st.ip)) || '—');
+      if ($('#vpnWarp')) $('#vpnWarp').textContent = off ? 'OFF' : (st && st.warp ? 'ON' :
+        (failed ? 'OFF' : (st && st.state ? String(st.state).toUpperCase() : 'OFF')));
+      if ($('#vpnErr')) $('#vpnErr').textContent = (st && st.error) && !off ? st.error : '';
+      if (st && st.region && $('#vpnRegion') && document.activeElement !== $('#vpnRegion')) {
+        try { $('#vpnRegion').value = st.region; } catch (e) {}
+      }
     }
-    if ($('#vpnEngine')) $('#vpnEngine').textContent = (st && st.engine) || 'usque · MASQUE';
-    if ($('#vpnRegionLabel')) $('#vpnRegionLabel').textContent = (st && st.regionLabel) || 'Global';
-    if ($('#vpnEgress')) $('#vpnEgress').textContent = (st && (st.egress || st.ip)) || '—';
-    if ($('#vpnWarp')) $('#vpnWarp').textContent = st && st.warp ? 'ON' :
-      (failed ? 'OFF' : (st && st.state ? String(st.state).toUpperCase() : 'OFF'));
-    if ($('#vpnErr')) $('#vpnErr').textContent = (st && st.error) ? st.error : '';
-    if (st && st.region && $('#vpnRegion') && document.activeElement !== $('#vpnRegion')) {
-      try { $('#vpnRegion').value = st.region; } catch (e) {}
-    }
-    if ($('#setVpnState')) $('#setVpnState').textContent = on
-      ? ('Connected · ' + ((st.egress || st.regionLabel || 'WARP')))
-      : (failed ? 'Retry needed' : (phase || 'Connecting'));
+    if ($('#setVpnState')) $('#setVpnState').textContent = off
+      ? 'Disconnected · Direct'
+      : on ? ('Connected · ' + ((st.egress || st.regionLabel || 'WARP') + (st.city ? ' · ' + st.city : '')))
+        : (failed ? 'Retry needed' : (((st && st.phase) || 'Connecting') + (st && st.ping > 0 ? ' · ' + st.ping + ' ms' : '')));
+    if ($('#setVpnDetail')) $('#setVpnDetail').textContent = off
+      ? 'VPN is off · direct routing · manual ON available'
+      : on ? ('Live · ' + ((st.city || st.colo || st.regionLabel || 'WARP')) + (st.ping > 0 ? ' · ' + st.ping + ' ms' : ''))
+        : 'Tunnel is not live';
+    if ($('#setVpnToggle')) $('#setVpnToggle').textContent = off ? 'Connect' : 'Disconnect';
+    paintVpnChip(st);
+    paintVpnPanel(st);
+  }
+  function refreshVpnPing() {
+    if (!vpnLastStatus || vpnLastStatus.off || vpnLastStatus.enabled === false || !vpnLastStatus.ok) return;
+    vpnApi('/vpn/ping').then(function (p) {
+      if (p && p.ping > 0 && vpnLastStatus) {
+        vpnLastStatus.ping = p.ping;
+        paintVpnChip(vpnLastStatus);
+        paintVpnPanel(vpnLastStatus);
+      }
+    }).catch(function () {});
+  }
+  function openVpnPanel() {
+    var panel = $('#vpnPanel');
+    if (!panel) return;
+    panel.classList.remove('hidden');
+    try {
+      var chip = $('#vpnChip');
+      if (chip) chip.setAttribute('aria-expanded', 'true');
+    } catch (e) {}
+    paintVpnPanel(vpnLastStatus);
+    refreshVpnPing();
+  }
+  function closeVpnPanel() {
+    var panel = $('#vpnPanel');
+    if (!panel) return;
+    panel.classList.add('hidden');
+    try {
+      var chip = $('#vpnChip');
+      if (chip) chip.setAttribute('aria-expanded', 'false');
+    } catch (e) {}
+  }
+  function vpnIsOff() {
+    return !!(vpnLastStatus && (vpnLastStatus.off || vpnLastStatus.enabled === false));
+  }
+  function vpnToggleNow() {
+    var off = vpnIsOff();
+    var toggle = $('#vpnToggle');
+    var settingsBtn = $('#setVpnToggle');
+    if (toggle) { toggle.disabled = true; toggle.textContent = off ? 'Connecting…' : 'Disconnecting…'; }
+    if (settingsBtn) settingsBtn.disabled = true;
+    var region = (vpnLastStatus && (vpnLastStatus.preferred || vpnLastStatus.region)) || 'auto';
+    var call = off
+      ? vpnApi('/vpn/on?region=' + encodeURIComponent(region || 'auto'))
+      : vpnApi('/vpn/off');
+    call.then(function (st) {
+      paintVpnStatus(st);
+      toast(off ? 'VPN connected through the Shield.' : 'VPN off. Using a direct connection.');
+    }).catch(function (e) {
+      toast((off ? 'Could not connect the VPN: ' : 'Could not disconnect the VPN: ') + ((e && e.message) || 'error'));
+    }).then(function () {
+      if (settingsBtn) settingsBtn.disabled = false;
+      if (toggle) toggle.disabled = false;
+      paintVpnPanel(vpnLastStatus);
+    });
+  }
+  function vpnChooseServer(region) {
+    var off = vpnIsOff();
+    var call = off
+      ? vpnApi('/vpn/on?region=' + encodeURIComponent(region || 'auto'))
+      : vpnApi('/vpn/switch?region=' + encodeURIComponent(region || 'auto'));
+    var note = $('#vpnPanelNote');
+    if (note) note.textContent = off ? 'Bringing the Shield up through ' : 'Switching the Shield to ';
+    if (note) note.textContent += (VPN_SERVERS.filter(function (s) { return s.id === region; })[0] || {}).n || region;
+    paintVpnServerList($('#vpnServerSearch') ? $('#vpnServerSearch').value : '');
+    call.then(function (st) {
+      paintVpnStatus(st);
+      if (note) note.textContent = 'Cloudflare WARP endpoints are anycast. The egress shown is the real country reported by the live tunnel.';
+      toast('VPN server: ' + ((VPN_SERVERS.filter(function (s) { return s.id === region; })[0] || {}).n || region));
+    }).catch(function (e) {
+      if (note) note.textContent = (e && e.message) || 'Server switch failed.';
+    });
   }
   function watchVpn() {
     clearTimeout(vpnTimer);
     vpnApi('/vpn/status').then(function (st) {
       paintVpnStatus(st);
-      vpnFast = !st.ok;
-      vpnTimer = setTimeout(watchVpn, vpnFast ? 1600 : 8000);
+      var off = !!(st && (st.off || st.enabled === false));
+      vpnFast = !st.ok && !off;
+      vpnTimer = setTimeout(watchVpn, off ? 14000 : (vpnFast ? 1600 : 8000));
     }).catch(function () {
       var gate = $('#vpnGate');
       if (gate) gate.classList.remove('hidden');
       if ($('#vpnTitle')) $('#vpnTitle').textContent = 'Starting the Shield';
       if ($('#vpnMsg')) $('#vpnMsg').textContent = 'Waiting for the local engine to answer. This usually takes a few seconds.';
+      paintVpnChip(null);
       vpnTimer = setTimeout(watchVpn, 1400);
     });
   }
@@ -971,18 +1143,50 @@
     var retry = $('#vpnRetry');
     if (retry) retry.onclick = function () {
       if ($('#vpnErr')) $('#vpnErr').textContent = 'Restarting the tunnel…';
+      if (vpnIsOff()) return vpnToggleNow();
       vpnApi('/vpn/reconnect?region=' + encodeURIComponent((sel && sel.value) || 'auto'))
         .then(paintVpnStatus).catch(function (e) { if ($('#vpnErr')) $('#vpnErr').textContent = e.message || 'Retry failed'; });
     };
-    var btn = $('#setVpnBtn');
-    if (btn) btn.onclick = function () {
-      btn.disabled = true;
-      vpnApi('/vpn/reconnect?region=' + encodeURIComponent((sel && sel.value) || 'auto')).then(function (st) {
-        paintVpnStatus(st);
-        toast('Shield reconnecting.');
-        btn.disabled = false;
-      }).catch(function () { btn.disabled = false; });
+    var chip = $('#vpnChip');
+    if (chip) chip.onclick = function () {
+      var panel = $('#vpnPanel');
+      if (panel && !panel.classList.contains('hidden')) closeVpnPanel(); else openVpnPanel();
     };
+    var close = $('#vpnPanelClose');
+    if (close) close.onclick = closeVpnPanel;
+    var toggle = $('#vpnToggle');
+    if (toggle) toggle.onclick = vpnToggleNow;
+    var setToggle = $('#setVpnToggle');
+    if (setToggle) setToggle.onclick = vpnToggleNow;
+    var manage = $('#setVpnManage');
+    if (manage) manage.onclick = openVpnPanel;
+    var auto = $('#vpnAuto');
+    if (auto) {
+      auto.checked = vpnAutoOn();
+      auto.onchange = function () {
+        setVpnAuto(!!auto.checked);
+        toast(auto.checked ? 'Auto-region routing on.' : 'Auto-region routing off. Your manual server stays pinned.');
+      };
+    }
+    var search = $('#vpnServerSearch');
+    if (search) search.oninput = function () { paintVpnServerList(search.value); };
+    var list = $('#vpnServerList');
+    if (list) list.onclick = function (e) {
+      var b = e.target.closest('[data-vpn-region]');
+      if (!b) return;
+      vpnChooseServer(b.getAttribute('data-vpn-region') || 'auto');
+    };
+    document.addEventListener('click', function (e) {
+      var panel = $('#vpnPanel');
+      if (!panel || panel.classList.contains('hidden')) return;
+      if (panel.contains(e.target)) return;
+      if (e.target.closest && e.target.closest('#vpnChip,#setVpnManage')) return;
+      closeVpnPanel();
+    });
+    setInterval(function () {
+      var panel = $('#vpnPanel');
+      if (panel && !panel.classList.contains('hidden')) refreshVpnPing();
+    }, 5000);
     watchVpn();
   }
 
@@ -1024,6 +1228,10 @@
   function renderSection(sec, sub) {
     closeSourceFrame();
     if (window.READER) { try { window.READER.close(); } catch (e) {} }
+    /* The provider directory is gone. Old bookmarks, stale hash routes and
+       any handler that still asks for it land on Home instead of exposing a
+       website list. */
+    if (sec === 'sources') sec = 'home';
     if (sec === 'moviebox') return renderSuperBox();
     heroStop();
     state.section = sec;
@@ -1036,10 +1244,6 @@
     if (rowIO) { try { rowIO.disconnect(); } catch (e) {} rowIO = null; }
     if (sec === 'reading') {
       if (window.READER) window.READER.render(c);
-      return;
-    }
-    if (sec === 'sources') {
-      if (window.SOURCES_HUB) window.SOURCES_HUB.render(c, { open: openSource });
       return;
     }
     if (sec === 'home') {
@@ -3797,7 +4001,7 @@
       if (e.key === 'Escape') {
         if (!$('#settingsModal').classList.contains('hidden')) { $('#settingsModal').classList.add('hidden'); return; }
         if (window.READER && window.READER.back()) return;
-        if (sourceFrame) { closeSourceFrame(); renderSection('sources'); return; }
+        if (sourceFrame) { closeSourceFrame(); renderSection(state.section && state.section !== 'sources' ? state.section : 'home'); return; }
         if (!player().classList.contains('hidden')) closePlayer();
       }
     });
@@ -3805,7 +4009,7 @@
     startVpnGate();
     window.sbBack = function () {
       if (window.READER && window.READER.back()) return true;
-      if (sourceFrame) { closeSourceFrame(); renderSection('sources'); return true; }
+      if (sourceFrame) { closeSourceFrame(); renderSection(state.section && state.section !== 'sources' ? state.section : 'home'); return true; }
       if (!$('#settingsModal').classList.contains('hidden')) { $('#settingsModal').classList.add('hidden'); return true; }
       if (!player().classList.contains('hidden')) { closePlayer(); return true; }
       if (state.section !== 'home') { renderSection('home'); return true; }

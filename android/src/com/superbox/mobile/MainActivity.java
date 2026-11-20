@@ -196,6 +196,12 @@ public class MainActivity extends Activity {
                 try {
                     vpn = new VpnManager(getApplicationContext());
                     vpn.startAsync("auto");
+                    runOnUiThread(new Runnable() {
+                        @Override public void run() {
+                            overlayHandler.removeCallbacks(proxySync);
+                            overlayHandler.post(proxySync);
+                        }
+                    });
                     server = new LocalServer(getApplicationContext(), vpn);
                     final int port = server.start();
                     runOnUiThread(new Runnable() {
@@ -223,8 +229,11 @@ public class MainActivity extends Activity {
     /* Full-screen in-app browser used only for sources that refuse to expose
        a raw media file (provider embeds, some custom-library pages). It keeps
        the viewer inside SuperBox instead of handing off to an external app. */
+    private boolean webProxyApplied = false;
+
     private void installWebViewProxy() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
+        if (webProxyApplied) return;
         try {
             if (!WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE)) {
                 android.util.Log.w("SuperBoxShield", "WebView proxy override not supported");
@@ -240,11 +249,41 @@ public class MainActivity extends Activity {
             ProxyController.getInstance().setProxyOverride(cfg, ex, new Runnable() {
                 @Override public void run() { ex.shutdown(); }
             });
+            webProxyApplied = true;
         } catch (Throwable e) {
             android.util.Log.w("SuperBoxShield",
                     "WebView proxy override unavailable: " + e.getMessage());
         }
     }
+
+    /* Manual OFF must also unhook the WebView: its per-app proxy override
+       points at the tunnel port. Clearing it lets source pages and reader
+       images load directly until the user reconnects. */
+    private void clearWebViewProxy() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
+        if (!webProxyApplied) return;
+        try {
+            if (!WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE)) return;
+            final ExecutorService ex = Executors.newSingleThreadExecutor();
+            ProxyController.getInstance().clearProxyOverride(ex, new Runnable() {
+                @Override public void run() { ex.shutdown(); }
+            });
+            webProxyApplied = false;
+        } catch (Throwable e) {
+            android.util.Log.w("SuperBoxShield",
+                    "WebView proxy clear failed: " + e.getMessage());
+        }
+    }
+
+    private final Runnable proxySync = new Runnable() {
+        @Override public void run() {
+            if (vpn != null) {
+                if (vpn.isBypassed()) clearWebViewProxy();
+                else installWebViewProxy();
+            }
+            overlayHandler.postDelayed(this, 1800L);
+        }
+    };
 
     private void openWebView(final String url, final String title) {
         openWebLadder(new String[]{url}, title);
@@ -687,6 +726,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        overlayHandler.removeCallbacks(proxySync);
         if (server != null) server.stop();
         if (vpn != null) vpn.stop();
         stopHtvProbe();

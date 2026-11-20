@@ -64,6 +64,7 @@ public final class VpnManager {
 
     private static final Map<String, String[]> ENDPOINTS = new LinkedHashMap<>();
     private static final Map<String, String> LABELS = new LinkedHashMap<>();
+    private static final Map<String, String> COLO_CITY = new LinkedHashMap<>();
 
     private static final String[] WARP_ENDPOINTS = {
         "162.159.198.2", "162.159.199.2",
@@ -109,6 +110,28 @@ public final class VpnManager {
         LABELS.put("kr", "South Korea");
         LABELS.put("fr", "France");
         LABELS.put("br", "Brazil");
+        COLO_CITY.put("BOM", "Mumbai");
+        COLO_CITY.put("DEL", "Delhi");
+        COLO_CITY.put("MAA", "Chennai");
+        COLO_CITY.put("IAD", "Ashburn");
+        COLO_CITY.put("EWR", "New York");
+        COLO_CITY.put("LAX", "Los Angeles");
+        COLO_CITY.put("YYZ", "Toronto");
+        COLO_CITY.put("YVR", "Vancouver");
+        COLO_CITY.put("LHR", "London");
+        COLO_CITY.put("MAN", "Manchester");
+        COLO_CITY.put("SYD", "Sydney");
+        COLO_CITY.put("MEL", "Melbourne");
+        COLO_CITY.put("FRA", "Frankfurt");
+        COLO_CITY.put("MUC", "Munich");
+        COLO_CITY.put("NRT", "Tokyo");
+        COLO_CITY.put("KIX", "Osaka");
+        COLO_CITY.put("SIN", "Singapore");
+        COLO_CITY.put("HKG", "Hong Kong");
+        COLO_CITY.put("ICN", "Seoul");
+        COLO_CITY.put("CDG", "Paris");
+        COLO_CITY.put("MRS", "Marseille");
+        COLO_CITY.put("GRU", "São Paulo");
     }
 
     private final Context context;
@@ -138,6 +161,9 @@ public final class VpnManager {
     private volatile String preferred = "auto";
     private volatile String actual = "";
     private volatile String ip = "";
+    private volatile String city = "";
+    private volatile String colo = "";
+    private volatile long ping = 0L;
     private volatile boolean warp = false;
     private volatile String error = "";
     private volatile String phase = "idle";
@@ -146,6 +172,10 @@ public final class VpnManager {
     private volatile long lastProbe = 0L;
     private volatile boolean stopped = true;
     private volatile int watchFails = 0;
+    /* Manual OFF is a first-class route, not a failure: the local bridge
+       switches every upstream request to the direct dispatcher and the
+       WebView proxy override is cleared. The flag survives restarts. */
+    private volatile boolean bypass = false;
     /* 0 = undecided, 1 = resolve names inside the tunnel (1.1.1.1), 2 = use
        Android's system resolver. DNS decides reachability through WARP: the
        ISP resolver can return anycast addresses that WARP answers with
@@ -158,6 +188,15 @@ public final class VpnManager {
 
     public VpnManager(Context context) {
         this.context = context.getApplicationContext();
+        try {
+            bypass = context.getSharedPreferences("superbox", Context.MODE_PRIVATE)
+                    .getBoolean("vpn.off", false);
+        } catch (Exception ignored) {}
+        if (bypass) {
+            state = "off";
+            phase = "off";
+            stopped = true;
+        }
         health.scheduleWithFixedDelay(new Runnable() {
             @Override public void run() { watch(); }
         }, 20L, 20L, TimeUnit.SECONDS);
@@ -167,17 +206,24 @@ public final class VpnManager {
         return "on".equals(state) && warp;
     }
 
+    /** True when the user deliberately turned the Shield off. */
+    public boolean isBypassed() {
+        return bypass;
+    }
+
     public String getRegion() {
         return region;
     }
 
     // ------------------------------------------------------------ lifecycle
 
-    /** Starts (or reuses) the tunnel without blocking the caller. */
+    /** Starts (or reuses) the tunnel without blocking the caller. Manual OFF
+        wins over implicit starts (boot and auto-region requests). */
     public JSONObject startAsync(String wanted) {
         final String r = normRegion(wanted);
         synchronized (lock) {
             preferred = r;
+            if (bypass) return status();
             if (isOn()) return status();
             if ("connecting".equals(state) || "provisioning".equals(state)) return status();
             stopped = false;
@@ -192,6 +238,12 @@ public final class VpnManager {
         return status();
     }
 
+    /** Manual ON: clears the bypass flag and brings the tunnel up. */
+    public JSONObject enable(String wanted) {
+        setBypass(false);
+        return startAsync(wanted);
+    }
+
     /** Reconnects from scratch, keeping the current region. */
     public JSONObject reconnect() {
         return reconnect(region);
@@ -200,6 +252,7 @@ public final class VpnManager {
     /** Forces a fresh tunnel on the requested region, even when already on. */
     public JSONObject reconnect(String wanted) {
         final String r = normRegion(wanted);
+        setBypass(false);
         synchronized (lock) {
             stopped = false;
             state = "connecting";
@@ -218,6 +271,7 @@ public final class VpnManager {
 
     public JSONObject switchRegion(String wanted) {
         final String r = normRegion(wanted);
+        if (bypass) return enable(r);
         if (isOn() && r.equals(region)) {
             preferred = r;
             return status();
@@ -232,8 +286,55 @@ public final class VpnManager {
     public JSONObject ensure(String wanted) {
         String r = normRegion(wanted);
         preferred = r;
+        if (bypass) return status();
         if (isOn()) return status();
         return startAsync(r);
+    }
+
+    /** Manual OFF: stop the tunnel and route every request directly. */
+    public JSONObject off() {
+        setBypass(true);
+        synchronized (lock) {
+            stopped = true;
+            state = "off";
+            phase = "off";
+            warp = false;
+            actual = "";
+            ip = "";
+            city = "";
+            colo = "";
+            ping = 0L;
+            error = "";
+            progress = 0;
+            startedAt = 0L;
+            killProcess();
+        }
+        waitPortFree(2600L);
+        return status();
+    }
+
+    private void setBypass(boolean on) {
+        bypass = on;
+        try {
+            context.getSharedPreferences("superbox", Context.MODE_PRIVATE)
+                    .edit().putBoolean("vpn.off", on).apply();
+        } catch (Exception ignored) {}
+    }
+
+    /** Live round-trip through the tunnel for the VPN panel. */
+    public JSONObject measurePing() {
+        JSONObject j = new JSONObject();
+        long started = System.currentTimeMillis();
+        boolean ok = false;
+        if (isOn()) {
+            try { ok = probe(); } catch (Exception ignored) {}
+        }
+        try {
+            j.put("ok", ok);
+            j.put("ping", ok ? Math.max(1L, System.currentTimeMillis() - started) : 0L);
+            j.put("off", bypass);
+        } catch (Exception ignored) {}
+        return j;
     }
 
     public void stop() {
@@ -621,6 +722,7 @@ public final class VpnManager {
         c.setRequestProperty("User-Agent", "SuperBox/1.3");
         c.setRequestProperty("Accept", "text/plain");
         c.setRequestProperty("Connection", "close");
+        long started = System.currentTimeMillis();
         try {
             int code = c.getResponseCode();
             if (code != 200) return false;
@@ -633,6 +735,9 @@ public final class VpnManager {
             warp = "on".equals(map.get("warp"));
             actual = String.valueOf(map.getOrDefault("loc", "")).toUpperCase(Locale.US);
             ip = String.valueOf(map.getOrDefault("ip", ""));
+            colo = String.valueOf(map.getOrDefault("colo", "")).toUpperCase(Locale.US);
+            city = COLO_CITY.getOrDefault(colo, colo);
+            ping = Math.max(1L, System.currentTimeMillis() - started);
             lastProbe = System.currentTimeMillis();
             return warp;
         } finally {
@@ -675,6 +780,8 @@ public final class VpnManager {
         JSONObject j = new JSONObject();
         try {
             j.put("ok", isOn());
+            j.put("enabled", !bypass);
+            j.put("off", bypass);
             j.put("engine", "usque/WARP MASQUE");
             j.put("state", state);
             j.put("phase", phase);
@@ -686,10 +793,13 @@ public final class VpnManager {
             j.put("transport", ipv6 ? "ipv6" : "ipv4");
             j.put("egress", actual);
             j.put("ip", ip);
+            j.put("city", city);
+            j.put("colo", colo);
+            j.put("ping", isOn() ? ping : 0L);
             j.put("warp", warp);
             j.put("port", PORT);
             j.put("uptime", startedAt > 0 ? Math.max(0, (System.currentTimeMillis() - startedAt) / 1000) : 0);
-            j.put("error", error);
+            j.put("error", bypass ? "" : error);
             j.put("checkedAt", lastProbe);
         } catch (Exception ignored) {}
         return j;

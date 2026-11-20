@@ -817,6 +817,68 @@ body.wa-modal { overflow: hidden; }
   border-radius: 11px; padding: 11px 10px; font-size: 12.5px; outline: none;
 }
 .vpn-note { margin: 12px 0 0; color: #ff8a8a; font-size: 11px; line-height: 1.5; min-height: 14px; }
+
+/* Compact header control: the full VPN panel opens as a sheet. */
+.vpn-chip {
+  display: flex; align-items: center; gap: 6px; height: 38px; padding: 0 9px;
+  border-radius: 999px; background: rgba(255,255,255,.06);
+  border: 1px solid rgba(255,255,255,.1); color: #fff;
+}
+.vpn-chip:active { transform: scale(.96); }
+.vpn-chip-text { display: flex; flex-direction: column; align-items: flex-start; line-height: 1.05; }
+.vpn-chip-text b { font-size: 10.5px; font-weight: 700; letter-spacing: .02em; }
+.vpn-chip-text i { font-style: normal; font-size: 8.5px; color: #8a8f99; white-space: nowrap; }
+.vpn-chip-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto;
+  background: #ffc105; box-shadow: 0 0 0 4px rgba(255,193,5,.14);
+}
+.vpn-chip-dot.ok { background: #41e88a; box-shadow: 0 0 0 4px rgba(65,232,138,.14); }
+.vpn-chip-dot.off { background: #7f8590; box-shadow: 0 0 0 4px rgba(127,133,144,.14); }
+.vpn-chip-dot.err { background: #ff6b6b; box-shadow: 0 0 0 4px rgba(255,107,107,.14); }
+.vpn-chip.ok { border-color: rgba(65,232,138,.28); }
+.vpn-chip.off { border-color: rgba(255,255,255,.08); }
+.vpn-chip.err { border-color: rgba(255,107,107,.34); }
+
+/* VPN sheet */
+.vpn-sheet-live { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 14px 0 10px; }
+.vpn-sheet-state { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.vpn-sheet-state b { font-size: 15px; letter-spacing: -.01em; }
+.vpn-sheet-ping { font-size: 11px; color: #9ba1ac; white-space: nowrap; }
+.vpn-sheet-facts {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: #23272f;
+  border: 1px solid #23272f; border-radius: 12px; overflow: hidden; margin: 0 0 12px;
+}
+.vpn-sheet-facts div { background: #121419; padding: 9px 11px; min-width: 0; }
+.vpn-sheet-facts span { display: block; color: #7f8590; font-size: 9px; letter-spacing: .08em; text-transform: uppercase; margin: 0 0 3px; }
+.vpn-sheet-facts b { display: block; color: #e8eaee; font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vpn-toggle { width: 100%; margin: 0 0 10px; }
+.vpn-toggle.off { background: linear-gradient(135deg,#ffc105,#ff8a00); color: #111; }
+.vpn-auto-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 11px 2px 12px; border-bottom: 1px solid rgba(255,255,255,.07); cursor: pointer;
+}
+.vpn-auto-row span { display: flex; flex-direction: column; min-width: 0; }
+.vpn-auto-row b { font-size: 12.5px; }
+.vpn-auto-row i { font-style: normal; color: #8a8f99; font-size: 10.5px; margin-top: 2px; }
+.vpn-auto-row input { width: 40px; height: 22px; accent-color: #ffc105; flex: 0 0 auto; }
+.vpn-server-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 14px 0 8px; }
+.vpn-server-head > span { font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: #7f8590; font-weight: 800; }
+.vpn-server-head input {
+  flex: 1; max-width: 190px; background: #121419; border: 1px solid #2a2f39; color: #e8eaee;
+  border-radius: 10px; padding: 8px 10px; font-size: 11.5px; outline: none;
+}
+.vpn-server-list { display: flex; flex-direction: column; gap: 6px; max-height: 250px; overflow-y: auto; padding-bottom: 4px; }
+.vpn-server {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%;
+  padding: 9px 11px; border-radius: 10px; text-align: left;
+  background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.07); color: #e8eaee;
+}
+.vpn-server span { font-size: 12px; font-weight: 650; }
+.vpn-server i { font-style: normal; font-size: 10px; color: #8a8f99; }
+.vpn-server.on { border-color: rgba(255,193,5,.55); background: rgba(255,193,5,.1); }
+.vpn-server.on i { color: #ffc105; }
+.vpn-panel-note { color: #777782; font-size: 10.5px; line-height: 1.55; padding: 10px 0 18px; }
+
 .tab { font-size: 9px; letter-spacing: .05px; }
 @media (max-width: 360px) { .tab { font-size: 8px; } .tab svg { width: 20px; height: 20px; } }
 
