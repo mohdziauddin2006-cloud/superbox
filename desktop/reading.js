@@ -962,7 +962,7 @@
     } catch (e) { return String(url || '').slice(-40); }
   }
   function badImage(u) {
-    return /logo|favicon|avatar|icon|banner|thumbnail|thumb|cover|profile|emoji|placeholder|spacer|loading|transparent|read_on_|discord|patreon|ko-fi|kofi|twitter|facebook|reddit|ads?\.|doubleclick|analytics|pixel|1x1|blank\./i.test(String(u || ''));
+    return /logo|favicon|avatar|icon|banner|thumbnail|thumb|cover|profile|emoji|placeholder|spacer|loading|transparent|read_on_|featured|discord|patreon|ko-fi|kofi|twitter|facebook|reddit|ads?\.|doubleclick|analytics|pixel|1x1|blank\./i.test(String(u || ''));
   }
   function nonEnglishLabel(v) {
     return /(?:^|\s|\()(?:raw|raws)(?:$|\s|\))|\[(?:ES|PT|FR|DE|ID|IT|RU|TH|VI|JA|KO|ZH|AR|TR)\]/i.test(String(v || ''));
@@ -1440,6 +1440,10 @@
        requested episode's own .episode-unit and keep only /pc/ pages. */
     function add(u) {
       u = String(u || '').replace(/\\\//g, '/').replace(/\\u0026/gi, '&').replace(/&amp;/g, '&');
+      /* Raw Tapas HTML stores lazy image URLs as \"https://us-a.tapas.io/pc/...\",
+         so pull the real URL out before validating it. */
+      var m = /https?:\/\/(?:us-a\.)?tapas\.io\/pc\/[^\s"'\\]+/i.exec(u);
+      if (m) u = m[0];
       if (!/^https?:\/\/[^"'\s]+$/i.test(u)) return;
       if (!/tapas\.io\/pc\//i.test(u)) return;
       if (seen[u]) return;
