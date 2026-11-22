@@ -741,7 +741,7 @@
     },
     {
       id: 'vortex', name: 'Vortex Scans', short: 'VORTEX', ref: 'https://vortexscans.org/',
-      home: 'https://vortexscans.org/series',
+      home: 'https://vortexscans.org/series/',
       search: function (q) { return 'https://vortexscans.org/series/?searchTerm=' + enc(q); },
       seriesRe: /\/series\/[^/?#]+\/?$/i,
       chapterRe: /\/series\/[^/?#]+\/chapter-[\d.]+/i,
@@ -749,7 +749,7 @@
     },
     {
       id: 'hive', name: 'HiveToons', short: 'HIVE', ref: 'https://hivetoons.org/',
-      home: 'https://hivetoons.org/series',
+      home: 'https://hivetoons.org/series/',
       search: function (q) { return 'https://hivetoons.org/series/?searchTerm=' + enc(q); },
       seriesRe: /\/series\/[^/?#]+\/?$/i,
       chapterRe: /\/series\/[^/?#]+\/chapter-[\d.]+/i,
@@ -878,7 +878,7 @@
   function snapHtml(html, url) {
     var doc = new DOMParser().parseFromString(String(html || ''), 'text/html');
     var out = {
-      url: url, title: text(doc.querySelector('title')),
+      url: url, html: String(html || ''), title: text(doc.querySelector('title')),
       h1: text(doc.querySelector('h1')),
       og: absolute((doc.querySelector('meta[property="og:image"]') || {}).content, url),
       desc: (doc.querySelector('meta[name="description"]') || {}).content || '',
@@ -949,7 +949,7 @@
   }
   function cleanTitle(v) {
     return String(v || '').replace(/\s+/g, ' ')
-      .replace(/^\d+\s+/, '')
+      .replace(/^\d{1,3}[.)]\s+/, '')
       .replace(/\s+(?:Hot|New|Top|Trending|Completed|Ongoing|UP)\b.*$/i, '')
       .replace(/\s+\d+(?:\.\d+)?\s+\d+[dhm]\s+ago.*$/i, '')
       .trim();
@@ -1022,7 +1022,10 @@
       if (seen[u]) return;
       var label = a.t || a.a || '';
       if (nonEnglishLabel(label)) return;
-      var no = chapterNoOf(label, u);
+      /* "Latest Chapter" duplicates the newest real row; skip it so the
+         numbered label wins. "First Chapter" is the only row for chapter 1. */
+      if (/^latest chapter$/i.test(label.trim())) return;
+      var no = /^first chapter$/i.test(label.trim()) ? 1 : chapterNoOf(label, u);
       var keyNo = (no < 1e9 ? String(no) : u) + '|' + label.replace(/\s+\d+\s+(?:hour|day|week|month|year)s?\s+ago.*$/i, '').trim();
       if (seenNo[keyNo]) return;
       seenNo[keyNo] = 1;
@@ -1032,6 +1035,28 @@
         no: no, lang: 'en'
       });
     });
+    /* Madara-based sites embed the complete chapter list as JSON; the visible
+       anchors only carry "Read now"/"Latest", so prefer the JSON when present. */
+    try {
+      var jdoc = new DOMParser().parseFromString(String(snap.html || ''), 'text/html');
+      var jel = jdoc.getElementById('mk-chapters-data');
+      var jdata = jel ? JSON.parse(jel.textContent || '{}') : null;
+      if (jdata && jdata.items && jdata.items.length) {
+        var jseen = {};
+        d.chapters = [];
+        jdata.items.forEach(function (x) {
+          var ju = String(x.url || '').replace(/\\\//g, '/');
+          if (!ju || jseen[ju]) return;
+          jseen[ju] = 1;
+          var jno = parseFloat(x.num);
+          if (!isFinite(jno)) jno = chapterNoOf(x.name || '', ju);
+          d.chapters.push({
+            id: ju, url: ju, title: String(x.name || ('Chapter ' + jno)).trim(),
+            no: jno, lang: 'en'
+          });
+        });
+      }
+    } catch (e) {}
     d.chapters.sort(function (x, y) { return (x.no - y.no) || String(x.url).localeCompare(String(y.url)); });
     if (!d.desc) d.desc = '';
     return d;
@@ -1381,16 +1406,23 @@
       var m = /\/episode\/(\d+)/.exec(a.h || '');
       if (!m || seen[m[1]]) return;
       seen[m[1]] = 1;
-      var label = String(a.a || a.t || '');
+      /* Episode rows carry an image whose alt text is the same on every row,
+         so trust the anchor text first and fall back to list order. */
+      var label = String(a.t || a.a || '');
       var no = null;
-      var em = /(?:ep|episode|chapter)\s*\.?\s*(\d+(?:\.\d+)?)/i.exec(label);
+      var em = /(?:episode|ep)\s*\.?\s*(\d+(?:\.\d+)?)/i.exec(label);
       if (em) no = parseFloat(em[1]);
-      if (no == null) no = chapters.length + 1;
+      if (no == null || !isFinite(no)) no = chapters.length + 1;
       chapters.push({
         id: m[1], no: no, title: 'Episode ' + no,
         url: 'https://tapas.io/episode/' + m[1], lang: 'en'
       });
     });
+    var uniq = {};
+    chapters.forEach(function (c) { uniq[c.no] = 1; });
+    if (chapters.length > 1 && Object.keys(uniq).length === 1) {
+      chapters.forEach(function (c, i) { c.no = i + 1; c.title = 'Episode ' + c.no; });
+    }
     chapters.sort(function (a, b) { return a.no - b.no; });
     return {
       source: 'tapas', id: item.id, title: title,
@@ -1403,19 +1435,33 @@
   async function tapasChapter(_detail, chapter) {
     var snap = await renderSnap(chapter.url, 'chapter');
     var urls = [], seen = {};
+    /* Tapas keeps the previous episode mounted after its auto-advance, and
+       the page also carries avatars and related-series art. Scope to the
+       requested episode's own .episode-unit and keep only /pc/ pages. */
     function add(u) {
       u = String(u || '').replace(/\\\//g, '/').replace(/\\u0026/gi, '&').replace(/&amp;/g, '&');
       if (!/^https?:\/\/[^"'\s]+$/i.test(u)) return;
-      if (!/tapas\.io\/|\.(?:jpe?g|png|webp|gif)(?:\?|$)/i.test(u)) return;
-      if (/logo|avatar|icon|cover|thumb|emoji/i.test(u)) return;
+      if (!/tapas\.io\/pc\//i.test(u)) return;
       if (seen[u]) return;
       seen[u] = 1; urls.push(u);
     }
-    (snap.readers || []).forEach(function (r) { add(r.s || r); });
-    (snap.images || []).forEach(function (im) { if ((im.w || 0) >= 480) add(im.s); });
     var s = String(snap.html || '').replace(/\\\//g, '/').replace(/\\u0026/gi, '&');
-    var re = /https:\/\/us-a\.tapas\.io\/pc\/[^"'\s<>\\]+/gi, m;
-    while ((m = re.exec(s))) add(m[0].replace(/[),.;]+$/, ''));
+    var epId = String(chapter.id || '').replace(/\D/g, '') ||
+      ((/\/episode\/(\d+)/.exec(chapter.url || '') || [])[1] || '');
+    var scope = null;
+    try {
+      var doc = new DOMParser().parseFromString(s, 'text/html');
+      scope = epId ? doc.querySelector('[data-ep-id="' + epId + '"]') : null;
+      if (!scope && epId) scope = doc.getElementById('episode-' + epId);
+      if (!scope) scope = doc;
+      Array.prototype.forEach.call(scope.querySelectorAll('img'), function (im) {
+        add(im.getAttribute('data-src') || im.getAttribute('src') || '');
+      });
+    } catch (e) {}
+    if (!urls.length) {
+      (snap.readers || []).forEach(function (r) { add(r.s || r); });
+      (snap.images || []).forEach(function (im) { add(im.s); });
+    }
     if (!urls.length) throw new Error('Tapas returned no pages');
     return urls;
   }
