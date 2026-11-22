@@ -33,6 +33,13 @@ All notable changes to SuperBox are recorded here. The format follows
   `TypeError: terminated`; every outbound fetch has a timeout, retry budget and
   stream error handler, and a failed request only logs instead of raising the
   crash dialog.
+- Tapas chapter lists use the real anchor labels and its reader is scoped to
+  the requested episode, so avatars, thumbnails and the previous episode's
+  pages never leak into the reader.
+- Madara-based sources (ManhuaUS) read the complete embedded chapter JSON, and
+  featured/cover art is filtered out of HiveToons chapters.
+- Flame, Vortex and HiveToons catalogues now parse their current URLs without
+  stripping leading title numbers.
 
 ## [1.3.0] — 2026-11-12
 
