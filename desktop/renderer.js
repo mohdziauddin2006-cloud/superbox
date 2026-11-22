@@ -48,7 +48,7 @@
     store.key = localStorage.getItem('wab.key') || '';
     store.lang = localStorage.getItem('wab.lang') || 'en-US';
   } catch (e) { store = { key: '', lang: 'en-US' }; }
-  var state = { section: 'home', sub: 'jav', current: null, hls: null, next: null, subs: null, audioPicked: false, naturalEnd: false, failed: new Map(), cfDead: new Set(), embedStuck: null, cfChk: null, liveFilter: '', series: null };
+  var state = { section: 'home', sub: 'jav', searchMode: 'safe', current: null, hls: null, next: null, subs: null, audioPicked: false, naturalEnd: false, failed: new Map(), cfDead: new Set(), embedStuck: null, cfChk: null, liveFilter: '', series: null, epChunkSize: 50, epChunkIdx: 0 };
 
   /* Grace period for a source that is still fetching its first frame. A
      live connection that delivers bytes keeps its full window; the
@@ -118,7 +118,102 @@
   function toast(msg) {
     var t = el('div', 'toast', msg);
     document.body.appendChild(t);
-    setTimeout(function () { try { t.remove(); } catch (e) {} }, 2600);
+    requestAnimationFrame(function () { t.classList.add('show'); });
+    setTimeout(function () {
+      t.classList.remove('show');
+      setTimeout(function () { try { t.remove(); } catch (e) {} }, 260);
+    }, 2400);
+  }
+
+  /* ---------------- animated top-nav pill indicator ---------------- */
+  function updateNavIndicator() {
+    var nav = $('#nav');
+    var ind = $('#navIndicator');
+    if (!nav || !ind) return;
+    var active = nav.querySelector('button.active');
+    if (!active) { ind.style.opacity = '0'; return; }
+    nav.querySelectorAll('button[role="tab"]').forEach(function (b) {
+      b.setAttribute('aria-selected', b === active ? 'true' : 'false');
+    });
+    ind.style.opacity = '1';
+    ind.style.width = active.offsetWidth + 'px';
+    ind.style.transform = 'translate3d(' + active.offsetLeft + 'px, 0, 0)';
+    try {
+      var rail = nav.parentElement;
+      if (rail && rail.scrollWidth > rail.clientWidth) {
+        var targetLeft = active.offsetLeft - (rail.clientWidth - active.offsetWidth) / 2;
+        rail.scrollTo({ left: Math.max(0, targetLeft), behavior: 'smooth' });
+      }
+    } catch (e) {}
+  }
+
+  /* ---------------- 18+ dark-glass Age-Gate (session-scoped) ---------------- */
+  var AGE18_KEY = 'sb.age18.ok';
+  function hasAge18() {
+    try { return sessionStorage.getItem(AGE18_KEY) === '1'; } catch (e) { return false; }
+  }
+  function setAge18Ok() {
+    try { sessionStorage.setItem(AGE18_KEY, '1'); } catch (e) {}
+  }
+  var ageGateCb = null;
+  function closeAgeGate() {
+    var m = $('#ageGateModal');
+    if (m) m.classList.add('hidden');
+    ageGateCb = null;
+  }
+  function requireAge18(reason, onOk) {
+    if (hasAge18()) { if (typeof onOk === 'function') onOk(); return; }
+    var m = $('#ageGateModal');
+    if (!m) { setAge18Ok(); if (typeof onOk === 'function') onOk(); return; }
+    ageGateCb = onOk || null;
+    var t = $('#ageGateTitle');
+    var sub = $('#ageGateSub');
+    if (t) t.textContent = reason && reason.title ? reason.title : 'Confirm you are 18 or older';
+    if (sub) sub.textContent = reason && reason.desc
+      ? reason.desc
+      : 'This area contains explicit adult material and is strictly isolated from standard Reading, Kids, and Safe Search. Confirmation lasts for this session only.';
+    m.classList.remove('hidden');
+  }
+  function wireAgeGate() {
+    var m = $('#ageGateModal');
+    if (!m || m.dataset.wired) return;
+    m.dataset.wired = '1';
+    var ok = $('#ageGateConfirm');
+    var cancel = $('#ageGateCancel');
+    if (ok) ok.onclick = function () {
+      var fn = ageGateCb;
+      setAge18Ok();
+      closeAgeGate();
+      if (typeof fn === 'function') fn();
+    };
+    if (cancel) cancel.onclick = closeAgeGate;
+    m.addEventListener('click', function (e) { if (e.target === m) closeAgeGate(); });
+  }
+
+  /* ---------------- chunked episode range helper (1-50, 51-100, 101+) ---------------- */
+  function chunkEpisodeRanges(total, size) {
+    var n = Math.max(0, Number(total) || 0);
+    var sz = Math.max(1, Number(size) || 50);
+    var out = [];
+    for (var start = 1; start <= n; start += sz) {
+      var end = Math.min(n, start + sz - 1);
+      out.push({ start: start, end: end, fromIdx: start - 1, toIdx: end, label: start + '\u2013' + end });
+    }
+    return out;
+  }
+
+  function buildSkelCards(count) {
+    var frag = document.createDocumentFragment();
+    for (var i = 0; i < (count || 7); i++) {
+      var c = el('div', 'skel-card');
+      c.appendChild(el('div', 'skel-art'));
+      var lines = el('div', 'skel-lines');
+      lines.appendChild(el('div', 'skel-l1'));
+      lines.appendChild(el('div', 'skel-l2'));
+      c.appendChild(lines);
+      frag.appendChild(c);
+    }
+    return frag;
   }
 
   /* ---------------- tiny network helpers ---------------- */
@@ -406,8 +501,7 @@
     var wrap = el('div', 'row');
     wrap.appendChild(el('h3', null, label));
     var strip = el('div', 'row-scroll');
-    var ph = el('div', 'empty', 'Loading...');
-    strip.appendChild(ph);
+    strip.appendChild(buildSkelCards(7));
     wrap.appendChild(strip);
     var prev = el('button', 'row-nav prev', '\u2039');
     var next = el('button', 'row-nav next', '\u203A');
@@ -627,18 +721,21 @@
 
   function cardNode(it, wide) {
     var c = el('div', 'card' + (wide ? ' wide' : ''));
-    var w = el('div', 'poster-wrap');
+    c.setAttribute('data-kind', it.kind || '');
+    var w = el('div', 'art');
     var img = document.createElement('img');
     img.className = 'poster'; img.referrerPolicy = 'no-referrer'; img.loading = 'lazy'; img.alt = it.t || '';
     var chain = posterChain(it), ci = 0;
     img.onerror = function () { ci++; if (ci < chain.length && chain[ci]) { this.src = chain[ci]; } else { this.onerror = null; this.style.opacity = '.15'; } };
     img.src = chain[0] || '';
     w.appendChild(img);
-    if (it.badge) w.appendChild(el('div', 'badge', String(it.badge).slice(0, 8)));
+    if (it.badge) w.appendChild(el('div', 'badge', String(it.badge).slice(0, 10)));
+    if (it.match) w.appendChild(el('div', 'match-pill', String(it.match)));
+    w.appendChild(el('div', 'play-badge', '\u25B6'));
     c.appendChild(w);
     var meta = el('div', 'meta');
     meta.appendChild(el('div', 't', it.t || ''));
-    var sub = [it.year, it.rating, it.dur].filter(Boolean).join('  ');
+    var sub = [it.year, it.rating ? '\u2605 ' + it.rating : '', it.dur].filter(Boolean).join(' \u00B7 ');
     if (sub) meta.appendChild(el('div', 's', sub));
     c.appendChild(meta);
     c.onclick = function () { openItem(it); };
@@ -791,13 +888,7 @@
   function skeletonRow() {
     var row = el('div', 'row');
     var strip = el('div', 'row-scroll');
-    for (var i = 0; i < 7; i++) {
-      var c = el('div', 'sk-card');
-      c.appendChild(el('div', 'sk-poster'));
-      c.appendChild(el('div', 'sk-line'));
-      c.appendChild(el('div', 'sk-line short'));
-      strip.appendChild(c);
-    }
+    strip.appendChild(buildSkelCards(7));
     row.appendChild(strip);
     return row;
   }
@@ -944,7 +1035,13 @@
     var label = $('#vpnChipLabel');
     var sub = $('#vpnChipSub');
     var ping = $('#vpnChipPing');
-    if (label) label.textContent = on ? 'Shield · Connected' : off ? 'Shield · Off' : failed ? 'Shield · Retry' : 'Shield · Connecting';
+    var dot = $('#vpnChipDot');
+    if (dot) {
+      dot.classList.toggle('ok', on);
+      dot.classList.toggle('off', off);
+      dot.classList.toggle('err', failed && !on && !off);
+    }
+    if (label) label.textContent = on ? 'Shield · Protected' : off ? 'Shield · Off' : failed ? 'Shield · Retry' : 'Shield · Connecting';
     if (sub) sub.textContent = on
       ? [st.egress || st.regionLabel || 'WARP', st.city || ''].filter(Boolean).join(' · ')
       : off ? 'Direct connection' : ((st && st.phase) || 'Starting…');
@@ -960,20 +1057,25 @@
       return (s.n + ' ' + s.id + ' ' + (s.d || '')).toLowerCase().indexOf(f) >= 0;
     });
     host.innerHTML = list.map(function (s) {
-      return '<button type="button" class="vpn-server' + (s.id === region ? ' on' : '') + '" data-vpn-region="' + esc(s.id) + '">' +
-        '<span>' + esc(s.n) + '</span><i>' + esc(s.id === region ? 'Active' : (s.d || '')) + '</i></button>';
+      var code = s.id === 'auto' ? 'AUTO' : String(s.id || '').toUpperCase().slice(0, 3);
+      var active = s.id === region;
+      return '<button type="button" class="vpn-server' + (active ? ' on' : '') + '" data-vpn-region="' + esc(s.id) + '">' +
+        '<span class="vpn-server-l"><span class="vpn-code">' + esc(code) + '</span>' +
+        '<span class="vpn-server-txt"><span>' + esc(s.n) + '</span><i>' + esc(active ? 'Connected profile' : (s.d || '')) + '</i></span></span>' +
+        '<span class="vpn-server-check" aria-hidden="true">\u2713</span></button>';
     }).join('') || '<div class="vpn-panel-note">No country matches that search.</div>';
   }
   function paintVpnPanel(st) {
     var on = !!(st && st.ok);
     var off = !!(st && (st.off || st.enabled === false));
     var failed = !!(st && st.state === 'error');
-    var state = $('#vpnPanelState');
-    if (state) state.textContent = on ? 'Connected' : off ? 'Disconnected' : failed ? 'Needs retry' : ((st && st.phase) || 'Connecting…');
+    var stEl = $('#vpnPanelState');
+    if (stEl) stEl.textContent = on ? 'Connected' : off ? 'Disconnected' : failed ? 'Needs retry' : ((st && st.phase) || 'Connecting…');
     var dot = $('#vpnPanelDot');
     if (dot) {
-      dot.style.background = on ? '#43d17c' : off ? '#7f8590' : failed ? '#ff6b6b' : '#ffc105';
-      dot.style.boxShadow = '0 0 0 4px ' + (on ? 'rgba(67,209,124,.14)' : off ? 'rgba(127,133,144,.14)' : failed ? 'rgba(255,107,107,.14)' : 'rgba(255,193,5,.12)');
+      dot.classList.toggle('ok', on);
+      dot.classList.toggle('off', off);
+      dot.classList.toggle('err', failed && !on && !off);
     }
     var ping = $('#vpnPanelPing');
     if (ping) ping.textContent = off ? 'Direct route' : (st && st.ping > 0 ? st.ping + ' ms' : '— ms');
@@ -985,10 +1087,13 @@
       ? (up > 3600 ? Math.floor(up / 3600) + 'h ' + Math.floor((up % 3600) / 60) + 'm' : Math.floor(up / 60) + 'm ' + (up % 60) + 's')
       : '—';
     var toggle = $('#vpnToggle');
+    var tLbl = $('#vpnToggleLabel');
+    var tSub = $('#vpnToggleSub');
     if (toggle) {
       toggle.disabled = false;
       toggle.classList.toggle('off', off);
-      toggle.textContent = off ? 'Connect VPN' : (on ? 'Disconnect VPN' : 'Cancel connection');
+      if (tLbl) tLbl.textContent = off ? 'VPN OFF' : (on ? 'VPN ON' : 'CONNECTING');
+      if (tSub) tSub.textContent = off ? 'Tap to connect Shield' : (on ? 'Protected · Tap to disconnect' : 'Tap to cancel');
     }
     var auto = $('#vpnAuto');
     if (auto) auto.checked = vpnAutoOn();
@@ -1054,10 +1159,18 @@
       }
     }).catch(function () {});
   }
+  var vpnCloseTimer = 0;
   function openVpnPanel() {
     var panel = $('#vpnPanel');
+    var bd = $('#vpnBackdrop');
     if (!panel) return;
+    clearTimeout(vpnCloseTimer);
     panel.classList.remove('hidden');
+    if (bd) bd.classList.remove('hidden');
+    requestAnimationFrame(function () {
+      panel.classList.add('open');
+      if (bd) bd.classList.add('open');
+    });
     try {
       var chip = $('#vpnChip');
       if (chip) chip.setAttribute('aria-expanded', 'true');
@@ -1067,8 +1180,17 @@
   }
   function closeVpnPanel() {
     var panel = $('#vpnPanel');
+    var bd = $('#vpnBackdrop');
     if (!panel) return;
-    panel.classList.add('hidden');
+    panel.classList.remove('open');
+    if (bd) bd.classList.remove('open');
+    clearTimeout(vpnCloseTimer);
+    vpnCloseTimer = setTimeout(function () {
+      if (!panel.classList.contains('open')) {
+        panel.classList.add('hidden');
+        if (bd) bd.classList.add('hidden');
+      }
+    }, 340);
     try {
       var chip = $('#vpnChip');
       if (chip) chip.setAttribute('aria-expanded', 'false');
@@ -1080,8 +1202,14 @@
   function vpnToggleNow() {
     var off = vpnIsOff();
     var toggle = $('#vpnToggle');
+    var tLbl = $('#vpnToggleLabel');
+    var tSub = $('#vpnToggleSub');
     var settingsBtn = $('#setVpnToggle');
-    if (toggle) { toggle.disabled = true; toggle.textContent = off ? 'Connecting…' : 'Disconnecting…'; }
+    if (toggle) {
+      toggle.disabled = true;
+      if (tLbl) tLbl.textContent = off ? 'CONNECTING…' : 'DISCONNECTING…';
+      if (tSub) tSub.textContent = 'Updating tunnel…';
+    }
     if (settingsBtn) settingsBtn.disabled = true;
     var region = (vpnLastStatus && (vpnLastStatus.preferred || vpnLastStatus.region)) || 'auto';
     var call = off
@@ -1150,8 +1278,10 @@
     var chip = $('#vpnChip');
     if (chip) chip.onclick = function () {
       var panel = $('#vpnPanel');
-      if (panel && !panel.classList.contains('hidden')) closeVpnPanel(); else openVpnPanel();
+      if (panel && panel.classList.contains('open')) closeVpnPanel(); else openVpnPanel();
     };
+    var bd = $('#vpnBackdrop');
+    if (bd) bd.onclick = closeVpnPanel;
     var close = $('#vpnPanelClose');
     if (close) close.onclick = closeVpnPanel;
     var toggle = $('#vpnToggle');
@@ -1178,16 +1308,132 @@
     };
     document.addEventListener('click', function (e) {
       var panel = $('#vpnPanel');
-      if (!panel || panel.classList.contains('hidden')) return;
+      if (!panel || !panel.classList.contains('open')) return;
       if (panel.contains(e.target)) return;
       if (e.target.closest && e.target.closest('#vpnChip,#setVpnManage')) return;
       closeVpnPanel();
     });
     setInterval(function () {
       var panel = $('#vpnPanel');
-      if (panel && !panel.classList.contains('hidden')) refreshVpnPing();
+      if (panel && panel.classList.contains('open')) refreshVpnPing();
     }, 5000);
     watchVpn();
+  }
+
+  /* Unified Home Search Bar with animated Safe / Deep pill toggle */
+  function homeSearchBar(initialQuery) {
+    var wrap = el('div', 'home-search-wrap');
+    var form = document.createElement('form');
+    form.id = 'homeSearchBar';
+    form.className = 'home-search-bar';
+    form.setAttribute('data-search-mode', state.searchMode || 'safe');
+    form.autocomplete = 'off';
+    form.innerHTML = '<svg class="home-search-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.4-3.4"></path></svg>';
+    var inp = document.createElement('input');
+    inp.id = 'homeSearchInput';
+    inp.type = 'search';
+    inp.autocomplete = 'off';
+    inp.autocapitalize = 'off';
+    inp.spellcheck = false;
+    inp.value = initialQuery || '';
+    inp.placeholder = state.searchMode === 'deep'
+      ? 'Deep Search across standard + expanded 18+ catalogs...'
+      : 'Search movies, series, anime, K-drama, web series, reading...';
+    form.appendChild(inp);
+
+    var toggle = el('div', 'search-mode-toggle');
+    toggle.id = 'homeSearchMode';
+    toggle.setAttribute('role', 'group');
+    toggle.setAttribute('aria-label', 'Search catalog mode');
+    toggle.setAttribute('data-mode', state.searchMode || 'safe');
+    toggle.appendChild(el('span', 'search-mode-thumb'));
+
+    var bSafe = el('button', state.searchMode !== 'deep' ? 'on' : '', 'Safe');
+    bSafe.type = 'button';
+    bSafe.setAttribute('data-mode-btn', 'safe');
+    var bDeep = el('button', state.searchMode === 'deep' ? 'on' : '', 'Deep');
+    bDeep.type = 'button';
+    bDeep.setAttribute('data-mode-btn', 'deep');
+    toggle.appendChild(bSafe);
+    toggle.appendChild(bDeep);
+    form.appendChild(toggle);
+
+    var submit = el('button', 'primary', 'Search');
+    submit.type = 'submit';
+    form.appendChild(submit);
+    wrap.appendChild(form);
+
+    var hint = el('div', 'home-search-hint');
+    var modeTag = el('span', 'mode-tag' + (state.searchMode === 'deep' ? ' deep' : ''),
+      state.searchMode === 'deep' ? '\u25CF Deep Search active (18+ verified)' : '\u25CF Safe Search active (Standard catalog)');
+    var rightNote = el('span', null, 'Press Enter to search across SuperBox');
+    hint.appendChild(modeTag);
+    hint.appendChild(rightNote);
+    wrap.appendChild(hint);
+
+    function applyMode(mode) {
+      state.searchMode = mode === 'deep' ? 'deep' : 'safe';
+      form.setAttribute('data-search-mode', state.searchMode);
+      toggle.setAttribute('data-mode', state.searchMode);
+      bSafe.classList.toggle('on', state.searchMode === 'safe');
+      bDeep.classList.toggle('on', state.searchMode === 'deep');
+      modeTag.classList.toggle('deep', state.searchMode === 'deep');
+      modeTag.textContent = state.searchMode === 'deep'
+        ? '\u25CF Deep Search active (18+ verified)'
+        : '\u25CF Safe Search active (Standard catalog)';
+      inp.placeholder = state.searchMode === 'deep'
+        ? 'Deep Search across standard + expanded 18+ catalogs...'
+        : 'Search movies, series, anime, K-drama, web series, reading...';
+      try {
+        window.dispatchEvent(new CustomEvent('sb:search-mode', { detail: { mode: state.searchMode } }));
+      } catch (e) {}
+    }
+
+    bSafe.onclick = function () { applyMode('safe'); };
+    bDeep.onclick = function () {
+      if (state.searchMode === 'deep') return;
+      requireAge18({
+        title: 'Enable Deep Search (18+)',
+        desc: 'Deep Search expands Home search across all catalogs including 18+ sources. Confirm you are 18 or older to unlock Deep mode for this session.'
+      }, function () {
+        applyMode('deep');
+        toast('Deep Search unlocked for this session.');
+      });
+    };
+
+    form.onsubmit = function (e) {
+      e.preventDefault();
+      runSearch(inp.value, { mode: state.searchMode, scope: 'home' });
+    };
+    return wrap;
+  }
+
+  /* Per-page header bar with dedicated scoped search on EVERY section */
+  var PAGE_META = {
+    moviebox:  { k: 'SPOTLIGHT',  t: 'Spotlight',  sub: 'Curated blockbuster movies & series \u00B7 Ad-free', ph: 'Search Spotlight catalogue...' },
+    movie:     { k: 'CINEMA',     t: 'Movies',     sub: 'Trending films, classics & box-office hits',        ph: 'Search Movies...' },
+    tv:        { k: 'TELEVISION', t: 'Series',     sub: 'Binge-worthy seasons & full episode ladders',       ph: 'Search Series...' },
+    webseries: { k: 'ORIGINALS',  t: 'Web Series', sub: 'Multi-part streaming web series & originals',       ph: 'Search Web Series...' },
+    kdrama:    { k: 'SEOUL',      t: 'K-Drama',    sub: 'Korean dramas, romance, thrillers & variety',       ph: 'Search K-Drama...' },
+    anime:     { k: 'OTAKU',      t: 'Anime',      sub: 'Seasonal simulcasts, subbed & dubbed classics',     ph: 'Search Anime...' },
+    kids:      { k: 'FAMILY',     t: 'Kids',       sub: 'Strictly kid-safe shows & family favorites',        ph: 'Search Kids...' },
+    cartoons:  { k: 'ANIMATION',  t: 'Cartoons',   sub: 'Classic & modern animated series',                  ph: 'Search Cartoons...' },
+    livetv:    { k: 'BROADCAST',  t: 'Live TV',    sub: 'Live international channels & news streams',        ph: 'Filter or search Live TV channels...' },
+    tube:      { k: 'VIDEO',      t: 'Tube',       sub: 'Ad-free video streams & trending channels',         ph: 'Search Tube...' },
+    adult:     { k: '18+ VAULT',  t: '18+ Video',  sub: 'Isolated adult video vault \u00B7 Zero history',    ph: 'Search 18+ Video...' }
+  };
+
+  function pageHeaderBar(sec, phOverride) {
+    var meta = PAGE_META[sec] || { k: 'SUPERBOX', t: sec, sub: '', ph: 'Search ' + sec + '...' };
+    var bar = el('div', 'page-header-bar' + (sec === 'adult' ? ' adult-theme' : ''));
+    bar.setAttribute('data-page-header', sec);
+    var copy = el('div', 'page-header-copy');
+    copy.appendChild(el('span', 'page-header-kicker', meta.k));
+    copy.appendChild(el('h2', null, meta.t));
+    if (meta.sub) copy.appendChild(el('p', null, meta.sub));
+    bar.appendChild(copy);
+    bar.appendChild(searchStrip(sec, phOverride || meta.ph));
+    return bar;
   }
 
   function renderSuperBox() {
@@ -1195,18 +1441,20 @@
     state.section = 'moviebox';
     try { document.body.setAttribute('data-sec', 'moviebox'); } catch (e) {}
     document.querySelectorAll('#nav button').forEach(function (b) { b.classList.toggle('active', b.getAttribute('data-sec') === 'moviebox'); });
+    updateNavIndicator();
     var c = content();
     c.innerHTML = '';
     c.scrollTop = 0;
     if (rowIO) { try { rowIO.disconnect(); } catch (e) {} rowIO = null; }
-    c.appendChild(brandBand('Spotlight', 'The blockbuster library', 'Curated \u00B7 Ad-free'));
-    c.appendChild(searchStrip('moviebox', 'Search the SuperBox catalogue...'));
+    var stage = el('div', 'view-enter');
+    stage.appendChild(pageHeaderBar('moviebox'));
     var host = heroSkeleton();
-    c.appendChild(host);
+    stage.appendChild(host);
     var loading = el('div', 'mb-loading');
     loading.appendChild(skeletonRow());
     loading.appendChild(skeletonRow());
-    c.appendChild(loading);
+    stage.appendChild(loading);
+    c.appendChild(stage);
     mbHome().then(function (h) {
       if (state.section !== 'moviebox') return;
       try { loading.remove(); } catch (e) {}
@@ -1218,7 +1466,7 @@
           onInfo: function (it) { mbDetail(it); }
         });
       } else { try { host.remove(); } catch (e) {} }
-      paintRows(c, mbRows(h));
+      paintRows(stage, mbRows(h));
     }).catch(function () {
       loading.innerHTML = '';
       loading.appendChild(el('div', 'empty', 'SuperBox could not be reached. Check your connection and try again.'));
@@ -1228,16 +1476,25 @@
   function renderSection(sec, sub) {
     closeSourceFrame();
     if (window.READER) { try { window.READER.close(); } catch (e) {} }
-    /* The provider directory is gone. Old bookmarks, stale hash routes and
-       any handler that still asks for it land on Home instead of exposing a
-       website list. */
+    /* The SOURCES tab is strictly removed and hidden from all menus & views. */
     if (sec === 'sources') sec = 'home';
+    /* Isolate 18+ Video and 18+ Reading behind dark-glass Age-Gate */
+    if ((sec === 'adult' || sec === 'adult-reading') && !hasAge18()) {
+      requireAge18({
+        title: sec === 'adult-reading' ? 'Enter 18+ Reading Vault' : 'Enter 18+ Video Vault',
+        desc: 'This 18+ vault is completely isolated from standard Reading, Kids, and Safe Search. Confirm you are 18 or older to proceed.'
+      }, function () {
+        renderSection(sec, sub);
+      });
+      return;
+    }
     if (sec === 'moviebox') return renderSuperBox();
     heroStop();
     state.section = sec;
     if (sub) state.sub = sub;
     try { document.body.setAttribute('data-sec', sec); } catch (e) {}
     document.querySelectorAll('#nav button').forEach(function (b) { b.classList.toggle('active', b.getAttribute('data-sec') === sec); });
+    updateNavIndicator();
     var c = content();
     c.innerHTML = '';
     c.scrollTop = 0;
@@ -1246,18 +1503,24 @@
       if (window.READER) window.READER.render(c);
       return;
     }
-    if (sec === 'home') {
-      var hh = heroSkeleton();
-      c.appendChild(hh);
-      mountHomeHero(hh);
+    if (sec === 'adult-reading') {
+      if (window.READER && window.READER.renderAdult) window.READER.renderAdult(c, { source: sub || 'hentai20' });
+      return;
     }
     if (sec === 'livetv') return renderLive();
     if (sec === 'adult') return renderVault();
-    if (sec === 'anime') c.appendChild(searchStrip(sec, 'Search anime...'));
-    if (sec === 'kdrama') c.appendChild(searchStrip(sec, 'Search K-Drama...'));
-    if (sec === 'webseries') c.appendChild(searchStrip(sec, 'Search web series...'));
-    if (sec === 'tube') c.appendChild(searchStrip(sec, 'Search YouTube...'));
-    paintRows(c, rowsFor(sec));
+
+    var stage = el('div', 'view-enter');
+    if (sec === 'home') {
+      stage.appendChild(homeSearchBar());
+      var hh = heroSkeleton();
+      stage.appendChild(hh);
+      mountHomeHero(hh);
+    } else {
+      stage.appendChild(pageHeaderBar(sec));
+    }
+    c.appendChild(stage);
+    paintRows(stage, rowsFor(sec));
   }
 
   function vaultLabel(id) {
@@ -1265,26 +1528,31 @@
     return (g && g.t) || '18+';
   }
 
-  /* Per-tab search strip: queries ONLY the active tab's own sources (the
-     18+ vault strips stay scoped to the active sub-page). */
+  /* Per-tab scoped search strip: queries ONLY the active tab's own sources. */
   function searchStrip(sec, ph) {
     var wrap = el('div', 'sstrip');
+    wrap.setAttribute('data-scoped-search', sec);
     var form = document.createElement('form');
     form.className = 'sform';
     form.autocomplete = 'off';
+    form.innerHTML = '<svg class="s-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.2-3.2"></path></svg>';
     var inp = document.createElement('input');
     inp.type = 'search';
     inp.className = 'sinput';
+    inp.setAttribute('data-search-scope', sec);
     inp.autocomplete = 'off';
     inp.autocapitalize = 'off';
     inp.spellcheck = false;
     inp.placeholder = ph || 'Search this section...';
-    if (sec === 'livetv') inp.oninput = function () { state.liveFilter = inp.value; paintLiveGrid(); };
+    if (sec === 'livetv') {
+      inp.value = state.liveFilter || '';
+      inp.oninput = function () { state.liveFilter = inp.value; paintLiveGrid(); };
+    }
     form.appendChild(inp);
     var b = el('button', 'primary', 'Search');
     b.type = 'submit';
     form.appendChild(b);
-    form.onsubmit = function (e) { e.preventDefault(); runSearch(inp.value); };
+    form.onsubmit = function (e) { e.preventDefault(); runSearch(inp.value, { scope: sec }); };
     wrap.appendChild(form);
     return wrap;
   }
@@ -1390,55 +1658,47 @@
     }
   }
 
-  /* 18+ vault: one sidebar entry, sub-nav chips for every adult group. */
+  /* 18+ Video vault: isolated from 18+ Reading, with sub-nav chips & scoped search */
   function renderVault() {
     var c = content();
     var sub = state.sub || 'jav';
-    /* Entering (or re-entering) the vault resets the cross-row post memory:
-       switching categories always starts clean, then overlapping rows of
-       THIS sub-page never render the same post twice. */
     r34Seen = new Set();
+    var stage = el('div', 'view-enter');
+    stage.appendChild(pageHeaderBar('adult', 'Search in ' + vaultLabel(sub) + ' (18+)...'));
     var bar = el('div', 'subnav');
     (Z.VAULT_GROUPS || []).forEach(function (g) {
       var b = el('button', 'chip' + (g.id === sub ? ' active' : ''), g.t);
+      b.type = 'button';
       b.setAttribute('data-vsub', g.id);
       b.onclick = function (ev) { ev.preventDefault(); state.sub = g.id; renderSection('adult'); };
       bar.appendChild(b);
     });
-    c.appendChild(bar);
-    c.appendChild(searchStrip('adult', 'Search in ' + vaultLabel(sub) + '...'));
-    paintRows(c, rowsFor('adult', sub));
+    stage.appendChild(bar);
+    c.appendChild(stage);
+    paintRows(stage, rowsFor('adult', sub));
   }
 
   var liveChs = [];
   function renderLive() {
     var c = content();
+    var stage = el('div', 'view-enter');
+    stage.appendChild(pageHeaderBar('livetv'));
     var wrap = el('div', 'row');
-    wrap.appendChild(el('h3', null, 'Live TV'));
     var bar = el('div');
-    bar.style.cssText = 'display:flex;gap:10px;flex-wrap:wrap;align-items:center;padding:0 18px 12px';
+    bar.style.cssText = 'display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:14px';
     var sel = document.createElement('select');
     sel.className = 'picker';
-    sel.style.margin = '0';
+    sel.setAttribute('aria-label', 'Live TV region');
     (Z.LIVE.groups || []).forEach(function (g, i) {
       var o = document.createElement('option'); o.value = String(i); o.textContent = g.t; sel.appendChild(o);
     });
     bar.appendChild(sel);
-    var inp = document.createElement('input');
-    inp.type = 'search';
-    inp.className = 'sinput';
-    inp.autocomplete = 'off';
-    inp.autocapitalize = 'off';
-    inp.spellcheck = false;
-    inp.style.maxWidth = '280px';
-    inp.placeholder = 'Filter channels...';
-    inp.oninput = function () { state.liveFilter = inp.value; paintLiveGrid(); };
-    bar.appendChild(inp);
     wrap.appendChild(bar);
     var grid = el('div', 'livegrid');
     grid.id = 'liveGrid';
     wrap.appendChild(grid);
-    c.appendChild(wrap);
+    stage.appendChild(wrap);
+    c.appendChild(stage);
 
     function loadGroup(i) {
       grid.innerHTML = '<div class="empty">Loading channels...</div>';
@@ -1519,44 +1779,94 @@
 
     if (mt === 'tv' && (d.seasons || []).length) {
       var secd = el('div', 'section');
-      secd.appendChild(el('h3', null, 'Episodes'));
+      var epHead = el('div', 'ep-section-head');
+      var epH3 = el('h3', null, 'Episodes ');
+      epHead.appendChild(epH3);
       var sel = document.createElement('select');
-      sel.className = 'picker';
+      sel.className = 'picker ep-season-sel';
+      sel.setAttribute('aria-label', 'Season');
       (d.seasons || []).filter(function (s) { return s.season_number >= 0; }).forEach(function (s) {
         var o = document.createElement('option');
         o.value = String(s.season_number);
         o.textContent = s.name + ' (' + s.episode_count + ' episodes)';
         sel.appendChild(o);
       });
-      secd.appendChild(sel);
+      epHead.appendChild(sel);
+      secd.appendChild(epHead);
+      var rangeTabs = el('div', 'ep-range-tabs');
+      secd.appendChild(rangeTabs);
       var grid = el('div', 'epgrid');
       secd.appendChild(grid);
       box.appendChild(secd);
       var loadSeason = async function (n) {
+        rangeTabs.innerHTML = '';
         grid.innerHTML = '<div class="empty">Loading episodes...</div>';
         var sd = null;
         try { sd = await api('/tv/' + it.tmdb + '/season/' + n); } catch (e) {}
         grid.innerHTML = '';
-        if (!sd || !(sd.episodes || []).length) { grid.appendChild(el('div', 'empty', 'No episodes listed.')); return; }
-        sd.episodes.forEach(function (ep) {
-          var b = document.createElement('button');
-          b.textContent = 'E' + ep.episode_number + '  ' + (ep.name || '');
-          b.onclick = function () {
-            /* A late click after the player closed (state cleared) must not
-               throw - the episode strip may still be on screen mid-close. */
-            if (!state.current) return;
-            state.current.ref = state.current.ref || {};
-            state.current.ref.season = ep.season_number;
-            state.current.ref.episode = ep.episode_number;
-            playCurrent();
-          };
-          grid.appendChild(b);
-        });
+        var eps = (sd && sd.episodes) || [];
+        if (!eps.length) { grid.appendChild(el('div', 'empty', 'No episodes listed.')); return; }
+        var ranges = chunkEpisodeRanges(eps.length, 50);
+        var activeRange = 0;
+        var paintRange = function (rIdx) {
+          activeRange = rIdx;
+          rangeTabs.querySelectorAll('.ep-range-tab').forEach(function (tb, idx2) {
+            tb.classList.toggle('active', idx2 === activeRange);
+          });
+          grid.innerHTML = '';
+          var slice = ranges.length ? eps.slice(ranges[rIdx].fromIdx, ranges[rIdx].toIdx) : eps;
+          slice.forEach(function (ep) {
+            var b = document.createElement('button');
+            b.type = 'button';
+            b.appendChild(el('span', 'ep-num-badge', 'E' + ep.episode_number));
+            b.appendChild(el('span', 'ep-title-txt', ep.name || ('Episode ' + ep.episode_number)));
+            b.onclick = function () {
+              if (!state.current) return;
+              state.current.ref = state.current.ref || {};
+              state.current.ref.season = ep.season_number;
+              state.current.ref.episode = ep.episode_number;
+              playCurrent();
+            };
+            grid.appendChild(b);
+          });
+        };
+        if (ranges.length > 1) {
+          ranges.forEach(function (r, rIdx) {
+            var tb = el('button', 'ep-range-tab' + (rIdx === 0 ? ' active' : ''), r.label);
+            tb.type = 'button';
+            tb.onclick = function () { paintRange(rIdx); };
+            rangeTabs.appendChild(tb);
+          });
+        }
+        paintRange(0);
       };
       sel.onchange = function () { loadSeason(Number(sel.value)); };
       loadSeason(Number(sel.value || 1));
     }
+
+    /* AI Similar Results carousel on TMDB detail page */
+    var simSec = el('div', 'similar-section');
+    simSec.setAttribute('data-similar-host', 'detail');
+    simSec.innerHTML = '<div class="similar-head"><div class="similar-title-wrap"><span class="ai-spark" aria-hidden="true">\u2726</span><h3>Similar Results</h3><span class="similar-sub">AI recommendations matched by genre, mood &amp; cast</span></div><span class="similar-badge">Smart Match</span></div>';
+    var simTrack = el('div', 'similar-track');
+    simTrack.appendChild(buildSkelCards(6));
+    simSec.appendChild(simTrack);
+    box.appendChild(simSec);
     c.appendChild(box);
+
+    api('/' + mt + '/' + it.tmdb + '/recommendations').then(function (rj) {
+      if (!simTrack.isConnected) return;
+      var items = ((rj && rj.results) || []).filter(function (m) { return !m.adult; }).slice(0, 16).map(function (m, idx) {
+        var norm = normTmdb(m);
+        norm.match = Math.max(82, 98 - idx) + '% Match';
+        return norm;
+      });
+      simTrack.innerHTML = '';
+      if (!items.length) { simTrack.appendChild(el('div', 'empty', 'No similar recommendations yet.')); return; }
+      items.forEach(function (x) { simTrack.appendChild(cardNode(x)); });
+    }).catch(function () {
+      if (simTrack.isConnected) { simTrack.innerHTML = ''; simTrack.appendChild(el('div', 'empty', 'Recommendations unavailable right now.')); }
+    });
   }
 
   /* ---------------- SuperBox detail + native playback ---------------- */
@@ -1921,21 +2231,39 @@
       if (seasons.length > 1) bar.appendChild(sel);
       head.appendChild(bar);
       secEps.appendChild(head);
+      var mbRanges = el('div', 'ep-range-tabs');
+      secEps.appendChild(mbRanges);
       var grid = el('div', 'mb-epgrid');
       secEps.appendChild(grid);
       var paintEps = function (se) {
+        mbRanges.innerHTML = '';
         grid.innerHTML = '';
         var sn = seasons.filter(function (x) { return x.n === se; })[0] || seasons[0];
-        for (var i = 1; i <= sn.maxEp; i++) {
-          (function (n) {
-            var b = el('button', 'mb-ep');
-            b.type = 'button';
-            b.appendChild(el('span', 'n', String(n)));
-            b.appendChild(el('span', 'l', 'Episode ' + n));
-            b.onclick = function () { mbPlaySubject(s, se, n, title); };
-            grid.appendChild(b);
-          })(i);
+        var ranges = chunkEpisodeRanges(sn.maxEp, 50);
+        var paintRange = function (rIdx) {
+          mbRanges.querySelectorAll('.ep-range-tab').forEach(function (tb, idx2) { tb.classList.toggle('active', idx2 === rIdx); });
+          grid.innerHTML = '';
+          var r = ranges[rIdx] || { start: 1, end: sn.maxEp };
+          for (var i = r.start; i <= r.end; i++) {
+            (function (n) {
+              var b = el('button', 'mb-ep');
+              b.type = 'button';
+              b.appendChild(el('span', 'n', String(n)));
+              b.appendChild(el('span', 'l', 'Episode ' + n));
+              b.onclick = function () { mbPlaySubject(s, se, n, title); };
+              grid.appendChild(b);
+            })(i);
+          }
+        };
+        if (ranges.length > 1) {
+          ranges.forEach(function (r, rIdx) {
+            var tb = el('button', 'ep-range-tab' + (rIdx === 0 ? ' active' : ''), r.label);
+            tb.type = 'button';
+            tb.onclick = function () { paintRange(rIdx); };
+            mbRanges.appendChild(tb);
+          });
         }
+        paintRange(0);
       };
       sel.onchange = function () { paintEps(Number(sel.value)); };
       paintEps(seasons[0].n);
@@ -2031,14 +2359,87 @@
      capture it and drop their work on mismatch - a zombie timer from an
      earlier session can never re-mount into a closed or newer player. */
   var playEpoch = 0;
-  function showPlayer(title) {
+  function renderPlayerSimilarCards(items, subText) {
+    var track = $('#playerSimilarTrack');
+    var sub = $('#playerSimilarSub');
+    if (!track) return;
+    if (sub && subText) sub.textContent = subText;
+    track.innerHTML = '';
+    if (!items || !items.length) {
+      track.appendChild(el('div', 'empty', 'Similar recommendations will appear here as you browse.'));
+      return;
+    }
+    items.slice(0, 18).forEach(function (it, idx) {
+      var copy = Object.assign({}, it);
+      if (!copy.match) copy.match = Math.max(82, 98 - idx) + '% Match';
+      var card = cardNode(copy);
+      card.onclick = function () {
+        closePlayer();
+        openItem(it);
+      };
+      track.appendChild(card);
+    });
+  }
+  function loadPlayerSimilar(title, ep) {
+    var track = $('#playerSimilarTrack');
+    if (!track) return;
+    track.innerHTML = '';
+    track.appendChild(buildSkelCards(7));
+    try {
+      window.dispatchEvent(new CustomEvent('sb:player-similar-request', {
+        detail: { title: title || '', current: state.current, mb: state.mb, section: state.section }
+      }));
+    } catch (e) {}
+    var cur = state.current;
+    if (cur && cur.ref && cur.ref.tmdb) {
+      var mt = cur.ref.type === 'tv' ? 'tv' : 'movie';
+      api('/' + mt + '/' + cur.ref.tmdb + '/recommendations').then(function (rj) {
+        if (ep !== playEpoch) return;
+        var items = ((rj && rj.results) || []).filter(function (m) { return !m.adult; }).map(normTmdb);
+        if (items.length) renderPlayerSimilarCards(items, 'Matched from your current title');
+        else renderPlayerSimilarCards([], 'No direct recommendations found for this title.');
+      }).catch(function () {
+        if (ep === playEpoch) renderPlayerSimilarCards([], 'Connect to load live AI recommendations.');
+      });
+      return;
+    }
+    if (state.mb && state.mb.sub && state.mb.sub.subjectId) {
+      mbApi('rec?subjectId=' + encodeURIComponent(state.mb.sub.subjectId) + '&page=1&perPage=16').then(function (rj) {
+        if (ep !== playEpoch) return;
+        var items = ((rj && rj.data && rj.data.items) || []).map(mbNormalize).filter(Boolean);
+        renderPlayerSimilarCards(items, 'Curated SuperBox matches');
+      }).catch(function () {
+        if (ep === playEpoch) renderPlayerSimilarCards([], 'Connect to load live AI recommendations.');
+      });
+      return;
+    }
+    if (title && state.section !== 'adult') {
+      tmdbSearch(title).then(function (items) {
+        if (ep !== playEpoch) return;
+        renderPlayerSimilarCards((items || []).slice(0, 14), 'AI recommendations tailored to \u201C' + title + '\u201D');
+      }).catch(function () {
+        if (ep === playEpoch) renderPlayerSimilarCards([], 'Recommendations ready for backend hook.');
+      });
+    } else {
+      renderPlayerSimilarCards([], 'Matched to your active vault session.');
+    }
+  }
+  function showPlayer(title, opts) {
+    opts = opts || {};
     playEpoch++;
     state.mb = null;
     player().classList.remove('hidden');
+    var sc = $('#playerScroll');
+    if (sc) sc.scrollTop = 0;
     $('#pTitle').textContent = title || '';
     $('#pChip').classList.add('hidden');
     var aud = $('#pAudio');
     if (aud) { aud.classList.add('hidden'); aud.textContent = 'Audio'; }
+    var bg = $('#pBackdrop');
+    var poster = opts.poster || (state.current && state.current.poster) || '';
+    if (bg) bg.style.backgroundImage = poster ? 'url("' + String(poster).replace(/"/g, '%22') + '")' : '';
+    var ep0 = playEpoch;
+    setTimeout(function () { if (ep0 === playEpoch) loadPlayerSimilar(title, ep0); }, 120);
   }
   function stopVideo() {
     var v = $('#pVideo');
@@ -2611,7 +3012,101 @@
       ee.classList.toggle('hidden', !(s.eps && s.eps.length >= 1));
       setLbl((s.eps && s.eps.length) ? 'Episodes' : '');
     }
+    /* Mirror chunked episode pagination directly below the video stage */
+    paintPlayerEpisodeStrip();
     syncVideoUI();
+  }
+
+  function paintPlayerEpisodeStrip() {
+    var host = $('#playerEpStrip');
+    if (!host) return;
+    var s = state.series;
+    if (!s) { host.classList.add('hidden'); host.innerHTML = ''; return; }
+    var isSeasoned = (s.mode === 'tmdb' || s.mode === 'mb') && s.seasons && s.seasons.length;
+    var eps = [];
+    if (isSeasoned) {
+      var curSn = s.seasons.filter(function (x) { return x.n === s.season; })[0] || s.seasons[0];
+      eps = (curSn && curSn.eps) || [];
+    } else {
+      eps = s.eps || [];
+    }
+    if (!eps.length) { host.classList.add('hidden'); host.innerHTML = ''; return; }
+    host.classList.remove('hidden');
+    host.innerHTML = '';
+
+    var head = el('div', 'ep-section-head');
+    var h3 = el('h3');
+    h3.appendChild(document.createTextNode('Episodes '));
+    h3.appendChild(el('em', null, '(' + eps.length + ')'));
+    head.appendChild(h3);
+
+    if (isSeasoned && s.seasons.length > 1) {
+      var sel = document.createElement('select');
+      sel.className = 'ep-season-sel';
+      sel.setAttribute('aria-label', 'Select Season');
+      s.seasons.forEach(function (sn) {
+        var o = document.createElement('option');
+        o.value = String(sn.n);
+        o.textContent = 'Season ' + sn.n + ' (' + ((sn.eps && sn.eps.length) || 0) + ' eps)';
+        sel.appendChild(o);
+      });
+      sel.value = String(s.season);
+      sel.onchange = function () {
+        var nextS = Number(sel.value) || 1;
+        if (s.mode === 'mb') jumpMbEpisode(nextS, 1);
+        else jumpTmdbEpisode(nextS, 1);
+      };
+      head.appendChild(sel);
+    }
+    host.appendChild(head);
+
+    var ranges = chunkEpisodeRanges(eps.length, 50);
+    var activePos = 0;
+    if (isSeasoned) {
+      for (var k = 0; k < eps.length; k++) { if (Number(eps[k].n) === Number(s.episode)) { activePos = k; break; } }
+    } else {
+      activePos = s.idx || 0;
+    }
+    var curRangeIdx = Math.min(Math.max(0, Math.floor(activePos / 50)), Math.max(0, ranges.length - 1));
+    var tabs = el('div', 'ep-range-tabs');
+    var grid = el('div', 'epgrid');
+    host.appendChild(tabs);
+    host.appendChild(grid);
+
+    function paintChunk(rIdx) {
+      curRangeIdx = rIdx;
+      tabs.querySelectorAll('.ep-range-tab').forEach(function (tb, i2) { tb.classList.toggle('active', i2 === rIdx); });
+      grid.innerHTML = '';
+      var r = ranges[rIdx] || { fromIdx: 0, toIdx: eps.length };
+      var slice = eps.slice(r.fromIdx, r.toIdx);
+      slice.forEach(function (e2, relIdx) {
+        var absIdx = r.fromIdx + relIdx;
+        var isActive = isSeasoned ? (Number(e2.n) === Number(s.episode)) : (absIdx === (s.idx || 0));
+        var b = document.createElement('button');
+        b.type = 'button';
+        if (isActive) b.className = 'active';
+        var num = e2.n || (absIdx + 1);
+        b.appendChild(el('span', 'ep-num-badge', 'E' + num));
+        b.appendChild(el('span', 'ep-title-txt', e2.name || e2.t || ('Episode ' + num)));
+        b.onclick = function () {
+          if (s.mode === 'tmdb') jumpTmdbEpisode(s.season, Number(e2.n) || (absIdx + 1));
+          else if (s.mode === 'mb') jumpMbEpisode(s.season, Number(e2.n) || (absIdx + 1));
+          else if (s.mode === 'files') jumpFileEpisode(absIdx);
+          else jumpPageEpisode(absIdx);
+        };
+        grid.appendChild(b);
+      });
+    }
+
+    if (ranges.length > 1) {
+      ranges.forEach(function (r, rIdx) {
+        var tb = el('button', 'ep-range-tab' + (rIdx === curRangeIdx ? ' active' : ''), r.label);
+        tb.type = 'button';
+        tb.onclick = function () { paintChunk(rIdx); };
+        tabs.appendChild(tb);
+      });
+    }
+    paintChunk(curRangeIdx);
   }
 
   function clearSeries() {
@@ -3891,77 +4386,124 @@
     });
   }
 
-  /* Home = Super Search: TMDB + Anime + K-Drama + Web Series + YouTube fire
-     in parallel into labeled rows. The 18+ vault is strictly excluded. */
-  async function superSearch(q) {
+  /* Home = Unified Search: Safe mode searches strictly SFW catalogs; Deep mode
+     (behind 18+ Age-Gate) expands across all catalogs including 18+ sources. */
+  async function superSearch(q, mode) {
+    var useMode = (mode || state.searchMode || 'safe') === 'deep' && hasAge18() ? 'deep' : 'safe';
     var c = content();
     c.innerHTML = '';
-    c.appendChild(resultsHead(q, 'Movies & series, anime, K-drama, web series and YouTube sources'));
-    var res = await Promise.all([
+    var stage = el('div', 'view-enter');
+    stage.appendChild(homeSearchBar(q));
+    stage.appendChild(resultsHead(q, useMode === 'deep'
+      ? 'Deep Search \u00B7 Standard + expanded 18+ catalog results'
+      : 'Safe Search \u00B7 Movies, series, anime, K-drama, web series & YouTube'));
+    c.appendChild(stage);
+    try {
+      window.dispatchEvent(new CustomEvent('sb:search', { detail: { query: q, mode: useMode, scope: 'home' } }));
+    } catch (e) {}
+    var tasks = [
       mbSearch(q).catch(function () { return []; }),
       tmdbSearch(q).catch(function () { return []; }),
       anilistSearch(q).catch(function () { return []; }),
       SC.search(q, 'kdrama').catch(function () { return []; }),
       SC.search(q, 'webseries').catch(function () { return []; }),
       SC.ytSearch(q).catch(function () { return []; })
-    ]);
-    paintResultRows(c, [['Spotlight', res[0]], ['Movies & Series', res[1]], ['Anime', res[2]], ['K-Drama', res[3]], ['Web Series', res[4]], ['YouTube', res[5]]]);
+    ];
+    if (useMode === 'deep') {
+      tasks.push(SC.search(q, 'adult', 'jav').catch(function () { return []; }));
+    }
+    var res = await Promise.all(tasks);
+    var defs = [
+      ['Spotlight', res[0]],
+      ['Movies & Series', res[1]],
+      ['Anime', res[2]],
+      ['K-Drama', res[3]],
+      ['Web Series', res[4]],
+      ['YouTube', res[5]]
+    ];
+    if (useMode === 'deep') defs.push(['18+ Vault (Deep)', res[6] || []]);
+    paintResultRows(stage, defs);
   }
 
-  /* Per-section search: queries ONLY the active tab's own sources. */
+  /* Per-section scoped search: queries ONLY the active tab's own sources. */
   async function sectionSearch(q, sec) {
     var c = content();
     c.innerHTML = '';
+    var stage = el('div', 'view-enter');
+    stage.appendChild(pageHeaderBar(sec));
+    c.appendChild(stage);
+    try {
+      window.dispatchEvent(new CustomEvent('sb:search', { detail: { query: q, mode: sec === 'adult' ? 'adult' : 'safe', scope: sec } }));
+    } catch (e) {}
     if (sec === 'moviebox') {
-      c.appendChild(resultsHead(q, 'Searching the SuperBox catalogue'));
+      stage.appendChild(resultsHead(q, 'Searching the Spotlight catalogue'));
       var rmb = await mbSearch(q).catch(function () { return []; });
-      paintResultRows(c, [['Spotlight', rmb]]);
+      paintResultRows(stage, [['Spotlight', rmb]]);
+      return;
+    }
+    if (sec === 'movie') {
+      stage.appendChild(resultsHead(q, 'Movies only'));
+      var rm = (await tmdbSearch(q).catch(function () { return []; })).filter(function (x) { return x.mt === 'movie'; });
+      paintResultRows(stage, [['Movies', rm]]);
+      return;
+    }
+    if (sec === 'tv') {
+      stage.appendChild(resultsHead(q, 'Series only'));
+      var rt = (await tmdbSearch(q).catch(function () { return []; })).filter(function (x) { return x.mt === 'tv'; });
+      paintResultRows(stage, [['Series', rt]]);
+      return;
+    }
+    if (sec === 'kids' || sec === 'cartoons') {
+      stage.appendChild(resultsHead(q, sec === 'kids' ? 'Kid-safe family results' : 'Cartoons & animated series'));
+      var rk = await tmdbSearch(q).catch(function () { return []; });
+      paintResultRows(stage, [[sec === 'kids' ? 'Kids' : 'Cartoons', rk]]);
       return;
     }
     if (sec === 'anime') {
-      c.appendChild(resultsHead(q, 'Anime sources only'));
+      stage.appendChild(resultsHead(q, 'Anime sources only'));
       var r1 = await Promise.all([anilistSearch(q).catch(function () { return []; }), tmdbSearch(q).catch(function () { return []; })]);
-      paintResultRows(c, [['Anime (AniList)', r1[0]], ['TMDB', r1[1]]]);
+      paintResultRows(stage, [['Anime (AniList)', r1[0]], ['TMDB', r1[1]]]);
       return;
     }
     if (sec === 'kdrama') {
-      c.appendChild(resultsHead(q, 'K-Drama sources only'));
+      stage.appendChild(resultsHead(q, 'K-Drama sources only'));
       var r2 = await Promise.all([tmdbSearch(q).catch(function () { return []; }), SC.search(q, 'kdrama').catch(function () { return []; })]);
-      paintResultRows(c, [['K-Drama (TMDB)', r2[0]], ['K-Drama sources', r2[1]]]);
+      paintResultRows(stage, [['K-Drama (TMDB)', r2[0]], ['K-Drama sources', r2[1]]]);
       return;
     }
     if (sec === 'webseries') {
-      c.appendChild(resultsHead(q, 'Web Series sources only'));
+      stage.appendChild(resultsHead(q, 'Web Series sources only'));
       var r3 = await Promise.all([tmdbSearch(q).catch(function () { return []; }), SC.search(q, 'webseries').catch(function () { return []; })]);
-      paintResultRows(c, [['Web Series (TMDB)', r3[0]], ['Web Series sources', r3[1]]]);
+      paintResultRows(stage, [['Web Series (TMDB)', r3[0]], ['Web Series sources', r3[1]]]);
       return;
     }
     if (sec === 'tube') {
-      c.appendChild(resultsHead(q, 'YouTube only'));
+      stage.appendChild(resultsHead(q, 'YouTube only'));
       var ry = await SC.ytSearch(q).catch(function () { return []; });
-      paintResultRows(c, [['Tube (YouTube)', ry]]);
+      paintResultRows(stage, [['Tube (YouTube)', ry]]);
       return;
     }
     if (sec === 'adult') {
       var sub = state.sub || 'jav';
-      c.appendChild(resultsHead(q, vaultLabel(sub) + ' sources (18+)'));
+      stage.appendChild(resultsHead(q, vaultLabel(sub) + ' sources (18+)'));
       var r4 = await SC.search(q, 'adult', sub).catch(function () { return []; });
-      paintResultRows(c, [[vaultLabel(sub), r4]]);
+      paintResultRows(stage, [[vaultLabel(sub), r4]]);
       return;
     }
-    c.appendChild(resultsHead(q, ''));
+    stage.appendChild(resultsHead(q, ''));
     var r5 = await tmdbSearch(q).catch(function () { return []; });
-    paintResultRows(c, [['TMDB', r5]]);
+    paintResultRows(stage, [['Results', r5]]);
   }
 
-  async function runSearch(q) {
+  async function runSearch(q, opts) {
+    opts = opts || {};
     q = (q || '').trim();
     if (!q) return;
-    var sec = state.section;
+    var sec = opts.scope || state.section;
     if (sec === 'livetv') { state.liveFilter = q; paintLiveGrid(); return; }
     var c = content();
-    c.innerHTML = '<div class="row"><div class="empty" style="padding:0 18px">Searching for &ldquo;' + esc(q) + '&rdquo;...</div></div>';
-    if (sec === 'home') return superSearch(q);
+    c.innerHTML = '<div class="row"><div class="empty">Searching for &ldquo;' + esc(q) + '&rdquo;...</div></div>';
+    if (sec === 'home') return superSearch(q, opts.mode);
     return sectionSearch(q, sec);
   }
 
@@ -3988,17 +4530,34 @@
     };
   }
 
-  /* ---------------- boot ---------------- */
+  /* ---------------- boot & backend UI hooks ---------------- */
   function boot() {
     document.querySelectorAll('#nav button').forEach(function (b) {
       b.onclick = function () { renderSection(b.getAttribute('data-sec')); };
     });
+    var brand = $('#brandBtn');
+    if (brand) brand.onclick = function () { renderSection('home'); };
     $('#settingsBtn').onclick = openSettings;
-    $('#searchForm').onsubmit = function (e) { e.preventDefault(); runSearch($('#searchInput').value); };
+    var sf = $('#searchForm');
+    if (sf) sf.onsubmit = function (e) { e.preventDefault(); runSearch($('#searchInput').value); };
     $('#pClose').onclick = closePlayer;
+    var pSimBtn = $('#pSimilarBtn');
+    if (pSimBtn) {
+      pSimBtn.onclick = function () {
+        var sc = $('#playerScroll');
+        var below = $('#playerBelow');
+        if (!sc || !below) return;
+        if (sc.scrollTop > 120) sc.scrollTo({ top: 0, behavior: 'smooth' });
+        else below.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      };
+    }
     wireVideoControls();
+    wireAgeGate();
+    window.addEventListener('resize', updateNavIndicator);
     document.addEventListener('keydown', function (e) {
       if (e.key === 'Escape') {
+        if ($('#ageGateModal') && !$('#ageGateModal').classList.contains('hidden')) { closeAgeGate(); return; }
+        if ($('#vpnPanel') && $('#vpnPanel').classList.contains('open')) { closeVpnPanel(); return; }
         if (!$('#settingsModal').classList.contains('hidden')) { $('#settingsModal').classList.add('hidden'); return; }
         if (window.READER && window.READER.back()) return;
         if (sourceFrame) { closeSourceFrame(); renderSection(state.section && state.section !== 'sources' ? state.section : 'home'); return; }
@@ -4008,6 +4567,8 @@
     wireSettings();
     startVpnGate();
     window.sbBack = function () {
+      if ($('#ageGateModal') && !$('#ageGateModal').classList.contains('hidden')) { closeAgeGate(); return true; }
+      if ($('#vpnPanel') && $('#vpnPanel').classList.contains('open')) { closeVpnPanel(); return true; }
       if (window.READER && window.READER.back()) return true;
       if (sourceFrame) { closeSourceFrame(); renderSection(state.section && state.section !== 'sources' ? state.section : 'home'); return true; }
       if (!$('#settingsModal').classList.contains('hidden')) { $('#settingsModal').classList.add('hidden'); return true; }
@@ -4015,7 +4576,35 @@
       if (state.section !== 'home') { renderSection('home'); return true; }
       return false;
     };
+    /* Clean hooks for backend agent data wiring */
+    window.SuperBoxUI = {
+      renderSimilarResults: renderPlayerSimilarCards,
+      setSearchMode: function (mode) {
+        if (mode === 'deep' && !hasAge18()) {
+          requireAge18({ title: 'Enable Deep Search (18+)' }, function () { state.searchMode = 'deep'; if (state.section === 'home') renderSection('home'); });
+          return;
+        }
+        state.searchMode = mode === 'deep' ? 'deep' : 'safe';
+        if (state.section === 'home') renderSection('home');
+      },
+      getSearchMode: function () { return state.searchMode; },
+      openAgeGate: requireAge18,
+      openVpnDrawer: openVpnPanel,
+      closeVpnDrawer: closeVpnPanel,
+      renderSection: renderSection,
+      chunkEpisodeRanges: chunkEpisodeRanges,
+      openDemoPlayer: function (title, epCount) {
+        showPlayer(title || 'Preview');
+        if (epCount && epCount > 0) {
+          var eps = [];
+          for (var i = 1; i <= epCount; i++) eps.push({ n: i, name: 'Episode ' + i });
+          state.series = { mode: 'tmdb', tmdb: '0', title: title || 'Preview', season: 1, episode: 1, seasons: [{ n: 1, eps: eps }] };
+          paintSeriesControls();
+        }
+      }
+    };
     renderSection('home');
+    setTimeout(updateNavIndicator, 80);
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);

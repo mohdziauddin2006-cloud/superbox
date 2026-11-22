@@ -47,10 +47,15 @@ window.__SB_TOKEN__ = "__SB_TOKEN_VALUE__";
 
 <div id="app" class="app">
   <header id="topbar" class="topbar">
-    <button id="brand" class="brand" aria-label="SuperBox home">
-      <span class="brand-mark">S</span>
-      <span class="brand-word">SUPER<span>BOX</span></span>
-    </button>
+    <div class="top-left">
+      <button id="drawerBtn" class="icon-btn drawer-btn" type="button" aria-label="All sections" aria-controls="navDrawer" aria-expanded="false">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round"><path d="M4 7h16M4 12h12M4 17h16"></path></svg>
+      </button>
+      <button id="brand" class="brand" aria-label="SuperBox home">
+        <span class="brand-mark">S</span>
+        <span class="brand-word">SUPER<span>BOX</span></span>
+      </button>
+    </div>
     <div class="top-actions">
       <button id="vpnChip" class="vpn-chip" type="button" aria-haspopup="dialog" aria-label="VPN control">
         <span class="vpn-chip-dot" id="vpnChipDot"></span>
@@ -66,6 +71,7 @@ window.__SB_TOKEN__ = "__SB_TOKEN_VALUE__";
   <main id="view" class="view" aria-live="polite"></main>
 
   <nav id="tabbar" class="tabbar" aria-label="Main navigation">
+    <span id="tabIndicator" class="tab-indicator" aria-hidden="true"></span>
     <button class="tab active" data-tab="home" aria-label="Home">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.7 12 3l9 7.7"></path><path d="M5.5 9.5V21h13V9.5"></path><path d="M9.5 21v-6h5v6"></path></svg>
       <span>Home</span>
@@ -91,6 +97,58 @@ window.__SB_TOKEN__ = "__SB_TOKEN_VALUE__";
       <span>Me</span>
     </button>
   </nav>
+</div>
+
+<!-- SLIDE-OUT MOBILE CATEGORY DRAWER (SOURCES strictly removed) -->
+<div id="navDrawerBg" class="nav-drawer-bg hidden" aria-hidden="true"></div>
+<aside id="navDrawer" class="nav-drawer hidden" role="dialog" aria-modal="true" aria-label="SuperBox Sections">
+  <div class="nav-drawer-head">
+    <div class="brand">
+      <span class="brand-mark">S</span>
+      <span class="brand-word">SUPER<span>BOX</span></span>
+    </div>
+    <button id="drawerClose" class="icon-btn" type="button" aria-label="Close menu">×</button>
+  </div>
+  <div class="nav-drawer-body">
+    <div class="nav-drawer-label">Browse</div>
+    <div class="nav-drawer-list">
+      <button type="button" class="nd-item on" data-nav="home"><span>Home</span><em>Unified Safe / Deep Search</em></button>
+      <button type="button" class="nd-item" data-nav="spotlight"><span>Spotlight</span><em>Curated blockbusters</em></button>
+      <button type="button" class="nd-item" data-nav="movies"><span>Movies</span><em>Cinema &amp; box office</em></button>
+      <button type="button" class="nd-item" data-nav="series"><span>Series</span><em>TV shows &amp; seasons</em></button>
+      <button type="button" class="nd-item" data-nav="webseries"><span>Web Series</span><em>Multi-part originals</em></button>
+      <button type="button" class="nd-item" data-nav="kdrama"><span>K-Drama</span><em>Korean drama &amp; romance</em></button>
+      <button type="button" class="nd-item" data-nav="anime"><span>Anime</span><em>Subbed &amp; dubbed</em></button>
+      <button type="button" class="nd-item" data-nav="kids"><span>Kids</span><em>Strictly family safe</em></button>
+      <button type="button" class="nd-item" data-nav="cartoons"><span>Cartoons</span><em>Classic &amp; modern</em></button>
+      <button type="button" class="nd-item" data-nav="livetv"><span>Live TV</span><em>Live channels</em></button>
+      <button type="button" class="nd-item" data-nav="tube"><span>Tube</span><em>Ad-free video</em></button>
+      <button type="button" class="nd-item" data-nav="reading"><span>Reading</span><em>Kid-safe manga &amp; books</em></button>
+    </div>
+    <div class="nav-drawer-label adult-lbl">18+ Isolated Vault</div>
+    <div class="nav-drawer-list">
+      <button type="button" class="nd-item adult" data-nav="adult-video"><span>18+ Video</span><em>Age-gated video vault</em></button>
+      <button type="button" class="nd-item adult" data-nav="adult-reading"><span>18+ Reading</span><em>Hentai20 · nHentai</em></button>
+    </div>
+  </div>
+</aside>
+
+<!-- 18+ DARK-GLASS AGE-GATE MODAL -->
+<div id="ageGateModal" class="age-modal hidden" role="dialog" aria-modal="true" aria-labelledby="ageGateTitle">
+  <div class="age-card">
+    <div class="age-badge">18+</div>
+    <span class="age-kicker">ADULT CONTENT VERIFICATION</span>
+    <h3 id="ageGateTitle">Confirm you are 18 or older</h3>
+    <p id="ageGateSub">This area is isolated from standard Reading, Kids, and Safe Search. Confirmation lasts for this session only.</p>
+    <div class="age-points">
+      <div><span>Isolation</span><b>Hidden from Kids &amp; Reading</b></div>
+      <div><span>Privacy</span><b>Shield routed · Zero history</b></div>
+    </div>
+    <div class="age-actions">
+      <button id="ageGateCancel" class="btn-ghost" type="button">Go Back</button>
+      <button id="ageGateConfirm" class="btn-primary age-confirm-btn" type="button">I am 18+ — Enter</button>
+    </div>
+  </div>
 </div>
 
 <!-- SUPERBOX SHIELD GATE: unskippable until the embedded WARP tunnel
@@ -145,6 +203,7 @@ window.__SB_TOKEN__ = "__SB_TOKEN_VALUE__";
 </div>
 
 <div id="player" class="player hidden" aria-hidden="true">
+  <div id="pBackdrop" class="p-backdrop" aria-hidden="true"></div>
   <div class="player-stage">
     <video id="video" playsinline webkit-playsinline preload="metadata"></video>
     <div id="pTap" class="p-tap" aria-label="Toggle player controls"></div>
@@ -157,6 +216,7 @@ window.__SB_TOKEN__ = "__SB_TOKEN_VALUE__";
           <strong id="pTitle">SuperBox</strong>
           <span id="pSub"></span>
         </div>
+        <button id="pSimilarBtn" class="p-sim-pill" type="button" aria-label="Similar Results">✦ Similar</button>
         <button id="pMore" class="p-icon" aria-label="Player options">
           <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"></circle><circle cx="12" cy="12" r="1.8"></circle><circle cx="19" cy="12" r="1.8"></circle></svg>
         </button>
@@ -196,6 +256,19 @@ window.__SB_TOKEN__ = "__SB_TOKEN_VALUE__";
       </div>
     </div>
     <div id="pGesture" class="p-gesture"></div>
+
+    <!-- Below-player / Slide-up AI Similar Results Tray -->
+    <div id="pSimilarTray" class="p-similar-tray hidden" data-similar-host="player">
+      <div class="p-similar-head">
+        <div>
+          <span class="ai-spark">✦</span>
+          <strong>Similar Results</strong>
+          <small id="pSimilarSub">AI recommendations tailored to your stream</small>
+        </div>
+        <button id="pSimilarClose" class="icon-btn" type="button" aria-label="Close similar">×</button>
+      </div>
+      <div id="pSimilarTrack" class="row-track p-similar-track"></div>
+    </div>
   </div>
 </div>
 
