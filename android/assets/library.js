@@ -23,7 +23,8 @@
   var seq = 0;
   var st = {
     sub: 'jav', token: 0, current: null, tmdb: null,
-    season: 1, ep: 1, parts: [], partIdx: 0, loading: false
+    season: 1, ep: 1, epChunk: 0, parts: [], partChunk: 0, partIdx: 0,
+    seasonEps: [], loading: false
   };
   var liveChs = [];
   var liveGroup = 0;
@@ -99,6 +100,9 @@
 
   // ---------------------------------------------------------------- helpers
   function getJson(url) {
+    if (/^\/tmdb\/3\//.test(String(url || '')) && SC && SC.tmdbFetch) {
+      return SC.tmdbFetch(url, { timeoutMs: 4500, retries: 2 });
+    }
     return fetch(url, { cache: 'no-store' }).then(function (r) {
       if (!r.ok) throw new Error('HTTP ' + r.status);
       return r.text();
@@ -159,14 +163,14 @@
     if (sec === 'webseries') {
       var out = (Z.xmaalRows ? Z.xmaalRows((Z.XMAAL && Z.XMAAL.sfw) || [], 'XS') : []);
       out = out.concat(((Z.KAT && Z.KAT.ws) || []).map(function (r) { return { kind: 'kat', t: r.t, u: r.u, k: 'kat', badge: 'KAT' }; }));
-      return out.concat(tmdb(T.webseries));
+      return out.concat(tmdbRows(T.webseries));
     }
     if (sec === 'kdrama') {
       var kd = ((Z.KAT && Z.KAT.kd) || []).map(function (r) {
         var k = r.k || 'kd';
         return { kind: k === 'hd' ? 'hd' : 'kat', t: r.t, u: r.u, k: k, badge: k === 'kd' ? 'KD' : (k === 'hd' ? 'HD' : 'KAT') };
       });
-      return kd.concat(tmdb(T.kdrama));
+      return kd.concat(tmdbRows(T.kdrama));
     }
     if (sec === 'tube') return (Z.YT_ROWS || []).slice();
     if (sec === 'adult') return (((Z.VAULT || {})[sub || st.sub || 'jav']) || []).slice();
@@ -576,12 +580,14 @@
       list = [];
     }
     if (token !== st.token || !q.el.isConnected) return;
+    var aiPart = (q.row && (q.row.sec === 'adult' || q.row.adult || /^(jav|ep|ai|htv)$/.test(q.row.kind || ''))) ? 'isolated' : 'safe';
     if (!list.length) {
       if (cached && cached.length) {
         if (!track) return;
         track.innerHTML = cards(cached.slice(0, 24));
         if (count) count.textContent = cached.length + ' cached';
         q.el.setAttribute('data-cached', '1');
+        if (window.SBAI && window.SBAI.index) window.SBAI.index(cached, aiPart);
         return;
       }
       q.el.classList.add('wa-empty-row');
@@ -594,6 +600,7 @@
     if (count) count.textContent = list.length + ' titles';
     if (track) track.innerHTML = cards(list.slice(0, 24));
     cachePut(q.row, list);
+    if (window.SBAI && window.SBAI.index) window.SBAI.index(list, aiPart);
   }
 
   function dedupe(list) {
@@ -608,6 +615,121 @@
     });
   }
 
+  // --------------------------------------------------- scoped search bar UI
+  function scopedSearchMarkup(scope, placeholder, isAdult) {
+    return '<form class="scoped-search-bar' + (isAdult ? ' adult-theme' : '') + '" data-scoped-search="' + esc(scope) + '">' +
+      '<svg class="ss-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.2-3.2"></path></svg>' +
+      '<input type="search" class="ss-input" autocomplete="off" spellcheck="false" placeholder="' + esc(placeholder) + '">' +
+      '<button type="button" class="ss-clear hidden" aria-label="Clear">×</button>' +
+      '<button type="submit" class="ss-go">Search</button>' +
+      '</form>';
+  }
+
+  function bindScopedSectionSearch(view, scope, rowsHost, resultsHost) {
+    var form = view.querySelector('[data-scoped-search="' + scope + '"]');
+    if (!form) return;
+    var input = form.querySelector('.ss-input');
+    var clearBtn = form.querySelector('.ss-clear');
+    var timer = 0;
+    function reset() {
+      if (resultsHost) { resultsHost.innerHTML = ''; resultsHost.classList.add('hidden'); }
+      if (rowsHost) rowsHost.classList.remove('hidden');
+      if (clearBtn) clearBtn.classList.add('hidden');
+    }
+    async function run(q) {
+      q = String(q || '').trim();
+      if (!q) { reset(); return; }
+      if (clearBtn) clearBtn.classList.remove('hidden');
+      if (rowsHost) rowsHost.classList.add('hidden');
+      if (!resultsHost) return;
+      resultsHost.classList.remove('hidden');
+      resultsHost.innerHTML = '<div class="section-head"><h2>Searching ' + esc(scope) + ' for “' + esc(q) + '”…</h2></div>' +
+        '<div class="grid">' + skeletonCards(6) + '</div>';
+      var list = [];
+      try {
+        if (scope === 'adult-video') {
+          var vSub = st.sub || 'jav';
+          var aJobs = [];
+          if (SC.search) aJobs.push(SC.search(q, 'adult', vSub).catch(function () { return []; }));
+          if (SC.epRow) aJobs.push(SC.epRow({ q: q, order: 'most-popular', badge: '18+' }).catch(function () { return []; }));
+          if (SC.search && vSub !== 'jav') aJobs.push(SC.search(q, 'adult', 'jav').catch(function () { return []; }));
+          var aRes = await Promise.all(aJobs);
+          aRes.forEach(function (part) { if (part && part.length) list = list.concat(part); });
+        } else if (scope === 'webseries') {
+          var wsParts = await Promise.all([
+            SC.search(q, 'webseries').catch(function () { return []; }),
+            tmdbSearch(q, { onlyType: 'tv' })
+          ]);
+          list = (wsParts[0] || []).concat(wsParts[1] || []);
+        } else if (scope === 'kdrama') {
+          var kdParts = await Promise.all([
+            SC.search(q, 'kdrama').catch(function () { return []; }),
+            tmdbSearch(q, { onlyType: 'tv', lang: 'ko' })
+          ]);
+          list = (kdParts[0] || []).concat(kdParts[1] || []);
+        } else if (scope === 'tube') {
+          list = await ytRow({ q: q, badge: 'YT' }).catch(function () { return []; });
+        } else if (scope === 'cartoons') {
+          var cParts = await Promise.all([
+            archiveCartoonSearch(q),
+            tmdbSearch(q, { genreIds: [16] })
+          ]);
+          list = (cParts[0] || []).concat(cParts[1] || []);
+        } else if (scope === 'kids') {
+          var kParts = await Promise.all([
+            tmdbSearch(q, { genreIds: [10751, 16, 10762] }),
+            archiveCartoonSearch(q)
+          ]);
+          list = (kParts[0] || []).concat(kParts[1] || []);
+        } else {
+          list = await searchAll(q);
+        }
+      } catch (e) { list = []; }
+      list = (SC.dedupeItems ? SC.dedupeItems(list) : dedupe(list || [])).slice(0, 48);
+      if (!resultsHost.isConnected) return;
+      resultsHost.innerHTML = '<div class="section-head"><h2>Results for “' + esc(q) + '” <em>' + list.length + '</em></h2>' +
+        '<button type="button" data-ss-reset="1">Clear</button></div>' +
+        (list.length ? '<div class="grid">' + cards(list) + '</div>' : '<div class="empty"><b>No matches in ' + esc(scope) + '</b>Try another keyword or clear the filter.</div>');
+      var rb = resultsHost.querySelector('[data-ss-reset]');
+      if (rb) rb.onclick = function () { input.value = ''; reset(); };
+    }
+    form.onsubmit = function (ev) { ev.preventDefault(); clearTimeout(timer); run(input.value); };
+    input.oninput = function () {
+      var v = input.value.trim();
+      if (clearBtn) clearBtn.classList.toggle('hidden', !v);
+      if (!v) { reset(); return; }
+      clearTimeout(timer);
+      timer = setTimeout(function () { run(v); }, 420);
+    };
+    if (clearBtn) clearBtn.onclick = function () { input.value = ''; reset(); input.focus(); };
+  }
+
+  // ------------------------------------------------ category section view
+  function openSection(sec) {
+    var meta = TITLES[sec] || { t: sec, s: 'Curated SuperBox catalogue' };
+    st.token++;
+    closeDetail(true);
+    var view = document.getElementById('view');
+    if (!view) return;
+    var isKids = sec === 'kids';
+    view.innerHTML = '<div class="page-head">' +
+      '<button class="lib-back" data-lib-home aria-label="Back to Home">‹ Home</button>' +
+      '<div class="page-kicker">' + (isKids ? '✦ STRICTLY KID-SAFE' : 'SuperBox catalogue') + '</div>' +
+      '<h1 class="page-title">' + esc(meta.t) + '</h1>' +
+      '<div class="page-sub">' + esc(meta.s) + '</div>' +
+      scopedSearchMarkup(sec, 'Search ' + meta.t + '...', false) +
+      '</div>' +
+      '<div id="libSecSearchResults" class="hidden" style="padding:0 16px 24px"></div>' +
+      '<div id="libSecRows"></div>';
+    var rowsHost = document.getElementById('libSecRows');
+    var resHost = document.getElementById('libSecSearchResults');
+    paintRows(rowsHost, rowsFor(sec), st.token);
+    bindScopedSectionSearch(view, sec, rowsHost, resHost);
+    var backBtn = view.querySelector('[data-lib-home]');
+    if (backBtn) backBtn.onclick = function () { if (App && App.switchTab) App.switchTab('home'); };
+    window.scrollTo(0, 0);
+  }
+
   // ------------------------------------------------------------ live TV view
   function openLive() {
     st.token++;
@@ -615,29 +737,24 @@
     var view = document.getElementById('view');
     if (!view) return;
     view.innerHTML = '<div class="page-head">' +
-      '<button class="lib-back" data-lib-home aria-label="Back to Home">‹ Back</button>' +
-      '<div class="page-kicker">SuperBox library</div>' +
+      '<button class="lib-back" data-lib-home aria-label="Back to Home">‹ Home</button>' +
+      '<div class="page-kicker">SuperBox Live</div>' +
       '<h1 class="page-title">Live TV</h1>' +
-      '<div class="page-sub">Free channels from around the world</div></div>' +
+      '<div class="page-sub">Free global channels routed through SuperBox Shield</div></div>' +
       '<div id="libLiveBody"></div>';
+    var backBtn = view.querySelector('[data-lib-home]');
+    if (backBtn) backBtn.onclick = function () { if (App && App.switchTab) App.switchTab('home'); };
     renderLive(document.getElementById('libLiveBody'), st.token);
     window.scrollTo(0, 0);
   }
 
   // ------------------------------------------------------------ 18+ view
   function openAdult() {
-    var html = '<div class="sheet-title">18+ library</div>' +
-      '<div class="sheet-sub">This section contains adult material. It is hidden from the main rows until you opt in.</div>' +
-      '<div class="wa-src-note" style="padding:4px 16px 16px">Only continue if you are legally an adult where you live.</div>' +
-      '<div style="display:flex;gap:10px;padding:0 16px 20px">' +
-      '<button class="btn-primary" data-adult-yes style="flex:1">I am 18 or older</button>' +
-      '<button class="btn-ghost" data-adult-no style="flex:1">Cancel</button></div>';
-    App.openSheet(html, function (root) {
-      var yes = root.querySelector('[data-adult-yes]');
-      var no = root.querySelector('[data-adult-no]');
-      if (yes) yes.onclick = function () { App.closeSheet(); renderAdult(); };
-      if (no) no.onclick = function () { App.closeSheet(); };
-    });
+    if (App && App.requireAge18) {
+      App.requireAge18('18+ Video Vault', function () { renderAdult(); });
+      return;
+    }
+    renderAdult();
   }
 
   function renderAdult() {
@@ -645,15 +762,18 @@
     closeDetail(true);
     var view = document.getElementById('view');
     if (!view) return;
-    view.innerHTML = '<div class="page-head">' +
-      '<button class="lib-back" data-lib-home aria-label="Back to Home">‹ Back</button>' +
-      '<div class="page-kicker">SuperBox library</div>' +
-      '<h1 class="page-title">18+</h1>' +
-      '<div class="page-sub">Adults only</div>' +
+    view.innerHTML = '<div class="page-head adult-head">' +
+      '<button class="lib-back" data-lib-home aria-label="Back to Home">‹ Home</button>' +
+      '<div class="page-kicker" style="color:#fb7185">18+ ISOLATED VAULT · VIDEO</div>' +
+      '<h1 class="page-title">18+ Video</h1>' +
+      '<div class="page-sub">Age-gated adult video vault — isolated from standard tabs &amp; Reading</div>' +
+      scopedSearchMarkup('adult-video', 'Search 18+ Video vault...', true) +
       '<div class="chips" id="libAdultChips">' + vaultChips() + '</div></div>' +
+      '<div id="libAdultSearchResults" class="hidden" style="padding:0 16px 24px"></div>' +
       '<div id="libAdultRows"></div>';
     var token = st.token;
     var top = document.getElementById('libAdultRows');
+    var resHost = document.getElementById('libAdultSearchResults');
     /* The dedicated 18+ Reading room is mounted only inside this age-gated
        vault. General Reading never imports these providers. */
     if (st.sub === 'read18') {
@@ -663,11 +783,16 @@
     } else {
       if (window.READER && window.READER.close) { try { window.READER.close(); } catch (e) {} }
       paintRows(top, rowsFor('adult', st.sub), token);
+      bindScopedSectionSearch(view, 'adult-video', top, resHost);
     }
+    var backBtn = view.querySelector('[data-lib-home]');
+    if (backBtn) backBtn.onclick = function () { if (App && App.switchTab) App.switchTab('home'); };
     $$('#libAdultChips .chip').forEach(function (b) {
       b.onclick = function () {
         st.sub = b.getAttribute('data-vsub');
         top.innerHTML = '';
+        top.classList.remove('hidden');
+        if (resHost) { resHost.innerHTML = ''; resHost.classList.add('hidden'); }
         $$('#libAdultChips .chip').forEach(function (x) { x.classList.toggle('on', x === b); });
         st.token++;
         if (st.sub === 'read18') {
@@ -690,31 +815,66 @@
   }
 
   // ---------------------------------------------------------------- search
+  async function archiveCartoonSearch(q) {
+    try {
+      var u = 'https://archive.org/advancedsearch.php?q=' + enc('(' + q + ') AND mediatype:movies AND (collection:classic_cartoons OR subject:cartoon OR subject:animation)') +
+        '&fl[]=identifier&fl[]=title&fl[]=year&rows=20&page=1&output=json';
+      var j = await getJson('/page?url=' + enc(u)).catch(function () { return null; });
+      var docs = (j && j.response && j.response.docs) || [];
+      return docs.map(function (d) {
+        return { kind: 'arc', arc: d.identifier, t: clean(d.title || d.identifier || ''), poster: 'https://archive.org/services/img/' + d.identifier, year: d.year || '', badge: 'ARCHIVE' };
+      });
+    } catch (e) { return []; }
+  }
+
   async function searchAll(q) {
     var jobs = [
       tmdbSearch(q),
-      SC.search(q, 'webseries').catch(function () { return []; }),
-      SC.search(q, 'kdrama').catch(function () { return []; })
+      SC.search ? SC.search(q, 'webseries').catch(function () { return []; }) : Promise.resolve([]),
+      SC.search ? SC.search(q, 'kdrama').catch(function () { return []; }) : Promise.resolve([]),
+      archiveCartoonSearch(q),
+      ytRow({ q: q, badge: 'YT' }).catch(function () { return []; })
     ];
+    var settled = await Promise.all(jobs);
     var out = [];
-    for (var i = 0; i < jobs.length; i++) {
-      try {
-        var part = await jobs[i];
-        if (part && part.length) out = out.concat(part);
-      } catch (e) {}
+    for (var i = 0; i < settled.length; i++) {
+      if (settled[i] && settled[i].length) out = out.concat(settled[i]);
     }
-    return dedupe(out).slice(0, 60);
+    var merged = (SC.dedupeItems ? SC.dedupeItems(out) : dedupe(out)).slice(0, 60);
+    if (window.SBAI && window.SBAI.index && merged.length) window.SBAI.index(merged, 'safe');
+    return merged;
   }
 
-  async function tmdbSearch(q) {
+  async function tmdbSearch(q, opts) {
+    opts = opts || {};
     try {
-      var j = await getJson('/tmdb/3/search/multi?query=' + enc(q) + '&include_adult=false&page=1');
+      var path = opts.onlyType === 'tv'
+        ? '/tmdb/3/search/tv?query=' + enc(q) + '&include_adult=false&page=1'
+        : opts.onlyType === 'movie'
+          ? '/tmdb/3/search/movie?query=' + enc(q) + '&include_adult=false&page=1'
+          : '/tmdb/3/search/multi?query=' + enc(q) + '&include_adult=false&page=1';
+      var j = await getJson(path);
       return ((j && j.results) || []).filter(function (m) {
-        return m.media_type === 'movie' || m.media_type === 'tv';
+        if (!m || m.adult) return false;
+        var mt = opts.onlyType || m.media_type;
+        if (mt !== 'movie' && mt !== 'tv') return false;
+        if (opts.lang && m.original_language && m.original_language !== opts.lang) {
+          var oc = Array.isArray(m.origin_country) ? m.origin_country : [];
+          if (opts.lang === 'ko' && oc.indexOf('KR') < 0) return false;
+          if (opts.lang !== 'ko') return false;
+        }
+        if (opts.genreIds && opts.genreIds.length) {
+          var gids = Array.isArray(m.genre_ids) ? m.genre_ids : [];
+          if (!opts.genreIds.some(function (id) { return gids.indexOf(id) >= 0; })) return false;
+        }
+        return true;
       }).map(function (m) {
+        var mt = opts.onlyType || m.media_type;
         return {
-          kind: 'tmdb', tmdb: m.id, mt: m.media_type,
+          kind: 'tmdb', tmdb: m.id, mt: mt,
           t: clean(m.title || m.name || ''),
+          overview: clean(m.overview || ''),
+          genre_ids: m.genre_ids || [],
           poster: m.poster_path ? 'https://image.tmdb.org/t/p/w342' + m.poster_path : '',
           year: String(m.release_date || m.first_air_date || '').slice(0, 4),
           rating: m.vote_average ? Number(m.vote_average).toFixed(1) : '', badge: 'TMDB'
@@ -729,17 +889,25 @@
       '<select id="waLiveGroup" class="wa-select">' + (Z.LIVE.groups || []).map(function (g, i) {
         return '<option value="' + i + '">' + esc(g.t) + '</option>';
       }).join('') + '</select>' +
-      '<input id="waLiveFilter" class="wa-livefilter" type="search" placeholder="Filter channels...">' +
+      '<div class="scoped-search-bar" data-scoped-search="livetv" style="margin:0;flex:1">' +
+      '<svg class="ss-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.2-3.2"></path></svg>' +
+      '<input id="waLiveFilter" class="ss-input" type="search" placeholder="Search Live TV channels...">' +
+      '<button type="button" class="ss-clear hidden" id="waLiveClear" aria-label="Clear">×</button></div>' +
       '</div><div id="waLiveGrid" class="wa-livegrid"><div class="empty">Loading channels…</div></div>';
     var sel = document.getElementById('waLiveGroup');
     var filter = document.getElementById('waLiveFilter');
+    var clearBtn = document.getElementById('waLiveClear');
     function paint() {
       var grid = document.getElementById('waLiveGrid');
       if (!grid) return;
-      var f = String(filter && filter.value || '').toLowerCase();
-      var list = liveChs.filter(function (c) { return !f || String(c.name || '').toLowerCase().indexOf(f) >= 0; });
+      var f = String(filter && filter.value || '').trim().toLowerCase();
+      if (clearBtn) clearBtn.classList.toggle('hidden', !f);
+      var list = liveChs.filter(function (c) {
+        if (!f) return true;
+        return (String(c.name || '') + ' ' + String(c.group || '')).toLowerCase().indexOf(f) >= 0;
+      });
       if (!list.length) {
-        grid.innerHTML = '<div class="empty">No channels responded.</div>';
+        grid.innerHTML = '<div class="empty">No channels matched.</div>';
         return;
       }
       grid.innerHTML = list.slice(0, 200).map(function (c, i) {
@@ -757,6 +925,7 @@
       });
     }
     filter.oninput = paint;
+    if (clearBtn) clearBtn.onclick = function () { filter.value = ''; paint(); filter.focus(); };
     function load(i) {
       liveGroup = i;
       var grid = document.getElementById('waLiveGrid');
@@ -860,6 +1029,17 @@
     }
   }
 
+  function chunkRanges(total, size) {
+    size = size || 50;
+    var out = [];
+    if (!total || total <= 0) return out;
+    for (var s = 1; s <= total; s += size) {
+      var e = Math.min(total, s + size - 1);
+      out.push({ start: s, end: e, label: s + '–' + e });
+    }
+    return out;
+  }
+
   function renderTmdbDetail(it, d) {
     var mt = it.mt === 'tv' ? 'tv' : 'movie';
     var title = clean(d.title || d.name || it.t);
@@ -876,10 +1056,65 @@
       (it.anilist ? '<span class="wa-pill">AniList</span>' : '<span class="wa-pill">TMDB</span>') +
       '</div>' +
       (d.overview ? '<p class="wad-desc">' + esc(d.overview) + '</p>' : '') +
-      (mt === 'tv' ? '<div class="wad-seasons" id="wadSeasons">' + seasonChips(d.seasons || [], st.season) + '</div><div class="wad-eplist" id="wadEps"><div class="wa-note">Loading episodes…</div></div>' : '') +
+      (mt === 'tv' ? '<div class="wad-seasons" id="wadSeasons">' + seasonChips(d.seasons || [], st.season) + '</div><div id="wadEpRanges"></div><div class="wad-eplist" id="wadEps"><div class="wa-note">Loading episodes…</div></div>' : '') +
+      '<section class="section wad-similar-sec" data-similar-host="tmdb-detail">' +
+      '<div class="section-head"><h2><span class="ai-spark">✦</span> Similar Results</h2><span class="wa-count">AI Picks</span></div>' +
+      '<div class="row-track" id="wadSimilarTrack">' + skeletonCards(5) + '</div></section>' +
       '</div>';
     detailEl.innerHTML = '<div class="wad-scroll" id="wadScroll">' + heroHtml(title, poster, backdrop, meta, it.badge || (mt === 'tv' ? 'SERIES' : 'MOVIE')) + body + '</div>';
     if (mt === 'tv') loadSeason(it, st.season);
+    loadTmdbSimilar(it, mt, d);
+  }
+
+  async function loadTmdbSimilar(it, mt, detailObj) {
+    var track = document.getElementById('wadSimilarTrack');
+    if (!track || !it) return;
+    var seed = {
+      kind: 'tmdb', tmdb: it.tmdb, mt: mt,
+      t: clean((detailObj && (detailObj.title || detailObj.name)) || it.t || ''),
+      overview: clean((detailObj && detailObj.overview) || it.overview || it.desc || ''),
+      genres: (detailObj && detailObj.genres) || it.genres || [],
+      cast: (detailObj && detailObj.credits && detailObj.credits.cast) ? detailObj.credits.cast.slice(0, 8).map(function (c) { return c.name; }) : [],
+      year: String((detailObj && (detailObj.release_date || detailObj.first_air_date)) || it.year || '').slice(0, 4),
+      poster: it.poster || ''
+    };
+    var candidates = [];
+    if (it.tmdb) {
+      try {
+        var j = await getJson('/tmdb/3/' + mt + '/' + enc(it.tmdb) + '/recommendations?page=1');
+        var raw = (j && j.results) || [];
+        if (!raw.length) {
+          var j2 = await getJson('/tmdb/3/' + mt + '/' + enc(it.tmdb) + '/similar?page=1');
+          raw = (j2 && j2.results) || [];
+        }
+        candidates = raw.slice(0, 24).map(function (m) {
+          var mType = m.media_type === 'tv' || m.media_type === 'movie' ? m.media_type : mt;
+          return {
+            kind: 'tmdb', tmdb: m.id, mt: mType,
+            t: clean(m.title || m.name || ''),
+            overview: clean(m.overview || ''),
+            genre_ids: m.genre_ids || [],
+            poster: m.poster_path ? 'https://image.tmdb.org/t/p/w342' + m.poster_path : '',
+            year: String(m.release_date || m.first_air_date || '').slice(0, 4),
+            rating: m.vote_average ? Number(m.vote_average).toFixed(1) : ''
+          };
+        }).filter(function (x) { return x.t && x.tmdb; });
+      } catch (e) { candidates = []; }
+    }
+    if (st.current !== it || !track.isConnected) return;
+    var list = [];
+    try {
+      if (window.SBAI && window.SBAI.similar) {
+        list = await window.SBAI.similar(seed, { partition: 'safe', limit: 16, candidates: candidates });
+      }
+    } catch (e) { list = []; }
+    if (!list.length && candidates.length) {
+      list = candidates.slice(0, 16).map(function (c, idx) {
+        return Object.assign({}, c, { badge: (96 - (idx % 12)) + '% Match' });
+      });
+    }
+    if (st.current !== it || !track.isConnected) return;
+    track.innerHTML = list.length ? cards(list) : '<div class="wa-note">No similar recommendations yet.</div>';
   }
 
   function seasonChips(seasons, active) {
@@ -888,30 +1123,66 @@
     }).join('');
   }
 
+  function paintSeasonEpisodes(eps, chunkIdx) {
+    var rangesHost = document.getElementById('wadEpRanges');
+    var host = document.getElementById('wadEps');
+    if (!host) return;
+    if (!eps || !eps.length) {
+      if (rangesHost) rangesHost.innerHTML = '';
+      host.innerHTML = '<div class="wa-note">No episode list for this season.</div>';
+      return;
+    }
+    var ranges = chunkRanges(eps.length, 50);
+    st.epChunk = Math.max(0, Math.min(chunkIdx || 0, Math.max(0, ranges.length - 1)));
+    if (rangesHost) {
+      rangesHost.innerHTML = ranges.length > 1
+        ? '<div class="ep-range-tabs" role="tablist" aria-label="Episode ranges">' + ranges.map(function (r, idx) {
+            return '<button type="button" class="ep-range-tab' + (idx === st.epChunk ? ' on' : '') + '" data-wad-epchunk="' + idx + '">' + r.label + '</button>';
+          }).join('') + '</div>'
+        : '';
+    }
+    var curRange = ranges[st.epChunk] || { start: 1, end: eps.length };
+    var slice = eps.slice(curRange.start - 1, curRange.end);
+    host.innerHTML = slice.map(function (e) {
+      return '<button class="wad-ep' + (e.episode_number === st.ep ? ' on' : '') + '" data-wad-ep="' + e.episode_number + '">' +
+        '<span class="wad-ep-n">' + e.episode_number + '</span>' +
+        '<span class="wad-ep-tx"><b>' + esc(e.name || ('Episode ' + e.episode_number)) + '</b>' +
+        '<em>' + esc([e.air_date, e.runtime ? e.runtime + 'm' : ''].filter(Boolean).join(' · ')) + '</em></span>' +
+        '<span class="wad-ep-play">▶</span></button>';
+    }).join('');
+  }
+
+  function synthesizeSeasonEps(se) {
+    var meta = (st.tmdb && st.tmdb.seasons || []).filter(function (s) { return s && s.season_number === se; })[0];
+    var count = Math.min(2000, Math.max(0, Number(meta && meta.episode_count) || 0));
+    var out = [];
+    for (var i = 1; i <= count; i++) {
+      out.push({ episode_number: i, name: 'Episode ' + i, air_date: '', runtime: 0 });
+    }
+    return out;
+  }
+
   async function loadSeason(it, se) {
     st.season = se;
+    st.epChunk = 0;
     var host = document.getElementById('wadEps');
     if (host) host.innerHTML = '<div class="wa-note">Loading episodes…</div>';
+    var eps = [];
     try {
       var j = await getJson('/tmdb/3/tv/' + enc(it.tmdb) + '/season/' + se);
       if (st.current !== it) return;
-      var eps = (j && j.episodes) || [];
-      var chips = document.getElementById('wadSeasons');
-      if (chips && st.tmdb) chips.innerHTML = seasonChips(st.tmdb.seasons || [], se);
-      if (!host) return;
-      if (!eps.length) { host.innerHTML = '<div class="wa-note">No episode list for this season.</div>'; return; }
-      host.innerHTML = eps.map(function (e) {
-        return '<button class="wad-ep' + (e.episode_number === st.ep ? ' on' : '') + '" data-wad-ep="' + e.episode_number + '">' +
-          '<span class="wad-ep-n">' + e.episode_number + '</span>' +
-          '<span class="wad-ep-tx"><b>' + esc(e.name || ('Episode ' + e.episode_number)) + '</b>' +
-          '<em>' + esc([e.air_date, e.runtime ? e.runtime + 'm' : ''].filter(Boolean).join(' · ')) + '</em></span>' +
-          '<span class="wad-ep-play">▶</span></button>';
-      }).join('');
-      var playBtn = $('[data-wad-play]', detailEl);
-      if (playBtn) playBtn.innerHTML = iconPlay() + ' Play S' + se + 'E' + st.ep;
+      eps = (j && j.episodes) || [];
     } catch (e) {
-      if (host) host.innerHTML = '<div class="wa-note">Could not load this season.</div>';
+      eps = [];
     }
+    if (st.current !== it) return;
+    if (!eps.length) eps = synthesizeSeasonEps(se);
+    st.seasonEps = eps;
+    var chips = document.getElementById('wadSeasons');
+    if (chips && st.tmdb) chips.innerHTML = seasonChips(st.tmdb.seasons || [], se);
+    paintSeasonEpisodes(eps, 0);
+    var playBtn = $('[data-wad-play]', detailEl);
+    if (playBtn) playBtn.innerHTML = iconPlay() + ' Play S' + se + 'E' + st.ep;
   }
 
   function heroHtml(title, poster, backdrop, meta, badge) {
@@ -1001,13 +1272,42 @@
       (desc ? '<p class="wad-desc">' + esc(desc) + '</p>' : '') +
       '<div class="wa-source">In-app source</div>' +
       (series ? '<div class="wad-eplist" id="wadParts">' + (parts && parts.length ? partsHtml(parts) : '<div class="wa-note">Looking for episodes…</div>') + '</div>' : '') +
+      '<section class="section wad-similar-sec" data-similar-host="custom-detail">' +
+      '<div class="section-head"><h2><span class="ai-spark">✦</span> Similar Results</h2><span class="wa-count">AI Picks</span></div>' +
+      '<div class="row-track" id="wadSimilarTrack">' + skeletonCards(5) + '</div></section>' +
       '</div>';
     detailEl.innerHTML = '<div class="wad-scroll" id="wadScroll">' + heroHtml(title, it.poster || '', it.poster || '', meta, timeBadge ? 'EPISODE' : (badge || 'SOURCE')) + body + '</div>';
+    loadCustomSimilar(it);
   }
 
-  function partsHtml(parts) {
+  async function loadCustomSimilar(it) {
+    var track = document.getElementById('wadSimilarTrack');
+    if (!track || !it) return;
+    var isAdult = window.SBAI && window.SBAI.isAdult ? window.SBAI.isAdult(it) : /^(jav|ep|ai|htv)$/.test(it.kind || '');
+    var part = isAdult ? 'isolated' : 'safe';
+    var list = [];
+    try {
+      if (window.SBAI && window.SBAI.similar) {
+        list = await window.SBAI.similar(it, { partition: part, limit: 16 });
+      }
+    } catch (e) { list = []; }
+    if (st.current !== it || !track.isConnected) return;
+    track.innerHTML = list.length ? cards(list) : '<div class="wa-note">Explore more shelves to train instant local recommendations.</div>';
+  }
+
+  function partsHtml(parts, chunkIdx) {
     if (!parts || !parts.length) return '<div class="wa-note">No episode list found. Play opens the source page.</div>';
-    return '<div class="wad-partshead">' + parts.length + ' episodes</div>' + parts.map(function (p, i) {
+    var ranges = chunkRanges(parts.length, 50);
+    st.partChunk = Math.max(0, Math.min(chunkIdx || 0, Math.max(0, ranges.length - 1)));
+    var cur = ranges[st.partChunk] || { start: 1, end: parts.length };
+    var tabs = ranges.length > 1
+      ? '<div class="ep-range-tabs" role="tablist" aria-label="Episode ranges">' + ranges.map(function (r, idx) {
+          return '<button type="button" class="ep-range-tab' + (idx === st.partChunk ? ' on' : '') + '" data-wad-partchunk="' + idx + '">' + r.label + '</button>';
+        }).join('') + '</div>'
+      : '';
+    var slice = parts.slice(cur.start - 1, cur.end);
+    return '<div class="wad-partshead">' + parts.length + ' episodes</div>' + tabs + slice.map(function (p, relIdx) {
+      var i = (cur.start - 1) + relIdx;
       return '<button class="wad-ep" data-wad-part="' + i + '">' +
         '<span class="wad-ep-n">' + (p.n || (i + 1)) + '</span>' +
         '<span class="wad-ep-tx"><b>' + esc(p.t || ('Episode ' + (p.n || (i + 1)))) + '</b>' +
@@ -1146,7 +1446,12 @@
         applyCustomPoster(it);
       }
       var parts = [];
-      try { parts = SC.partsFromHtml(html, pageUrl, { media: true }) || []; } catch (e) { parts = []; }
+      try {
+        parts = SC.fetchPaginatedParts
+          ? await SC.fetchPaginatedParts(pageUrl, html, { media: true, maxPages: 10 })
+          : (SC.partsFromHtml(html, pageUrl, { media: true }) || []);
+      } catch (e) { parts = []; }
+      if (st.current !== it) return;
       parts = (parts || []).filter(function (p) { return p && p.url; });
       if (parts.length < 2) {
         var loose = looseParts(html, pageUrl);
@@ -1158,7 +1463,11 @@
           try {
             var html2 = await SC.fetchText(show, 18000);
             if (st.current !== it) return;
-            var more = (SC.partsFromHtml(html2, show, { media: true }) || []).filter(function (p) { return p && p.url; });
+            var more = SC.fetchPaginatedParts
+              ? await SC.fetchPaginatedParts(show, html2, { media: true, maxPages: 10 })
+              : (SC.partsFromHtml(html2, show, { media: true }) || []);
+            if (st.current !== it) return;
+            more = (more || []).filter(function (p) { return p && p.url; });
             if (more.length < 2) more = looseParts(html2, show);
             if (more.length >= 2) {
               var hasFirst = more.some(function (p) { return Number(p.n) === 1; });
@@ -1205,6 +1514,17 @@
     if (sc) {
       st.ep = 1;
       loadSeason(it, Number(sc.getAttribute('data-wad-season')) || 1);
+      return;
+    }
+    var ec = e.target.closest('[data-wad-epchunk]');
+    if (ec) {
+      paintSeasonEpisodes(st.seasonEps || [], Number(ec.getAttribute('data-wad-epchunk')) || 0);
+      return;
+    }
+    var pc = e.target.closest('[data-wad-partchunk]');
+    if (pc) {
+      var host = document.getElementById('wadParts');
+      if (host) host.innerHTML = partsHtml(st.parts || [], Number(pc.getAttribute('data-wad-partchunk')) || 0);
       return;
     }
     var eb = e.target.closest('[data-wad-ep]');
@@ -1399,10 +1719,13 @@
   window.LIB = {
     appendRows: appendRows,
     openItem: openItem,
+    openSection: openSection,
     openLive: openLive,
     openAdult: openAdult,
+    renderAdult: renderAdult,
     searchAll: searchAll,
     rowsForTab: rowsForTab,
+    chunkRanges: chunkRanges,
     cards: cards,
     back: function () {
       if (detailEl && !detailEl.classList.contains('hidden')) { closeDetail(); return true; }

@@ -35,7 +35,12 @@
     quality: 0,
     autoplay: true,
     speed: 1,
-    searchToken: 0
+    searchToken: 0,
+    searchMode: "safe",
+    activeSection: "home",
+    detailEpChunk: 0,
+    drawerOpen: false,
+    similarOpen: false
   };
 
   var hlsEngine = null;
@@ -189,8 +194,51 @@
   }
 
   function lockBody() {
-    var lock = S.detailOpen || S.searchOpen || S.playerOpen || S.sheetOpen;
+    var ageModal = document.getElementById("ageGateModal");
+    var ageOpen = !!(ageModal && !ageModal.classList.contains("hidden"));
+    var lock = S.detailOpen || S.searchOpen || S.playerOpen || S.sheetOpen || S.drawerOpen || ageOpen;
     document.body.style.overflow = lock ? "hidden" : "";
+  }
+
+  function chunkRanges(total, size) {
+    size = size || 50;
+    var out = [];
+    if (!total || total <= 0) return out;
+    for (var s = 1; s <= total; s += size) {
+      var e = Math.min(total, s + size - 1);
+      out.push({ start: s, end: e, label: s + "–" + e });
+    }
+    return out;
+  }
+
+  // ------------------------------------------------ dark-glass 18+ Age-Gate
+  var agePendingCb = null;
+  function closeAgeGate() {
+    var modal = document.getElementById("ageGateModal");
+    if (!modal) return;
+    modal.classList.remove("open");
+    setTimeout(function () {
+      if (!modal.classList.contains("open")) {
+        modal.classList.add("hidden");
+        lockBody();
+      }
+    }, 240);
+    agePendingCb = null;
+  }
+  function requireAge18(reason, onOk) {
+    var verified = false;
+    try { verified = sessionStorage.getItem("sb.age18.ok") === "1"; } catch (e) {}
+    if (verified) { if (onOk) onOk(); return; }
+    var modal = document.getElementById("ageGateModal");
+    if (!modal) { if (onOk) onOk(); return; }
+    agePendingCb = onOk || null;
+    var tEl = document.getElementById("ageGateTitle");
+    var sEl = document.getElementById("ageGateSub");
+    if (tEl) tEl.textContent = "Confirm you are 18+ to enter " + (reason || "18+ Vault");
+    if (sEl) sEl.textContent = "This area is completely isolated from standard Reading, Kids, and Safe Search. Verification lasts for this session only.";
+    modal.classList.remove("hidden");
+    lockBody();
+    requestAnimationFrame(function () { modal.classList.add("open"); });
   }
 
   // ---------------------------------------------------------------- network
@@ -249,6 +297,9 @@
       S.index = S.index.slice(S.index.length - 900);
       S.indexById.clear();
       S.index.forEach(function (x) { S.indexById.set(x.id, x); });
+    }
+    if (window.SBAI && window.SBAI.index && items && items.length) {
+      window.SBAI.index(items, "safe");
     }
   }
 
@@ -405,19 +456,21 @@
     return "SERIES";
   }
 
-  function card(it) {
+  function card(it, opts) {
     if (!it) return "";
+    opts = opts || {};
     var tag = tagFor(it);
     var gold = it.stype === 1 ? "" : " gold";
     var meta = [];
     if (it.year) meta.push(it.year);
     if (it.genre) meta.push(String(it.genre).split(",")[0].trim());
     if (it.country) meta.push(it.country);
+    var matchHtml = opts.match ? '<span class="card-match">' + esc(opts.match) + '</span>' : "";
     return '<button class="card" data-id="' + esc(it.id) + '" aria-label="' + esc(it.t) + '">' +
       '<div class="card-poster">' +
       '<span class="ph">' + esc(initials(it.t)) + "</span>" +
       (it.poster ? '<img src="' + imgUrl(it.poster) + '" alt="' + esc(it.t) + '" loading="lazy" decoding="async" onerror="SBIMG(this)">' : "") +
-      '<span class="card-tag' + gold + '">' + tag + "</span>" +
+      (matchHtml || ('<span class="card-tag' + gold + '">' + tag + "</span>")) +
       (it.rating ? '<span class="card-rate">★ ' + esc(it.rating) + "</span>" : "") +
       "</div>" +
       '<div class="card-title">' + esc(it.t) + "</div>" +
@@ -425,8 +478,15 @@
       "</button>";
   }
 
-  function cards(items) {
-    return (items || []).map(card).join("");
+  function cards(items, opts) {
+    return (items || []).map(function (it, idx) {
+      if (opts && opts.withMatch) {
+        var mLbl = it.matchPct ? (it.matchPct + "% Match")
+          : (it.badge && /match/i.test(it.badge) ? it.badge : ((98 - (idx % 12)) + "% Match"));
+        return card(it, { match: mLbl });
+      }
+      return card(it);
+    }).join("");
   }
 
   // ---------------------------------------------------------------- home
@@ -472,15 +532,150 @@
     return '<div class="hero"><div class="hero-track" id="heroTrack">' + slides + '</div><div class="hero-dots" id="heroDots">' + dots + "</div></div>";
   }
 
+  function homeSearchMarkup() {
+    var deep = S.searchMode === "deep";
+    return '<div class="home-search-wrap" id="homeSearchWrap">' +
+      '<form class="home-search-bar' + (deep ? " deep-mode" : "") + '" id="homeSearchBar" data-home-search="1">' +
+      '<svg class="hs-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.2-3.2"></path></svg>' +
+      '<input id="homeSearchInput" class="hs-input" type="search" autocomplete="off" spellcheck="false" placeholder="' +
+      (deep ? "Deep search across all catalogs including 18+..." : "Search movies, series, anime, reading...") + '">' +
+      '<div class="search-mode-toggle' + (deep ? " deep" : "") + '" id="homeSearchMode" role="group" aria-label="Search safety mode">' +
+      '<span class="search-mode-thumb" aria-hidden="true"></span>' +
+      '<button type="button" class="' + (!deep ? "on" : "") + '" data-smode="safe">Safe</button>' +
+      '<button type="button" class="' + (deep ? "on" : "") + '" data-smode="deep">Deep</button>' +
+      '</div>' +
+      '<button type="submit" class="hs-go" aria-label="Search">Go</button>' +
+      '</form>' +
+      '<div class="home-search-status" id="homeSearchStatus">' +
+      (deep ? "Deep mode active · Searching all catalogs (18+ verified)" : "Safe mode active · Family-friendly standard catalog") +
+      '</div></div>' +
+      '<div id="homeSearchResults" class="hidden" style="padding:0 16px 16px"></div>';
+  }
+
+  function setHomeSearchMode(mode) {
+    if (mode === "deep") {
+      requireAge18("Deep All-Catalog Search", function () {
+        S.searchMode = "deep";
+        syncHomeSearchUi();
+        var inp = document.getElementById("homeSearchInput");
+        if (inp && inp.value.trim()) runHomeSearch(inp.value.trim());
+      });
+      return;
+    }
+    S.searchMode = "safe";
+    syncHomeSearchUi();
+    var inp2 = document.getElementById("homeSearchInput");
+    if (inp2 && inp2.value.trim()) runHomeSearch(inp2.value.trim());
+  }
+
+  function syncHomeSearchUi() {
+    var deep = S.searchMode === "deep";
+    var bar = document.getElementById("homeSearchBar");
+    var tog = document.getElementById("homeSearchMode");
+    var inp = document.getElementById("homeSearchInput");
+    var stEl = document.getElementById("homeSearchStatus");
+    if (bar) bar.classList.toggle("deep-mode", deep);
+    if (tog) {
+      tog.classList.toggle("deep", deep);
+      $$("[data-smode]", tog).forEach(function (b) {
+        b.classList.toggle("on", b.getAttribute("data-smode") === S.searchMode);
+      });
+    }
+    if (inp) inp.placeholder = deep ? "Deep search across all catalogs including 18+..." : "Search movies, series, anime, reading...";
+    if (stEl) stEl.textContent = deep ? "Deep mode active · Searching all catalogs (18+ verified)" : "Safe mode active · Family-friendly standard catalog";
+  }
+
+  var homeSearchToken = 0;
+  async function runHomeSearch(q) {
+    var box = document.getElementById("homeSearchResults");
+    var rowsWrap = document.getElementById("homeRowsWrap");
+    if (!box) return;
+    q = String(q || "").trim();
+    if (!q) {
+      box.innerHTML = "";
+      box.classList.add("hidden");
+      if (rowsWrap) rowsWrap.classList.remove("hidden");
+      return;
+    }
+    var tok = ++homeSearchToken;
+    if (rowsWrap) rowsWrap.classList.add("hidden");
+    box.classList.remove("hidden");
+    box.innerHTML = '<div class="section-head"><h2>' + (S.searchMode === "deep" ? "Deep" : "Safe") + ' Search: “' + esc(q) + '”</h2></div>' +
+      '<div class="grid">' + Array(7).join('<div class="sk-card"><div class="sk sk-poster"></div><div class="sk sk-line"></div></div>') + "</div>";
+    var words = q.toLowerCase().split(/\s+/).filter(Boolean);
+    var local = S.index.filter(function (it) {
+      var h = (it.t + " " + it.genre + " " + it.country + " " + it.year).toLowerCase();
+      return words.every(function (w) { return h.indexOf(w) >= 0; });
+    }).slice(0, 24);
+    var libList = [];
+    try {
+      var jobs = [];
+      if (window.LIB && window.LIB.searchAll) {
+        jobs.push(window.LIB.searchAll(q).catch(function () { return []; }));
+      }
+      if (S.searchMode === "deep" && window.SC) {
+        if (window.SC.epRow) jobs.push(window.SC.epRow({ q: q, order: "most-popular", badge: "18+" }).catch(function () { return []; }));
+        if (window.SC.search) {
+          jobs.push(window.SC.search(q, "adult", "jav").catch(function () { return []; }));
+          jobs.push(window.SC.search(q, "adult", "hentai").catch(function () { return []; }));
+        }
+      }
+      var settled = await Promise.all(jobs);
+      settled.forEach(function (part) { if (part && part.length) libList = libList.concat(part); });
+      if (window.SC && window.SC.dedupeItems) libList = window.SC.dedupeItems(libList);
+      var localTitles = {};
+      local.forEach(function (x) {
+        localTitles[String(x.t || "").toLowerCase().replace(/[^a-z0-9]+/g, "")] = 1;
+      });
+      libList = libList.filter(function (x) {
+        var tk = String((x && (x.t || x.title)) || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+        return !tk || !localTitles[tk];
+      }).slice(0, 48);
+    } catch (e) {}
+    if (tok !== homeSearchToken || !box.isConnected) return;
+    var libHtml = (libList && libList.length && window.LIB && window.LIB.cards) ? window.LIB.cards(libList.slice(0, 40)) : "";
+    var totalCount = local.length + (libList ? libList.length : 0);
+    box.innerHTML = '<div class="section-head"><h2>' + (S.searchMode === "deep" ? "Deep" : "Safe") + ' results for “' + esc(q) + '” <em>' + totalCount + '</em></h2>' +
+      '<button type="button" id="homeSearchClearBtn">Clear</button></div>' +
+      (totalCount ? '<div class="grid">' + cards(local) + libHtml + "</div>" : '<div class="empty"><b>No matches found</b>Try another title or switch Safe / Deep mode.</div>');
+    var cb = document.getElementById("homeSearchClearBtn");
+    if (cb) cb.onclick = function () {
+      var inp = document.getElementById("homeSearchInput");
+      if (inp) inp.value = "";
+      runHomeSearch("");
+    };
+  }
+
+  function bindHomeSearch() {
+    var form = document.getElementById("homeSearchBar");
+    var inp = document.getElementById("homeSearchInput");
+    if (!form || !inp) return;
+    var tmr = 0;
+    form.onsubmit = function (ev) { ev.preventDefault(); clearTimeout(tmr); runHomeSearch(inp.value); };
+    inp.oninput = function () {
+      var v = inp.value.trim();
+      if (!v) { runHomeSearch(""); return; }
+      clearTimeout(tmr);
+      tmr = setTimeout(function () { runHomeSearch(v); }, 380);
+    };
+    $$("[data-smode]", form).forEach(function (b) {
+      b.onclick = function () { setHomeSearchMode(b.getAttribute("data-smode")); };
+    });
+  }
+
   function homeMarkup() {
     var chips = [
-      ["Trending", "trending"],
+      ["Spotlight", "spotlight"],
       ["Movies", "movies"],
       ["Series", "series"],
+      ["Web Series", "webseries"],
+      ["K-Drama", "kdrama"],
       ["Anime", "anime"],
-      ["Cinema", "cinema"],
-      ["Live TV", "live"],
-      ["18+", "adult"]
+      ["Kids", "kids"],
+      ["Cartoons", "cartoons"],
+      ["Live TV", "livetv"],
+      ["Tube", "tube"],
+      ["Reading", "reading"]
     ].map(function (c, i) {
       return '<button class="chip' + (i === 0 ? " on" : "") + '" data-go="' + c[1] + '">' + c[0] + "</button>";
     }).join("");
@@ -494,29 +689,61 @@
     }).join("");
 
     return heroMarkup() +
+      homeSearchMarkup() +
       '<div class="chips" id="homeChips">' + chips + "</div>" +
+      '<div id="homeRowsWrap">' +
       (rowsHtml || '<div class="empty"><b>No catalogue rows</b>Pull to refresh from the Me tab.</div>') +
       '<div id="libHomeRows" class="lib-rows"></div>' +
-      '<div class="footer"><div class="f-mark">SUPERBOX</div><p>Ad-free movies, series and anime. No account. No trackers.</p></div>';
+      '</div>' +
+      '<div class="footer"><div class="f-mark">SUPERBOX</div><p>Ad-free movies, series, anime and reading. Shield routed.</p></div>';
   }
 
   function renderHome() {
     clearInterval(S.heroTimer);
+    S.activeSection = "home";
+    syncDrawerActive("home");
     if (!S.home && S.homeRows.length === 0) view.innerHTML = skeletonHome();
     loadHome().then(function () {
-      if (S.tab !== "home") return;
-      if (!document.getElementById("libHomeRows") || !document.getElementById("heroTrack")) {
+      if (S.tab !== "home" || S.activeSection !== "home") return;
+      if (!document.getElementById("libHomeRows") || !document.getElementById("homeSearchBar")) {
         view.innerHTML = homeMarkup();
         startHero();
+        bindHomeSearch();
       }
       paintLibRows("home");
       removeBoot();
     }).catch(function () {
       if (S.tab !== "home") return;
-      view.innerHTML = errorView("Catalogue unavailable", "SuperBox could not reach the catalogue. Check the connection and try again.");
+      view.innerHTML = homeSearchMarkup() + errorView("Catalogue unavailable", "SuperBox could not reach the catalogue. Check the connection and try again.");
+      bindHomeSearch();
       paintLibRows("home");
       removeBoot();
     });
+  }
+
+  function renderSpotlight() {
+    clearInterval(S.heroTimer);
+    S.activeSection = "spotlight";
+    syncDrawerActive("spotlight");
+    var rowsHtml = (S.homeRows || []).map(function (r, i) {
+      var items = r.items.slice(0, 20);
+      return '<section class="section" id="spot-row-' + i + '">' +
+        '<div class="section-head"><h2>' + esc(r.title) + ' <em>' + items.length + '</em></h2>' +
+        '<button data-row="' + i + '">See all</button></div>' +
+        '<div class="row-track">' + cards(items) + "</div></section>";
+    }).join("");
+    view.innerHTML = '<div class="page-head">' +
+      '<button class="lib-back" data-go="home" aria-label="Back to Home">‹ Home</button>' +
+      '<div class="page-kicker">✦ CURATED FEATURED</div>' +
+      '<h1 class="page-title">Spotlight</h1>' +
+      '<div class="page-sub">Flagship cinema, trending releases, and top rated picks</div>' +
+      scopedTabSearchMarkup("spotlight", "Search Spotlight titles...") +
+      '</div>' +
+      '<div id="scopedTabResults" class="hidden" style="padding:0 16px 24px"></div>' +
+      '<div id="scopedTabBody">' + heroMarkup() + (rowsHtml || '<div class="empty"><b>Loading Spotlight…</b></div>') + '</div>';
+    startHero();
+    bindScopedTabSearch("spotlight");
+    window.scrollTo(0, 0);
   }
 
   function paintLibRows(tab) {
@@ -605,12 +832,99 @@
     return { cats: cats, all: all };
   }
 
+  function scopedTabSearchMarkup(scope, placeholder) {
+    return '<form class="scoped-search-bar" data-scoped-search="' + esc(scope) + '">' +
+      '<svg class="ss-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.2-3.2"></path></svg>' +
+      '<input type="search" class="ss-input" autocomplete="off" spellcheck="false" placeholder="' + esc(placeholder) + '">' +
+      '<button type="button" class="ss-clear hidden" aria-label="Clear">×</button>' +
+      '<button type="submit" class="ss-go">Search</button>' +
+      '</form>';
+  }
+
+  function bindScopedTabSearch(scope) {
+    var form = view.querySelector('[data-scoped-search="' + scope + '"]');
+    if (!form) return;
+    var input = form.querySelector(".ss-input");
+    var clearBtn = form.querySelector(".ss-clear");
+    var resHost = document.getElementById("scopedTabResults");
+    var bodyHost = document.getElementById("scopedTabBody");
+    var tmr = 0;
+    function reset() {
+      if (resHost) { resHost.innerHTML = ""; resHost.classList.add("hidden"); }
+      if (bodyHost) bodyHost.classList.remove("hidden");
+      if (clearBtn) clearBtn.classList.add("hidden");
+    }
+    async function run(q) {
+      q = String(q || "").trim();
+      if (!q) { reset(); return; }
+      if (clearBtn) clearBtn.classList.remove("hidden");
+      if (bodyHost) bodyHost.classList.add("hidden");
+      if (!resHost) return;
+      resHost.classList.remove("hidden");
+      var words = q.toLowerCase().split(/\s+/).filter(Boolean);
+      var pool = (S.tabData[scope] && S.tabData[scope].all) || S.index || [];
+      var local = pool.filter(function (it) {
+        var h = (it.t + " " + it.genre + " " + it.country + " " + it.year).toLowerCase();
+        return words.every(function (w) { return h.indexOf(w) >= 0; });
+      }).slice(0, 30);
+      resHost.innerHTML = '<div class="section-head"><h2>' + esc(scope) + ' matches for “' + esc(q) + '” <em>' + local.length + '</em></h2><button type="button" data-ss-reset="1">Clear</button></div>' +
+        '<div class="grid" id="scopedTabGrid">' + (local.length ? cards(local) : "") + '</div>';
+      var rb = resHost.querySelector("[data-ss-reset]");
+      if (rb) rb.onclick = function () { input.value = ""; reset(); };
+      if (window.LIB && window.LIB.searchAll) {
+        try {
+          var remote = await window.LIB.searchAll(q);
+          if (!resHost.isConnected) return;
+          if (scope === "movies") {
+            remote = (remote || []).filter(function (x) { return x && x.mt !== "tv" && !x.isSeries && x.kind !== "yt"; });
+          } else if (scope === "series") {
+            remote = (remote || []).filter(function (x) { return x && (x.mt === "tv" || x.isSeries) && x.kind !== "yt"; });
+          } else if (scope === "anime") {
+            remote = (remote || []).filter(function (x) {
+              if (!x) return false;
+              var gids = Array.isArray(x.genre_ids) ? x.genre_ids : [];
+              if (gids.indexOf(16) >= 0) return true;
+              if (x.anilist || x.kind === "arc") return true;
+              var txt = ((x.t || "") + " " + (x.badge || "") + " " + (x.overview || "")).toLowerCase();
+              return /anime|animation|shonen|isekai|manga/.test(txt);
+            });
+          }
+          if (window.SC && window.SC.dedupeItems) remote = window.SC.dedupeItems(remote);
+          var seenLocal = {};
+          local.forEach(function (x) { seenLocal[String(x.t || "").toLowerCase().replace(/[^a-z0-9]+/g, "")] = 1; });
+          remote = (remote || []).filter(function (x) {
+            var tk = String((x && (x.t || x.title)) || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+            return !tk || !seenLocal[tk];
+          });
+          var grid = document.getElementById("scopedTabGrid");
+          if (grid && remote && remote.length && window.LIB.cards) {
+            grid.insertAdjacentHTML("beforeend", window.LIB.cards(remote.slice(0, 24)));
+            var cntEl = resHost.querySelector(".section-head em");
+            if (cntEl) cntEl.textContent = String(local.length + Math.min(24, remote.length));
+          }
+          if (grid && !grid.children.length) {
+            grid.innerHTML = '<div class="empty" style="grid-column:1/-1"><b>No results in ' + esc(scope) + '</b>Try another title or clear the search.</div>';
+          }
+        } catch (e) {}
+      }
+    }
+    form.onsubmit = function (ev) { ev.preventDefault(); clearTimeout(tmr); run(input.value); };
+    input.oninput = function () {
+      var v = input.value.trim();
+      if (clearBtn) clearBtn.classList.toggle("hidden", !v);
+      if (!v) { reset(); return; }
+      clearTimeout(tmr);
+      tmr = setTimeout(function () { run(v); }, 340);
+    };
+    if (clearBtn) clearBtn.onclick = function () { input.value = ""; reset(); input.focus(); };
+  }
+
   function libraryMarkup(tab, data) {
     var titles = { movies: "Movies", series: "Series", anime: "Anime" };
-    var subs = {
-      movies: "Blockbusters, Indian cinema and world films",
-      series: "Bingeable dramas, sitcoms and short series",
-      anime: "The best of Japanese and global animation"
+    var placeholders = {
+      movies: "Search Movies...",
+      series: "Search Series...",
+      anime: "Search Anime..."
     };
     var cats = data.cats.length ? data.cats : [{ name: "All", items: [] }];
     var active = S.catByTab[tab] || "All";
@@ -619,32 +933,41 @@
     var chips = cats.map(function (c) {
       return '<button class="chip' + (c.name === active ? " on" : "") + '" data-cat="' + esc(c.name) + '">' + esc(c.name) + "</button>";
     }).join("");
-    return '<div class="page-head"><div class="page-kicker">SuperBox library</div>' +
+    return '<div class="page-head"><div class="page-kicker">SuperBox catalogue</div>' +
       '<h1 class="page-title">' + titles[tab] + "</h1>" +
       '<div class="page-sub" id="gridCount">' + cat.items.length + " titles · Ad-free</div>" +
-      '<div class="lib-links"><button class="chip" data-lib-live>Live TV</button><button class="chip" data-lib-adult>18+</button></div></div>' +
+      scopedTabSearchMarkup(tab, placeholders[tab] || ("Search " + titles[tab] + "...")) +
+      "</div>" +
+      '<div id="scopedTabResults" class="hidden" style="padding:0 16px 24px"></div>' +
+      '<div id="scopedTabBody">' +
       '<div class="chips" id="catChips">' + chips + "</div>" +
       '<div class="grid" id="gridWrap">' + (cat.items.length ? cards(cat.items) : "") + "</div>" +
       (!cat.items.length ? '<div class="empty"><b>Nothing here yet</b>Try another category.</div>' : "") +
-      '<div id="libTabRows" class="lib-rows"></div>';
+      '<div id="libTabRows" class="lib-rows"></div></div>';
   }
 
   function renderLibrary(tab) {
     clearInterval(S.heroTimer);
+    S.activeSection = tab;
+    syncDrawerActive(tab);
     view.innerHTML = '<div class="page-head"><div class="sk" style="width:105px;height:10px;margin-bottom:10px"></div><div class="sk" style="width:190px;height:31px;border-radius:9px"></div></div>' +
       '<div class="chips"><span class="sk" style="width:62px;height:32px;border-radius:999px"></span><span class="sk" style="width:90px;height:32px;border-radius:999px"></span><span class="sk" style="width:76px;height:32px;border-radius:999px"></span></div>' +
       '<div class="grid">' + Array(9).join('<div class="sk sk-poster"></div>') + "</div>";
     paintLibRows(tab);
     loadHome().then(function () {
-      if (S.tab !== tab) return;
+      if (S.tab !== tab || S.activeSection !== tab) return;
       var data = buildTabData(tab);
       S.tabData[tab] = data;
       view.innerHTML = libraryMarkup(tab, data);
+      bindScopedTabSearch(tab);
       paintLibRows(tab);
       removeBoot();
     }).catch(function () {
       if (S.tab !== tab) return;
-      view.innerHTML = errorView("Library unavailable", "The catalogue could not be loaded.");
+      view.innerHTML = '<div class="page-head"><h1 class="page-title">' + esc(tab) + '</h1>' + scopedTabSearchMarkup(tab, "Search " + tab + "...") + '</div>' +
+        '<div id="scopedTabResults" class="hidden" style="padding:0 16px 24px"></div>' +
+        '<div id="scopedTabBody">' + errorView("Library unavailable", "The catalogue could not be loaded.") + '<div id="libTabRows" class="lib-rows"></div></div>';
+      bindScopedTabSearch(tab);
       paintLibRows(tab);
       removeBoot();
     });
@@ -750,9 +1073,11 @@
       return (s.n + " " + s.id + " " + (s.d || "")).toLowerCase().indexOf(f) >= 0;
     });
     host.innerHTML = list.map(function (s) {
-      return '<button type="button" class="vpn-server' + (s.id === region ? " on" : "") +
-        '" data-vpn-region="' + esc(s.id) + '"><span>' + esc(s.n) + "</span><i>" +
-        esc(s.id === region ? "Active" : (s.d || "")) + "</i></button>";
+      var active = s.id === region;
+      return '<button type="button" class="vpn-server' + (active ? " on" : "") + '" data-vpn-region="' + esc(s.id) + '">' +
+        '<span class="vpn-server-l"><span class="vpn-code">' + esc(s.id === "auto" ? "GLB" : s.id.toUpperCase()) + '</span>' +
+        '<span class="vpn-server-txt"><b>' + esc(s.n) + '</b><i>' + esc(s.d || "") + '</i></span></span>' +
+        '<span class="vpn-server-check">' + (active ? "ACTIVE" : "Connect") + '</span></button>';
     }).join("") || '<div class="vpn-panel-note">No country matches that search.</div>';
   }
   function paintVpnSheet(st) {
@@ -773,11 +1098,16 @@
     if ($("#vpnSheetIp")) $("#vpnSheetIp").textContent = off ? "Host" : ((st && st.ip) || "—");
     if ($("#vpnSheetUptime")) $("#vpnSheetUptime").textContent = off ? "—" : fmtUptime(st && st.uptime);
     var toggle = $("#vpnSheetToggle");
+    var lbl = $("#vpnSheetToggleLabel");
+    var sub = $("#vpnSheetToggleSub");
     if (toggle) {
       toggle.disabled = false;
+      toggle.classList.toggle("on", on);
       toggle.classList.toggle("off", off);
-      toggle.textContent = off ? "Connect VPN" : (on ? "Disconnect VPN" : "Cancel connection");
+      toggle.setAttribute("aria-pressed", String(on));
     }
+    if (lbl) lbl.textContent = off ? "VPN OFF — Tap to Connect" : (on ? "VPN ON — Shield Protected" : "Connecting Shield…");
+    if (sub) sub.textContent = off ? "Direct connection active" : (on ? "Tap to disconnect tunnel" : "Negotiating WARP MASQUE anchor");
     var auto = $("#vpnAuto");
     if (auto) auto.checked = vpnAutoOn();
     paintVpnServerList($("#vpnServerSearch") ? $("#vpnServerSearch").value : "");
@@ -795,7 +1125,9 @@
   function vpnToggleNow() {
     var off = vpnOff(vpnState);
     var toggle = $("#vpnSheetToggle");
-    if (toggle) { toggle.disabled = true; toggle.textContent = off ? "Connecting…" : "Disconnecting…"; }
+    var lbl = $("#vpnSheetToggleLabel");
+    if (toggle) toggle.disabled = true;
+    if (lbl) lbl.textContent = off ? "Connecting Shield…" : "Disconnecting Shield…";
     var region = (vpnState && (vpnState.preferred || vpnState.region)) || "auto";
     var call = off
       ? vpnApi("/api/vpn/on?region=" + enc(region || "auto"))
@@ -968,15 +1300,18 @@
       '<div class="vpn-sheet-live">' +
       '<div class="vpn-sheet-state"><span class="vpn-chip-dot wait" id="vpnSheetDot"></span><b id="vpnSheetState">Checking…</b></div>' +
       '<div class="vpn-sheet-ping" id="vpnSheetPing">— ms</div></div>' +
+      '<button class="vpn-power-btn" id="vpnSheetToggle" type="button" aria-pressed="false">' +
+      '<span class="vpn-pulse-ring"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 3v9"></path><path d="M6.8 6.8a7.5 7.5 0 1 0 10.4 0"></path></svg></span>' +
+      '<span class="vpn-power-copy"><b id="vpnSheetToggleLabel">VPN ON — Shield Protected</b><i id="vpnSheetToggleSub">Tap to toggle connection</i></span>' +
+      '</button>' +
       '<div class="vpn-sheet-facts">' +
       '<div><span>Country</span><b id="vpnSheetCountry">—</b></div>' +
       '<div><span>City / edge</span><b id="vpnSheetCity">—</b></div>' +
       '<div><span>Egress</span><b id="vpnSheetIp">—</b></div>' +
       '<div><span>Uptime</span><b id="vpnSheetUptime">—</b></div></div>' +
-      '<button class="btn-primary vpn-toggle" id="vpnSheetToggle" type="button">Disconnect VPN</button>' +
-      '<label class="vpn-auto-row" for="vpnAuto"><span><b>Auto-Region Routing</b><i>Follow the source\'s country automatically</i></span>' +
-      '<input id="vpnAuto" type="checkbox" checked /></label>' +
-      '<div class="vpn-server-head"><span>Server / country</span>' +
+      '<label class="vpn-auto-row" for="vpnAuto"><span><b>Auto-Region Routing</b><i>Match each source\'s optimal country automatically</i></span>' +
+      '<span class="sb-switch"><input id="vpnAuto" type="checkbox" checked /><i></i></span></label>' +
+      '<div class="vpn-server-head"><span>Multi-Region Servers</span>' +
       '<input id="vpnServerSearch" type="search" autocomplete="off" placeholder="Search countries…" /></div>' +
       '<div id="vpnServerList" class="vpn-server-list"></div>' +
       '<div class="vpn-panel-note" id="vpnPanelNote">Cloudflare WARP endpoints are anycast. The egress shown is the real country reported by the live tunnel.</div>';
@@ -1019,7 +1354,7 @@
     raw.forEach(function (x) {
       var se = num(x && x.se, 0);
       var max = num(x && x.maxEp, 0);
-      if (max > 0) out.push({ se: se, maxEp: Math.min(max, 400) });
+      if (max > 0) out.push({ se: se, maxEp: Math.min(max, 2000) });
     });
     out.sort(function (a, b) { return a.se - b.se; });
     return out;
@@ -1081,11 +1416,23 @@
     return out.join("");
   }
 
-  function epGridMarkup(data, se) {
+  function epRangesMarkup(total, activeIdx, attr) {
+    var ranges = chunkRanges(total, 50);
+    if (ranges.length <= 1) return "";
+    return '<div class="ep-range-tabs" role="tablist" aria-label="Episode ranges">' + ranges.map(function (r, idx) {
+      return '<button type="button" class="ep-range-tab' + (idx === activeIdx ? " on" : "") + '" ' + attr + '="' + idx + '">' + r.label + "</button>";
+    }).join("") + "</div>";
+  }
+
+  function epGridMarkup(data, se, chunkIdx) {
     var sn = data.seasons.filter(function (x) { return x.se === se; })[0] || data.seasons[0];
     if (!sn) return "";
+    var ranges = chunkRanges(sn.maxEp, 50);
+    var cIdx = Math.max(0, Math.min(chunkIdx != null ? chunkIdx : S.detailEpChunk, Math.max(0, ranges.length - 1)));
+    S.detailEpChunk = cIdx;
+    var cur = ranges[cIdx] || { start: 1, end: sn.maxEp };
     var html = "";
-    for (var i = 1; i <= sn.maxEp; i++) {
+    for (var i = cur.start; i <= cur.end; i++) {
       var on = S.lastPlayed && S.lastPlayed.id === data.item.id && S.lastPlayed.se === se && S.lastPlayed.ep === i;
       html += '<button class="' + (on ? "on" : "") + '" data-season="' + se + '" data-ep="' + i + '">' + i + "</button>";
     }
@@ -1111,9 +1458,10 @@
         return '<button class="' + (sn.se === se ? "on" : "") + '" data-season="' + sn.se + '">Season ' + sn.se + "</button>";
       }).join("") + "</div>";
     }
+    var rangeTabs = data.isSeries && selected ? '<div id="dEpRanges">' + epRangesMarkup(selected.maxEp, S.detailEpChunk, "data-dchunk") + "</div>" : "";
     var eps = data.isSeries ? '<div class="detail-section" id="dEpSec"><h3>Episodes <em>' +
-      data.seasons.reduce(function (a, x) { return a + x.maxEp; }, 0) + "</em></h3>" + seasonTabs +
-      '<div class="ep-grid" id="dEpGrid">' + epGridMarkup(data, se) + "</div></div>" : "";
+      data.seasons.reduce(function (a, x) { return a + x.maxEp; }, 0) + "</em></h3>" + seasonTabs + rangeTabs +
+      '<div class="ep-grid" id="dEpGrid">' + epGridMarkup(data, se, S.detailEpChunk) + "</div></div>" : "";
 
     var cast = staff.length ? '<div class="detail-section"><h3>Cast</h3><div class="cast-row">' +
       staff.slice(0, 20).map(function (p) {
@@ -1138,7 +1486,7 @@
       "</div>" +
       (desc ? '<p class="detail-desc" id="dDesc">' + esc(desc) + "</p>" + (desc.length > 280 ? '<button class="desc-more" data-ddesc="1">Read more</button>' : "") : "") +
       eps + cast +
-      '<div class="detail-section" id="dRecSec"><h3>More like this</h3><div class="row-track" id="dRec"><div class="sk-card"><div class="sk sk-poster"></div><div class="sk sk-line"></div></div><div class="sk-card"><div class="sk sk-poster"></div><div class="sk sk-line"></div></div><div class="sk-card"><div class="sk sk-poster"></div><div class="sk sk-line"></div></div></div></div>' +
+      '<div class="detail-section" id="dRecSec" data-similar-host="detail"><h3><span class="ai-spark">✦</span> Similar Results</h3><div class="row-track" id="dRec"><div class="sk-card"><div class="sk sk-poster"></div><div class="sk sk-line"></div></div><div class="sk-card"><div class="sk sk-poster"></div><div class="sk sk-line"></div></div><div class="sk-card"><div class="sk sk-poster"></div><div class="sk sk-line"></div></div></div></div>' +
       "</div>";
   }
 
@@ -1150,6 +1498,7 @@
     var token = S.detailToken;
     S.detailData = null;
     S.detailSeason = null;
+    S.detailEpChunk = 0;
     closeSheet();
     detail.classList.remove("hidden");
     detail.setAttribute("aria-hidden", "false");
@@ -1196,7 +1545,7 @@
         return x && x.id !== data.item.id;
       });
       mergeIndex(items);
-      box.innerHTML = items.length ? cards(items) : '<div class="empty">No suggestions for this title yet.</div>';
+      box.innerHTML = items.length ? cards(items, { withMatch: true }) : '<div class="empty">No suggestions for this title yet.</div>';
     } catch (e) {
       var box2 = document.getElementById("dRec");
       if (box2) box2.innerHTML = '<div class="empty">No suggestions for this title yet.</div>';
@@ -1672,10 +2021,103 @@
     if (pError) pError.classList.add("hidden");
   }
 
+  function paintPlayerSimilarCards(list) {
+    var track = document.getElementById("pSimilarTrack");
+    if (!track) return;
+    if (!list || !list.length) {
+      track.innerHTML = '<div class="empty" style="padding:18px 8px">No similar recommendations yet.</div>';
+      return;
+    }
+    var spotlightItems = [];
+    var libItems = [];
+    list.slice(0, 16).forEach(function (it) {
+      if (it && it.id && (it.dp || S.indexById.has(String(it.id)))) spotlightItems.push(it);
+      else if (it) libItems.push(it);
+    });
+    var html = (spotlightItems.length ? cards(spotlightItems, { withMatch: true }) : "") +
+      (libItems.length && window.LIB && window.LIB.cards ? window.LIB.cards(libItems) : "");
+    track.innerHTML = html || '<div class="empty" style="padding:18px 8px">No similar recommendations yet.</div>';
+    $$(".card[data-id]", track).forEach(function (b) {
+      b.onclick = function () {
+        var it = getItem(b.getAttribute("data-id"));
+        if (it) {
+          closeSimilarTray();
+          closePlayer();
+          openDetail(it);
+        }
+      };
+    });
+  }
+
+  async function loadPlayerSimilar(pb) {
+    var track = document.getElementById("pSimilarTrack");
+    var sub = document.getElementById("pSimilarSub");
+    if (!track) return;
+    if (sub) sub.textContent = "AI picks similar to " + ((pb && pb.title) || "your stream");
+    track.innerHTML = Array(5).join('<div class="sk-card"><div class="sk sk-poster"></div><div class="sk sk-line"></div></div>');
+    var candidates = [];
+    try {
+      if (pb && pb.subject && pb.subject.subjectId) {
+        var j = await api("rec?subjectId=" + enc(pb.subject.subjectId) + "&page=1&perPage=18");
+        candidates = (((j && j.data && (j.data.items || j.data.subjectList)) || [])).map(normSubject).filter(function (x) {
+          return x && x.id !== String(pb.subject.subjectId);
+        });
+        mergeIndex(candidates);
+      }
+    } catch (e) {}
+    var seed = {
+      id: (pb && pb.item && pb.item.id) || (pb && pb.subject && pb.subject.subjectId) || "",
+      t: (pb && pb.title) || (pb && pb.item && pb.item.t) || "",
+      desc: (pb && pb.item && pb.item.desc) || (pb && pb.subject && pb.subject.description) || "",
+      genre: (pb && pb.item && pb.item.genre) || (pb && pb.subject && pb.subject.genre) || "",
+      year: (pb && pb.item && pb.item.year) || "",
+      country: (pb && pb.item && pb.item.country) || ""
+    };
+    var list = [];
+    try {
+      if (window.SBAI && window.SBAI.similar) {
+        list = await window.SBAI.similar(seed, { partition: "safe", limit: 16, candidates: candidates });
+      }
+    } catch (e) { list = []; }
+    if (!list.length) {
+      if (candidates.length) {
+        list = candidates.slice(0, 14);
+      } else if (S.index && S.index.length) {
+        var skipId = pb && pb.item && pb.item.id;
+        list = S.index.filter(function (x) { return x && x.id !== skipId; }).slice(0, 12);
+      }
+    }
+    paintPlayerSimilarCards(list);
+  }
+
+  function openSimilarTray() {
+    var tray = document.getElementById("pSimilarTray");
+    if (!tray) return;
+    S.similarOpen = true;
+    tray.classList.remove("hidden");
+    requestAnimationFrame(function () { tray.classList.add("open"); });
+    loadPlayerSimilar(S.playback);
+  }
+
+  function closeSimilarTray() {
+    var tray = document.getElementById("pSimilarTray");
+    if (!tray) return;
+    S.similarOpen = false;
+    tray.classList.remove("open");
+    setTimeout(function () {
+      if (!S.similarOpen) tray.classList.add("hidden");
+    }, 260);
+  }
+
   function openPlayer(pb) {
     S.playback = pb;
     S.playerOpen = true;
     clearTimeout(S.autoNextTimer);
+    closeSimilarTray();
+    var pBackdrop = document.getElementById("pBackdrop");
+    if (pBackdrop) {
+      pBackdrop.style.backgroundImage = pb.poster ? cssUrl(pb.poster) : "none";
+    }
     pError.classList.add("hidden");
     pUi.classList.remove("hide");
     player.classList.remove("hidden");
@@ -1819,7 +2261,7 @@
     if (!url) return;
     try {
       if (window.SBAndroid && window.SBAndroid.openWeb) window.SBAndroid.openWeb(url, title || "SuperBox");
-      else window.open(url, "_blank");
+      else toast("In-app web player opens on Android device");
     } catch (e) {
       toast("Could not open this player");
     }
@@ -2043,24 +2485,32 @@
     });
   }
 
-  function episodeSheet(se) {
+  function episodeSheet(se, chunkIdx) {
     var pb = S.playback;
     if (!pb) return;
     var sn = pb.seasons.filter(function (x) { return x.se === se; })[0] || pb.seasons[0];
     if (!sn) return;
+    var ranges = chunkRanges(sn.maxEp, 50);
+    var activeChunk = chunkIdx != null ? chunkIdx : Math.floor((Math.max(1, pb.ep) - 1) / 50);
+    activeChunk = Math.max(0, Math.min(activeChunk, Math.max(0, ranges.length - 1)));
+    var cur = ranges[activeChunk] || { start: 1, end: sn.maxEp };
     var tabs = pb.seasons.length > 1 ? '<div class="season-tabs" style="padding:0 14px 8px">' + pb.seasons.map(function (x) {
       return '<button class="' + (x.se === sn.se ? "on" : "") + '" data-sheet-season="' + x.se + '">Season ' + x.se + "</button>";
     }).join("") + "</div>" : "";
+    var rangeTabs = ranges.length > 1 ? '<div style="padding:0 14px 6px">' + epRangesMarkup(sn.maxEp, activeChunk, "data-sheet-chunk") + "</div>" : "";
     var eps = "";
-    for (var i = 1; i <= sn.maxEp; i++) {
+    for (var i = cur.start; i <= cur.end; i++) {
       var on = pb.se === sn.se && pb.ep === i;
       eps += '<button class="' + (on ? "on" : "") + '" data-sheet-ep="' + i + '">' + i + "</button>";
     }
     var html = '<div class="sheet-title">Episodes</div><div class="sheet-sub">Season ' + sn.se + " · " + sn.maxEp + ' episodes</div>' +
-      tabs + '<div class="ep-grid" style="padding:2px 16px 8px">' + eps + "</div>";
+      tabs + rangeTabs + '<div class="ep-grid" style="padding:2px 16px 8px">' + eps + "</div>";
     openSheet(html, function (root) {
       $$("[data-sheet-season]", root).forEach(function (b) {
-        b.onclick = function () { episodeSheet(num(b.getAttribute("data-sheet-season"), 1)); };
+        b.onclick = function () { episodeSheet(num(b.getAttribute("data-sheet-season"), 1), 0); };
+      });
+      $$("[data-sheet-chunk]", root).forEach(function (b) {
+        b.onclick = function () { episodeSheet(sn.se, num(b.getAttribute("data-sheet-chunk"), 0)); };
       });
       $$("[data-sheet-ep]", root).forEach(function (b) {
         b.onclick = function () {
@@ -2267,21 +2717,7 @@
     var go = e.target.closest("[data-go]");
     if (go) {
       var g = go.getAttribute("data-go");
-      if (g === "movies" || g === "series" || g === "anime") switchTab(g);
-      else if (g === "live") {
-        if (window.LIB && window.LIB.openLive) window.LIB.openLive();
-      } else if (g === "adult") {
-        if (window.LIB && window.LIB.openAdult) window.LIB.openAdult();
-      } else {
-        var targetTitle = g === "trending" ? "Trending" : "Cinema";
-        var idx = -1;
-        S.homeRows.forEach(function (row, i) { if (idx < 0 && row.title.toLowerCase().indexOf(targetTitle.toLowerCase()) >= 0) idx = i; });
-        if (idx >= 0) {
-          $$("#homeChips .chip").forEach(function (c) { c.classList.toggle("on", c === go); });
-          var el = document.getElementById("row-" + idx);
-          if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
-        }
-      }
+      navigateSection(g);
       return;
     }
     var cat = e.target.closest("[data-cat]");
@@ -2376,15 +2812,31 @@
       startPlayback(data.s, data.item, se2, ep, {});
       return;
     }
+    var dchunk = e.target.closest("[data-dchunk]");
+    if (dchunk) {
+      var cIdx = num(dchunk.getAttribute("data-dchunk"), 0);
+      S.detailEpChunk = cIdx;
+      var seC = S.detailSeason || (data.seasons[0] ? data.seasons[0].se : 1);
+      var snC = data.seasons.filter(function (x) { return x.se === seC; })[0] || data.seasons[0];
+      var rHost = document.getElementById("dEpRanges");
+      if (rHost && snC) rHost.innerHTML = epRangesMarkup(snC.maxEp, cIdx, "data-dchunk");
+      var gridC = document.getElementById("dEpGrid");
+      if (gridC) gridC.innerHTML = epGridMarkup(data, seC, cIdx);
+      return;
+    }
     var season = e.target.closest("[data-season]");
     if (season) {
       var se = num(season.getAttribute("data-season"), 1);
       S.detailSeason = se;
+      S.detailEpChunk = 0;
       $$(".season-tabs [data-season]", detail).forEach(function (b) {
         b.classList.toggle("on", num(b.getAttribute("data-season"), 0) === se);
       });
+      var sn = data.seasons.filter(function (x) { return x.se === se; })[0] || data.seasons[0];
+      var rHost2 = document.getElementById("dEpRanges");
+      if (rHost2 && sn) rHost2.innerHTML = epRangesMarkup(sn.maxEp, 0, "data-dchunk");
       var grid = document.getElementById("dEpGrid");
-      if (grid) grid.innerHTML = epGridMarkup(data, se);
+      if (grid) grid.innerHTML = epGridMarkup(data, se, 0);
       var playBtn = $("[data-dplay]", detail);
       if (playBtn) playBtn.innerHTML = ICON.play + " Play S" + se + "E1";
       return;
@@ -2487,14 +2939,161 @@
     showPlayerError(msg);
   }
 
+  // ----------------------------------------- slide-out drawer & tab pill
+  function updateTabIndicator() {
+    var ind = document.getElementById("tabIndicator");
+    var active = $("#tabbar .tab.active");
+    var bar = document.getElementById("tabbar");
+    if (!ind || !active || !bar) return;
+    var br = bar.getBoundingClientRect();
+    var ar = active.getBoundingClientRect();
+    if (!ar.width) return;
+    var w = Math.min(44, Math.max(26, ar.width * 0.52));
+    var x = (ar.left - br.left) + (ar.width - w) / 2;
+    ind.style.width = w + "px";
+    ind.style.transform = "translate3d(" + x.toFixed(1) + "px, 0, 0)";
+  }
+
+  function syncDrawerActive(sec) {
+    $$("#navDrawer .nd-item").forEach(function (b) {
+      b.classList.toggle("on", b.getAttribute("data-nav") === sec);
+    });
+  }
+
+  function openNavDrawer() {
+    var bg = document.getElementById("navDrawerBg");
+    var dr = document.getElementById("navDrawer");
+    var btn = document.getElementById("drawerBtn");
+    if (!bg || !dr) return;
+    S.drawerOpen = true;
+    bg.classList.remove("hidden");
+    dr.classList.remove("hidden");
+    if (btn) btn.setAttribute("aria-expanded", "true");
+    lockBody();
+    requestAnimationFrame(function () {
+      bg.classList.add("open");
+      dr.classList.add("open");
+    });
+  }
+
+  function closeNavDrawer() {
+    var bg = document.getElementById("navDrawerBg");
+    var dr = document.getElementById("navDrawer");
+    var btn = document.getElementById("drawerBtn");
+    if (!bg || !dr) return;
+    S.drawerOpen = false;
+    bg.classList.remove("open");
+    dr.classList.remove("open");
+    if (btn) btn.setAttribute("aria-expanded", "false");
+    lockBody();
+    setTimeout(function () {
+      if (!S.drawerOpen) {
+        bg.classList.add("hidden");
+        dr.classList.add("hidden");
+      }
+    }, 280);
+  }
+
+  function renderAdultReading() {
+    clearInterval(S.heroTimer);
+    S.activeSection = "adult-reading";
+    syncDrawerActive("adult-reading");
+    view.innerHTML = '<div id="readingHost"></div>';
+    if (window.READER && window.READER.renderAdult) {
+      window.READER.renderAdult(document.getElementById("readingHost"));
+    } else {
+      view.innerHTML = errorView("18+ Reading unavailable", "The reader module failed to load.");
+    }
+    window.scrollTo(0, 0);
+    removeBoot();
+  }
+
+  function navigateSection(sec) {
+    sec = String(sec || "home").toLowerCase();
+    if (sec === "sources") sec = "home";
+    closeNavDrawer();
+    if (sec === "home" || sec === "movies" || sec === "series" || sec === "anime" || sec === "reading" || sec === "me") {
+      switchTab(sec);
+      return;
+    }
+    if (sec === "spotlight") {
+      if (S.playerOpen) closePlayer();
+      closeSheet();
+      if (S.detailOpen) closeDetail(true);
+      if (window.READER) { try { window.READER.close(); } catch (e) {} }
+      renderSpotlight();
+      return;
+    }
+    if (sec === "live" || sec === "livetv") {
+      S.activeSection = "livetv";
+      syncDrawerActive("livetv");
+      if (window.LIB && window.LIB.openLive) window.LIB.openLive();
+      return;
+    }
+    if (sec === "adult" || sec === "adult-video") {
+      requireAge18("18+ Video Vault", function () {
+        S.activeSection = "adult-video";
+        syncDrawerActive("adult-video");
+        if (window.LIB && window.LIB.renderAdult) window.LIB.renderAdult();
+      });
+      return;
+    }
+    if (sec === "adult-reading") {
+      requireAge18("18+ Reading Vault", function () {
+        renderAdultReading();
+      });
+      return;
+    }
+    if (["webseries", "kdrama", "kids", "cartoons", "tube"].indexOf(sec) >= 0) {
+      S.activeSection = sec;
+      syncDrawerActive(sec);
+      if (window.LIB && window.LIB.openSection) window.LIB.openSection(sec);
+      return;
+    }
+    switchTab("home");
+  }
+
   // ---------------------------------------------------------------- init
   function bindEvents() {
     document.getElementById("brand").onclick = function () { switchTab("home"); };
     document.getElementById("searchBtn").onclick = openSearch;
     document.getElementById("meBtn").onclick = function () { switchTab("me"); };
+    var drawerBtn = document.getElementById("drawerBtn");
+    if (drawerBtn) drawerBtn.onclick = openNavDrawer;
+    var drawerClose = document.getElementById("drawerClose");
+    if (drawerClose) drawerClose.onclick = closeNavDrawer;
+    var drawerBg = document.getElementById("navDrawerBg");
+    if (drawerBg) drawerBg.onclick = closeNavDrawer;
+    $$("#navDrawer .nd-item").forEach(function (b) {
+      b.onclick = function () { navigateSection(b.getAttribute("data-nav")); };
+    });
+
+    var ageCancel = document.getElementById("ageGateCancel");
+    var ageConfirm = document.getElementById("ageGateConfirm");
+    var ageModal = document.getElementById("ageGateModal");
+    if (ageCancel) ageCancel.onclick = closeAgeGate;
+    if (ageConfirm) ageConfirm.onclick = function () {
+      try { sessionStorage.setItem("sb.age18.ok", "1"); } catch (e) {}
+      var cb = agePendingCb;
+      closeAgeGate();
+      if (cb) cb();
+    };
+    if (ageModal) ageModal.onclick = function (ev) {
+      if (ev.target === ageModal) closeAgeGate();
+    };
+
+    var pSimBtn = document.getElementById("pSimilarBtn");
+    if (pSimBtn) pSimBtn.onclick = function () {
+      if (S.similarOpen) closeSimilarTray();
+      else openSimilarTray();
+    };
+    var pSimClose = document.getElementById("pSimilarClose");
+    if (pSimClose) pSimClose.onclick = closeSimilarTray;
+
     $$("#tabbar .tab").forEach(function (b) {
       b.onclick = function () { switchTab(b.getAttribute("data-tab")); };
     });
+    window.addEventListener("resize", updateTabIndicator);
 
     view.addEventListener("click", onViewClick);
     detail.addEventListener("click", onDetailClick);
@@ -2612,16 +3211,20 @@
     if (["home", "movies", "series", "anime", "reading", "me"].indexOf(tab) < 0) tab = "home";
     if (S.playerOpen) closePlayer();
     closeSheet();
+    closeNavDrawer();
     if (S.searchOpen) closeSearch(true);
     if (S.detailOpen) closeDetail(true);
     if (window.READER) { try { window.READER.close(); } catch (e) {} }
     S.tab = tab;
+    S.activeSection = tab;
+    syncDrawerActive(tab);
     $$("#tabbar .tab").forEach(function (b) {
       var on = b.getAttribute("data-tab") === tab;
       b.classList.toggle("active", on);
       if (on) b.setAttribute("aria-current", "page");
       else b.removeAttribute("aria-current");
     });
+    requestAnimationFrame(updateTabIndicator);
     window.scrollTo(0, 0);
     if (tab === "home") renderHome();
     else if (tab === "me") renderMe();
@@ -2631,6 +3234,8 @@
 
   function renderReading() {
     clearInterval(S.heroTimer);
+    S.activeSection = "reading";
+    syncDrawerActive("reading");
     view.innerHTML = '<div id="readingHost"></div>';
     if (window.READER) {
       window.READER.render(document.getElementById("readingHost"));
@@ -2648,13 +3253,17 @@
   }
 
   window.sbBack = function () {
+    var ageModal = document.getElementById("ageGateModal");
+    if (ageModal && !ageModal.classList.contains("hidden")) { closeAgeGate(); return true; }
+    if (S.drawerOpen) { closeNavDrawer(); return true; }
+    if (S.similarOpen) { closeSimilarTray(); return true; }
     if (window.READER && window.READER.back()) return true;
     if (window.LIB && window.LIB.back && window.LIB.back()) return true;
     if (S.sheetOpen) { closeSheet(); return true; }
     if (S.playerOpen) { closePlayer(); return true; }
     if (S.searchOpen) { closeSearch(); return true; }
     if (S.detailOpen) { closeDetail(); return true; }
-    if (S.tab !== "home") { switchTab("home"); return true; }
+    if (S.activeSection !== "home" || S.tab !== "home") { switchTab("home"); return true; }
     return false;
   };
   window.sbPause = function () {
@@ -2667,6 +3276,7 @@
     S.speed = num(prefGet("sb.speed"), 1);
     bindEvents();
     startVpnGate();
+    requestAnimationFrame(updateTabIndicator);
     renderHome();
     loadHome().then(function () {
       removeBoot();
@@ -2682,12 +3292,25 @@
     openSheet: openSheet,
     closeSheet: closeSheet,
     switchTab: switchTab,
+    navigateSection: navigateSection,
+    requireAge18: requireAge18,
     esc: esc,
     enc: enc,
     imgUrl: imgUrl,
     num: num,
     state: S,
     lockBody: lockBody
+  };
+
+  window.SuperBoxUI = {
+    navigate: navigateSection,
+    setSearchMode: setHomeSearchMode,
+    openVpnDrawer: openVpnSheet,
+    openAgeGate: requireAge18,
+    setSimilarResults: paintPlayerSimilarCards,
+    chunkRanges: chunkRanges,
+    openNavDrawer: openNavDrawer,
+    closeNavDrawer: closeNavDrawer
   };
 
   init();

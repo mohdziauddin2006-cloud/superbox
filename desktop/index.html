@@ -48,105 +48,124 @@
   </div>
 </div>
 
-<div id="shell">
-  <aside id="sidebar">
-    <div class="brand">
-      <span class="logo-mark" aria-hidden="true"><i></i></span>
-      <span class="brand-text">Super<span>Box</span></span>
-    </div>
-    <nav id="nav" aria-label="Sections">
-      <button data-sec="home" class="active">Home</button>
-      <button data-sec="moviebox">Spotlight</button>
-      <button data-sec="reading">Reading</button>
-      <button data-sec="movie">Movies</button>
-      <button data-sec="tv">Series</button>
-      <button data-sec="webseries">Web Series</button>
-      <button data-sec="kdrama">K-Drama</button>
-      <button data-sec="anime">Anime</button>
-      <button data-sec="kids">Kids</button>
-      <button data-sec="adult">18+</button>
-      <button data-sec="cartoons">Cartoons</button>
-      <button data-sec="livetv">Live TV</button>
-      <button data-sec="tube">Tube</button>
-    </nav>
-    <div class="side-foot">
-      <button id="settingsBtn" class="settings" type="button" aria-label="Settings">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5A3.5 3.5 0 1 0 12 8.5a3.5 3.5 0 0 0 0 7Zm8.4-3.5c0-.5 0-1-.1-1.4l2-1.6-2-3.5-2.4 1a8 8 0 0 0-2.4-1.4L15.1 2h-4l-.4 2.6a8 8 0 0 0-2.4 1.4l-2.4-1-2 3.5 2 1.6a8 8 0 0 0 0 2.8l-2 1.6 2 3.5 2.4-1a8 8 0 0 0 2.4 1.4l.4 2.6h4l.4-2.6a8 8 0 0 0 2.4-1.4l2.4 1 2-3.5-2-1.6c.1-.4.1-.9.1-1.4Z"/></svg>
-        <span>Settings</span>
+<div id="shell" class="shell-top">
+  <!-- FLOATING STICKY DARK-GLASS TOP NAVBAR (SOURCES strictly removed) -->
+  <header id="topbar" class="glass-nav" role="banner">
+    <div class="topbar-inner">
+      <button id="brandBtn" class="brand" type="button" aria-label="SuperBox Home">
+        <span class="logo-mark" aria-hidden="true"><i>S</i></span>
+        <span class="brand-text">Super<span>Box</span></span>
       </button>
-      <div class="adfree" title="Every source is filtered through SuperBox's ad shield">
-        <span class="dot"></span>AD-FREE
-      </div>
-    </div>
-  </aside>
 
-  <section id="main">
-    <header id="topbar">
-      <form id="searchForm" autocomplete="off" role="search">
-        <span class="search-ico" aria-hidden="true">
-          <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.6-3.6"></path></svg>
-        </span>
-        <input id="searchInput" type="search" autocomplete="off" autocapitalize="off" spellcheck="false"
-               placeholder="Search movies, series, anime, live TV…" aria-label="Search everything" />
-        <button class="primary" type="submit">Search</button>
-      </form>
+      <div class="nav-rail" aria-label="Primary sections">
+        <nav id="nav" role="tablist">
+          <span id="navIndicator" class="nav-indicator" aria-hidden="true"></span>
+          <button data-sec="home" role="tab" aria-selected="true" class="active">Home</button>
+          <button data-sec="moviebox" role="tab" aria-selected="false">Spotlight</button>
+          <button data-sec="movie" role="tab" aria-selected="false">Movies</button>
+          <button data-sec="tv" role="tab" aria-selected="false">Series</button>
+          <button data-sec="webseries" role="tab" aria-selected="false">Web Series</button>
+          <button data-sec="kdrama" role="tab" aria-selected="false">K-Drama</button>
+          <button data-sec="anime" role="tab" aria-selected="false">Anime</button>
+          <button data-sec="kids" role="tab" aria-selected="false">Kids</button>
+          <button data-sec="cartoons" role="tab" aria-selected="false">Cartoons</button>
+          <button data-sec="livetv" role="tab" aria-selected="false">Live TV</button>
+          <button data-sec="tube" role="tab" aria-selected="false">Tube</button>
+          <button data-sec="reading" role="tab" aria-selected="false">Reading</button>
+          <span class="nav-sep" aria-hidden="true"></span>
+          <button data-sec="adult" data-vault="video" class="nav-adult" role="tab" aria-selected="false">18+ Video</button>
+          <button data-sec="adult-reading" data-vault="reading" class="nav-adult" role="tab" aria-selected="false">18+ Reading</button>
+        </nav>
+      </div>
+
       <div class="top-meta">
-        <button id="vpnChip" class="vpn-chip" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="vpnPanel" title="Open VPN control">
+        <button id="vpnChip" class="vpn-chip" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="vpnPanel" title="Open VPN Control Drawer">
           <span class="vpn-chip-dot" id="vpnChipDot"></span>
           <span class="vpn-chip-text"><b id="vpnChipLabel">Shield · Connecting</b><i id="vpnChipSub">—</i></span>
           <span class="vpn-chip-ping" id="vpnChipPing">— ms</span>
         </button>
+        <button id="settingsBtn" class="icon-pill" type="button" aria-label="Settings" title="Settings">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5A3.5 3.5 0 1 0 12 8.5a3.5 3.5 0 0 0 0 7Zm8.4-3.5c0-.5 0-1-.1-1.4l2-1.6-2-3.5-2.4 1a8 8 0 0 0-2.4-1.4L15.1 2h-4l-.4 2.6a8 8 0 0 0-2.4 1.4l-2.4-1-2 3.5 2 1.6a8 8 0 0 0 0 2.8l-2 1.6 2 3.5 2.4-1a8 8 0 0 0 2.4 1.4l.4 2.6h4l.4-2.6a8 8 0 0 0 2.4-1.4l2.4 1 2-3.5-2-1.6c.1-.4.1-.9.1-1.4Z"/></svg>
+        </button>
       </div>
-    </header>
-    <div id="content"></div>
+    </div>
+  </header>
+
+  <section id="main">
+    <!-- Hidden legacy form kept for compatibility; prominent Home Safe/Deep & per-page scoped bars live inside #content -->
+    <form id="searchForm" class="sr-only-form" autocomplete="off" aria-hidden="true">
+      <input id="searchInput" type="search" tabindex="-1" />
+    </form>
+    <main id="content" tabindex="-1"></main>
   </section>
 </div>
 
-<!-- PLAYER - clean surface only: title bar, media stage, status text and a
-     dedicated bottom control layer. There is deliberately NO server selector,
-     NO scanner readout, NO counters. -->
-<div id="playerView" class="player hidden">
+<!-- PLAYER - cinematic surface with blurred backdrop, top bar, media stage,
+     dedicated bottom control layer (sibling of stage so clicks are never swallowed),
+     and directly below the video: chunked episode selector + AI Similar Results row. -->
+<div id="playerView" class="player hidden" role="dialog" aria-modal="true" aria-label="Video player">
+  <div id="pBackdrop" class="pbackdrop" aria-hidden="true"></div>
   <div class="pbar">
-    <button id="pClose" class="ghost">&#8592; Back</button>
+    <button id="pClose" class="ghost" type="button">&#8592; Back</button>
     <div id="pTitle" class="ptitle"></div>
     <span id="pEpLbl" class="peplbl hidden" aria-hidden="true">Episodes</span>
     <select id="pSeason" class="psel hidden" aria-label="Season" title="Season"></select>
     <select id="pEp" class="psel hidden" aria-label="Episode" title="Episode"></select>
     <span id="pChip" class="pchip hidden"></span>
-    <button id="pFull" class="ghost">Fullscreen</button>
+    <button id="pSimilarBtn" class="ghost p-below-btn" type="button" title="Toggle Episodes &amp; Similar Results">Up Next &amp; Similar</button>
+    <button id="pFull" class="ghost" type="button">Fullscreen</button>
   </div>
-  <div class="pframe" id="pStage">
-    <video id="pVideo" class="hidden" autoplay playsinline></video>
-    <iframe id="pFrame" class="hidden" allow="autoplay *; fullscreen *; picture-in-picture *; encrypted-media *; clipboard-write *" allowfullscreen></iframe>
-    <div id="pMsg" class="pmsg hidden"></div>
-  </div>
-  <!-- The control bar is a SIBLING of the media stage, not a child: no video,
-       iframe, poster or transparent page layer can ever sit above it in the
-       same stacking context and swallow the clicks. -->
-  <div id="pControls" class="pcontrols hidden">
-    <button id="pPlay" class="pctl" type="button" aria-label="Play">&#9654;</button>
-    <button id="pBack10" class="pctl" type="button" aria-label="Rewind 10 seconds">-10s</button>
-    <button id="pFwd10" class="pctl" type="button" aria-label="Forward 10 seconds">+10s</button>
-    <button id="pPrev" class="pctl hidden" type="button" aria-label="Previous episode">&#9198; Ep</button>
-    <button id="pNext" class="pctl hidden" type="button" aria-label="Next episode">Ep &#9197;</button>
-    <span id="pTime" class="ptime">0:00 / 0:00</span>
-    <input id="pSeek" class="pseek" type="range" min="0" max="1" step="0.1" value="0" aria-label="Seek" />
-    <button id="pMute" class="pctl" type="button" aria-label="Mute">&#128266;</button>
-    <input id="pVol" class="pvol" type="range" min="0" max="1" step="0.01" value="1" aria-label="Volume" />
-    <button id="pCC" class="pctl hidden" type="button" aria-label="Subtitles">CC</button>
-    <button id="pAudio" class="pctl hidden" type="button" aria-label="Audio track">1</button>
-    <button id="pSet" class="pctl" type="button" aria-label="Quality and speed">&#9881;</button>
-    <button id="pFs" class="pctl" type="button" aria-label="Fullscreen">&#9974;</button>
-    <div id="pMenu" class="pmenu hidden"></div>
+  <div class="player-scroll" id="playerScroll">
+    <div class="player-stage-wrap">
+      <div class="pframe" id="pStage">
+        <video id="pVideo" class="hidden" autoplay playsinline></video>
+        <iframe id="pFrame" class="hidden" allow="autoplay *; fullscreen *; picture-in-picture *; encrypted-media *; clipboard-write *" allowfullscreen></iframe>
+        <div id="pMsg" class="pmsg hidden"></div>
+      </div>
+      <!-- Control bar is a SIBLING of #pStage so video/iframe never swallows clicks -->
+      <div id="pControls" class="pcontrols hidden">
+        <button id="pPlay" class="pctl" type="button" aria-label="Play">&#9654;</button>
+        <button id="pBack10" class="pctl" type="button" aria-label="Rewind 10 seconds">-10s</button>
+        <button id="pFwd10" class="pctl" type="button" aria-label="Forward 10 seconds">+10s</button>
+        <button id="pPrev" class="pctl hidden" type="button" aria-label="Previous episode">&#9198; Ep</button>
+        <button id="pNext" class="pctl hidden" type="button" aria-label="Next episode">Ep &#9197;</button>
+        <span id="pTime" class="ptime">0:00 / 0:00</span>
+        <input id="pSeek" class="pseek" type="range" min="0" max="1" step="0.1" value="0" aria-label="Seek" />
+        <button id="pMute" class="pctl" type="button" aria-label="Mute">&#128266;</button>
+        <input id="pVol" class="pvol" type="range" min="0" max="1" step="0.01" value="1" aria-label="Volume" />
+        <button id="pCC" class="pctl hidden" type="button" aria-label="Subtitles">CC</button>
+        <button id="pAudio" class="pctl hidden" type="button" aria-label="Audio track">1</button>
+        <button id="pSet" class="pctl" type="button" aria-label="Quality and speed">&#9881;</button>
+        <button id="pFs" class="pctl" type="button" aria-label="Fullscreen">&#9974;</button>
+        <div id="pMenu" class="pmenu hidden"></div>
+      </div>
+    </div>
+
+    <!-- Below-player interactive shelf: Chunked Episodes + AI Similar Results -->
+    <div id="playerBelow" class="player-below">
+      <section id="playerEpStrip" class="player-ep-strip hidden" aria-label="Episode pagination" data-episode-host="player"></section>
+      <section id="playerSimilarSection" class="similar-section" aria-label="Similar Results" data-similar-host="player">
+        <div class="similar-head">
+          <div class="similar-title-wrap">
+            <span class="ai-spark" aria-hidden="true">✦</span>
+            <h3>Similar Results</h3>
+            <span class="similar-sub" id="playerSimilarSub">AI recommendations tailored to what you're watching</span>
+          </div>
+          <span class="similar-badge" id="playerSimilarStatus">Smart Match</span>
+        </div>
+        <div id="playerSimilarTrack" class="similar-track"></div>
+      </section>
+    </div>
   </div>
 </div>
 
-<div id="settingsModal" class="modal hidden">
+<!-- SETTINGS MODAL -->
+<div id="settingsModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
   <div class="box">
     <div class="box-head">
       <span class="box-kicker">SuperBox</span>
-      <h3>Settings</h3>
-      <p class="box-sub">Everything is ad-free. Movies, series, anime and live TV in one place.</p>
+      <h3 id="settingsTitle">Settings</h3>
+      <p class="box-sub">Everything is ad-free. Movies, series, anime, reading and live TV in one place.</p>
     </div>
     <label class="field">TMDB API key <span class="opt">optional — a built-in key is used when empty</span>
       <input id="setTmdb" type="text" placeholder="32 character key" />
@@ -157,7 +176,7 @@
     <div class="box-info">
       <div><span>Ads</span><b class="good">Blocked at network level</b></div>
       <div><span>Shield</span><b id="setVpnState">Checking…</b></div>
-      <div><span>Version</span><b>1.3.0</b></div>
+      <div><span>Version</span><b>1.4.0</b></div>
     </div>
     <div class="vpn-settings-row">
       <span>Embedded VPN · usque / WARP MASQUE</span>
@@ -168,40 +187,85 @@
       <button id="setVpnToggle" class="ghost" type="button">Disconnect</button>
     </div>
     <div class="boxactions">
-      <button id="setClose" class="ghost">Cancel</button>
-      <button id="setSave" class="primary">Save</button>
+      <button id="setClose" class="ghost" type="button">Cancel</button>
+      <button id="setSave" class="primary" type="button">Save</button>
     </div>
   </div>
 </div>
 
-<div id="vpnPanel" class="vpn-panel hidden" role="dialog" aria-modal="false" aria-labelledby="vpnPanelTitle">
+<!-- 18+ DARK-GLASS AGE-GATE MODAL -->
+<div id="ageGateModal" class="modal age-modal hidden" role="dialog" aria-modal="true" aria-labelledby="ageGateTitle">
+  <div class="box age-box">
+    <div class="age-badge">18+</div>
+    <span class="box-kicker">ADULT CONTENT VERIFICATION</span>
+    <h3 id="ageGateTitle">Confirm you are 18 or older</h3>
+    <p id="ageGateSub" class="box-sub">This area contains explicit adult material and is strictly isolated from standard Reading, Kids, and Safe Search. Confirmation lasts for this session only.</p>
+    <div class="age-points">
+      <div><span>Isolation</span><b>Hidden from standard Reading &amp; Kids</b></div>
+      <div><span>Privacy</span><b>VPN routed · Zero local history</b></div>
+    </div>
+    <div class="boxactions age-actions">
+      <button id="ageGateCancel" class="ghost" type="button">Go Back</button>
+      <button id="ageGateConfirm" class="primary age-confirm-btn" type="button">I am 18 or older — Enter</button>
+    </div>
+  </div>
+</div>
+
+<!-- INTERACTIVE VPN CONTROL DRAWER -->
+<div id="vpnBackdrop" class="vpn-backdrop hidden" aria-hidden="true"></div>
+<aside id="vpnPanel" class="vpn-panel hidden" role="dialog" aria-modal="true" aria-labelledby="vpnPanelTitle">
   <div class="vpn-panel-card">
     <div class="vpn-panel-head">
-      <div><span class="vpn-panel-kicker">SUPERBOX SHIELD</span><h3 id="vpnPanelTitle">VPN control</h3></div>
-      <button id="vpnPanelClose" class="vpn-panel-x" type="button" aria-label="Close VPN panel">×</button>
+      <div>
+        <span class="vpn-panel-kicker">SUPERBOX SHIELD</span>
+        <h3 id="vpnPanelTitle">VPN Control</h3>
+      </div>
+      <button id="vpnPanelClose" class="vpn-panel-x" type="button" aria-label="Close VPN drawer">×</button>
     </div>
-    <div class="vpn-live">
-      <div class="vpn-live-state"><span class="vpn-chip-dot" id="vpnPanelDot"></span><b id="vpnPanelState">Connecting…</b></div>
-      <div class="vpn-live-ping" id="vpnPanelPing">— ms</div>
+
+    <div class="vpn-hero-status">
+      <div class="vpn-power-wrap">
+        <button id="vpnToggle" type="button" class="vpn-toggle vpn-power-btn" aria-live="polite">
+          <span class="vpn-pulse-ring" aria-hidden="true"></span>
+          <span class="vpn-power-core">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2v9m5.6-6.2a8 8 0 1 1-11.2 0" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+            <b id="vpnToggleLabel">VPN ON</b>
+            <small id="vpnToggleSub">Tap to disconnect</small>
+          </span>
+        </button>
+      </div>
+      <div class="vpn-live">
+        <div class="vpn-live-state">
+          <span class="vpn-chip-dot" id="vpnPanelDot"></span>
+          <b id="vpnPanelState">Connecting…</b>
+        </div>
+        <div class="vpn-live-ping" id="vpnPanelPing">— ms</div>
+      </div>
     </div>
+
     <div class="vpn-live-meta">
       <div><span>Country</span><b id="vpnPanelCountry">—</b></div>
       <div><span>City / edge</span><b id="vpnPanelCity">—</b></div>
       <div><span>Egress</span><b id="vpnPanelIp">—</b></div>
       <div><span>Uptime</span><b id="vpnPanelUptime">—</b></div>
     </div>
-    <button id="vpnToggle" type="button" class="vpn-toggle">Disconnect VPN</button>
+
     <label class="vpn-switch-row" for="vpnAuto">
-      <span><b>Auto-Region Routing</b><i>Follow the source's country automatically</i></span>
-      <input id="vpnAuto" type="checkbox" checked />
+      <span><b>Auto-Region Routing</b><i>Match each source's region automatically</i></span>
+      <span class="sb-switch">
+        <input id="vpnAuto" type="checkbox" checked />
+        <i aria-hidden="true"></i>
+      </span>
     </label>
-    <div class="vpn-server-head"><span>Server / country</span>
-      <input id="vpnServerSearch" type="search" autocomplete="off" placeholder="Search countries…" />
+
+    <div class="vpn-server-head">
+      <span>Regions &amp; Servers</span>
+      <input id="vpnServerSearch" type="search" autocomplete="off" placeholder="Search countries…" aria-label="Search VPN servers" />
     </div>
     <div id="vpnServerList" class="vpn-server-list"></div>
     <div class="vpn-panel-note" id="vpnPanelNote">Cloudflare WARP endpoints are anycast. The egress shown is the real country reported by the live tunnel.</div>
   </div>
-</div>
+</aside>
 
 <script src="hls.min.js"></script>
 <script src="sources.js"></script>
