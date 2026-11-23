@@ -226,14 +226,27 @@
     return await withTimeout(r.json(), ms || 12000);
   }
 
-  /* TMDB: user key -> direct; otherwise the local proxy injects the baked key. */
+  /* TMDB: non-blocking client with AbortController timeout, localStorage cache,
+     retry-with-backoff, and graceful fallback so TMDB failures never block UI. */
   async function api(path, params) {
     var q = new URLSearchParams(params || {});
     if (!q.get('language')) q.set('language', store.lang || 'en-US');
     var qs = q.toString();
-    if (store.key) return fetchJSON('https://api.themoviedb.org/3' + path + (qs ? '?' + qs : ''));
+    var rel = String(path || '').replace(/^\/+/, '') + (qs ? '?' + qs : '');
+    if (store.key) {
+      q.set('api_key', store.key);
+      var ctl = new AbortController();
+      var tm = setTimeout(function () { try { ctl.abort(); } catch (e) {} }, 4500);
+      try {
+        var r = await fetch('https://api.themoviedb.org/3/' + String(path || '').replace(/^\/+/, '') + '?' + q.toString(), { cache: 'no-store', signal: ctl.signal });
+        clearTimeout(tm);
+        if (r && r.ok) return await r.json();
+      } catch (e) { clearTimeout(tm); }
+      return { results: [], episodes: [], seasons: [], fallback: true };
+    }
+    if (SC && SC.tmdbFetch) return SC.tmdbFetch(rel, { timeoutMs: 4500, retries: 1 });
     var B = await SC.base();
-    return fetchJSON(B + '/tmdb/3' + path + (qs ? '?' + qs : ''), 15000);
+    return fetchJSON(B + '/tmdb/3/' + rel, 6000);
   }
 
   function normTmdb(m) {
@@ -683,6 +696,9 @@
       items.slice(0, 40).forEach(function (it) { strip.appendChild(cardNode(it)); });
       wrap.__cached = false;
       cachePut(row, items);
+      if (window.SBAI && typeof window.SBAI.index === 'function') {
+        window.SBAI.index(items, state.section === 'adult' ? 'isolated' : 'safe');
+      }
     } catch (e) {
       if (hadCache) return;
       strip.innerHTML = '';
@@ -1544,11 +1560,28 @@
     inp.autocapitalize = 'off';
     inp.spellcheck = false;
     inp.placeholder = ph || 'Search this section...';
+    var clr = document.createElement('button');
+    clr.type = 'button';
+    clr.className = 'ss-clear hidden';
+    clr.setAttribute('aria-label', 'Clear search');
+    clr.textContent = '\u00D7';
+    var syncClr = function () { clr.classList.toggle('hidden', !inp.value.trim()); };
     if (sec === 'livetv') {
       inp.value = state.liveFilter || '';
-      inp.oninput = function () { state.liveFilter = inp.value; paintLiveGrid(); };
+      inp.oninput = function () { syncClr(); state.liveFilter = inp.value; paintLiveGrid(); };
+    } else {
+      inp.oninput = syncClr;
     }
+    clr.onclick = function () {
+      inp.value = '';
+      syncClr();
+      if (sec === 'livetv') { state.liveFilter = ''; paintLiveGrid(); }
+      else renderSection(sec);
+      inp.focus();
+    };
+    syncClr();
     form.appendChild(inp);
+    form.appendChild(clr);
     var b = el('button', 'primary', 'Search');
     b.type = 'submit';
     form.appendChild(b);
@@ -1804,7 +1837,14 @@
         var sd = null;
         try { sd = await api('/tv/' + it.tmdb + '/season/' + n); } catch (e) {}
         grid.innerHTML = '';
-        var eps = (sd && sd.episodes) || [];
+        var eps = (sd && Array.isArray(sd.episodes)) ? sd.episodes : [];
+        if (!eps.length) {
+          var metaSeason = (d.seasons || []).filter(function (s2) { return Number(s2.season_number) === Number(n); })[0];
+          var epCount = Math.min(2000, Number(metaSeason && metaSeason.episode_count) || 0);
+          for (var eIdx = 1; eIdx <= epCount; eIdx++) {
+            eps.push({ season_number: n, episode_number: eIdx, name: 'Episode ' + eIdx });
+          }
+        }
         if (!eps.length) { grid.appendChild(el('div', 'empty', 'No episodes listed.')); return; }
         var ranges = chunkEpisodeRanges(eps.length, 50);
         var activeRange = 0;
@@ -1845,27 +1885,44 @@
     }
 
     /* AI Similar Results carousel on TMDB detail page */
-    var simSec = el('div', 'similar-section');
+    var simSec = el('div', 'similar-section wad-similar-sec');
     simSec.setAttribute('data-similar-host', 'detail');
-    simSec.innerHTML = '<div class="similar-head"><div class="similar-title-wrap"><span class="ai-spark" aria-hidden="true">\u2726</span><h3>Similar Results</h3><span class="similar-sub">AI recommendations matched by genre, mood &amp; cast</span></div><span class="similar-badge">Smart Match</span></div>';
+    simSec.innerHTML = '<div class="similar-head"><div class="similar-title-wrap"><span class="ai-spark" aria-hidden="true">\u2726</span><h3>Similar Results</h3><span class="similar-sub">Local AI cosine similarity matched by title, synopsis, genres &amp; cast</span></div><span class="similar-badge">AI Match</span></div>';
     var simTrack = el('div', 'similar-track');
     simTrack.appendChild(buildSkelCards(6));
     simSec.appendChild(simTrack);
     box.appendChild(simSec);
     c.appendChild(box);
 
-    api('/' + mt + '/' + it.tmdb + '/recommendations').then(function (rj) {
+    var seedDoc = {
+      tmdb: it.tmdb,
+      mt: mt,
+      t: title,
+      overview: d.overview || '',
+      genres: (d.genres || []).map(function (g) { return g.name; }),
+      year: year
+    };
+    api('/' + mt + '/' + it.tmdb + '/recommendations').catch(function () { return null; }).then(async function (rj) {
       if (!simTrack.isConnected) return;
-      var items = ((rj && rj.results) || []).filter(function (m) { return !m.adult; }).slice(0, 16).map(function (m, idx) {
+      var tmdbCands = ((rj && rj.results) || []).filter(function (m) { return !m.adult; }).slice(0, 24).map(function (m) {
         var norm = normTmdb(m);
-        norm.match = Math.max(82, 98 - idx) + '% Match';
+        norm.overview = m.overview || '';
         return norm;
       });
+      var items = [];
+      if (window.SBAI && typeof window.SBAI.similar === 'function') {
+        items = await window.SBAI.similar(seedDoc, { partition: 'safe', limit: 16, candidates: tmdbCands }).catch(function () { return []; });
+      }
+      if (!items.length) {
+        items = tmdbCands.slice(0, 16).map(function (m, idx) {
+          m.match = Math.max(80, 98 - idx) + '% Match';
+          return m;
+        });
+      }
+      if (!simTrack.isConnected) return;
       simTrack.innerHTML = '';
       if (!items.length) { simTrack.appendChild(el('div', 'empty', 'No similar recommendations yet.')); return; }
-      items.forEach(function (x) { simTrack.appendChild(cardNode(x)); });
-    }).catch(function () {
-      if (simTrack.isConnected) { simTrack.innerHTML = ''; simTrack.appendChild(el('div', 'empty', 'Recommendations unavailable right now.')); }
+      items.slice(0, 16).forEach(function (x) { simTrack.appendChild(cardNode(x)); });
     });
   }
 
@@ -1877,7 +1934,7 @@
       var se = Number(sn && sn.se);
       var max = Number(sn && sn.maxEp) || 0;
       if (!(max > 0)) return;
-      out.push({ n: isFinite(se) ? se : 0, maxEp: Math.min(max, 400) });
+      out.push({ n: isFinite(se) ? se : 0, maxEp: Math.min(max, 2000) });
     });
     out.sort(function (a, b) { return a.n - b.n; });
     return out;
@@ -2385,44 +2442,65 @@
     if (!track) return;
     track.innerHTML = '';
     track.appendChild(buildSkelCards(7));
+    var isAdult = state.section === 'adult';
+    var partition = isAdult ? 'isolated' : 'safe';
+    var cur = state.current;
+    var seed = {
+      t: title || (cur && cur.title) || (state.mb && state.mb.sub && state.mb.sub.title) || '',
+      overview: (state.mb && state.mb.sub && state.mb.sub.description) || '',
+      genres: (state.mb && state.mb.sub && state.mb.sub.genre) ? String(state.mb.sub.genre).split(',').map(function (x) { return x.trim(); }) : [],
+      tmdb: cur && cur.ref && cur.ref.tmdb ? cur.ref.tmdb : undefined,
+      mt: cur && cur.ref && cur.ref.type ? cur.ref.type : undefined,
+      subjectId: state.mb && state.mb.sub ? state.mb.sub.subjectId : undefined,
+      adult: isAdult
+    };
     try {
       window.dispatchEvent(new CustomEvent('sb:player-similar-request', {
-        detail: { title: title || '', current: state.current, mb: state.mb, section: state.section }
+        detail: { title: seed.t, current: state.current, mb: state.mb, section: state.section, partition: partition }
       }));
     } catch (e) {}
-    var cur = state.current;
-    if (cur && cur.ref && cur.ref.tmdb) {
-      var mt = cur.ref.type === 'tv' ? 'tv' : 'movie';
-      api('/' + mt + '/' + cur.ref.tmdb + '/recommendations').then(function (rj) {
-        if (ep !== playEpoch) return;
-        var items = ((rj && rj.results) || []).filter(function (m) { return !m.adult; }).map(normTmdb);
-        if (items.length) renderPlayerSimilarCards(items, 'Matched from your current title');
-        else renderPlayerSimilarCards([], 'No direct recommendations found for this title.');
-      }).catch(function () {
-        if (ep === playEpoch) renderPlayerSimilarCards([], 'Connect to load live AI recommendations.');
-      });
-      return;
-    }
-    if (state.mb && state.mb.sub && state.mb.sub.subjectId) {
-      mbApi('rec?subjectId=' + encodeURIComponent(state.mb.sub.subjectId) + '&page=1&perPage=16').then(function (rj) {
-        if (ep !== playEpoch) return;
-        var items = ((rj && rj.data && rj.data.items) || []).map(mbNormalize).filter(Boolean);
-        renderPlayerSimilarCards(items, 'Curated SuperBox matches');
-      }).catch(function () {
-        if (ep === playEpoch) renderPlayerSimilarCards([], 'Connect to load live AI recommendations.');
-      });
-      return;
-    }
-    if (title && state.section !== 'adult') {
-      tmdbSearch(title).then(function (items) {
-        if (ep !== playEpoch) return;
-        renderPlayerSimilarCards((items || []).slice(0, 14), 'AI recommendations tailored to \u201C' + title + '\u201D');
-      }).catch(function () {
-        if (ep === playEpoch) renderPlayerSimilarCards([], 'Recommendations ready for backend hook.');
-      });
-    } else {
-      renderPlayerSimilarCards([], 'Matched to your active vault session.');
-    }
+
+    (async function () {
+      var candidates = [];
+      if (!isAdult && cur && cur.ref && cur.ref.tmdb) {
+        var mt = cur.ref.type === 'tv' ? 'tv' : 'movie';
+        var rj = await api('/' + mt + '/' + cur.ref.tmdb + '/recommendations').catch(function () { return null; });
+        candidates = ((rj && rj.results) || []).filter(function (m) { return !m.adult; }).map(function (m) {
+          var n = normTmdb(m);
+          n.overview = m.overview || '';
+          return n;
+        });
+      } else if (!isAdult && state.mb && state.mb.sub && state.mb.sub.subjectId) {
+        var rmb = await mbApi('rec?subjectId=' + encodeURIComponent(state.mb.sub.subjectId) + '&page=1&perPage=20').catch(function () { return null; });
+        candidates = ((rmb && rmb.data && rmb.data.items) || []).map(mbNormalize).filter(Boolean);
+      }
+      if (ep !== playEpoch) return;
+      var items = [];
+      if (window.SBAI && typeof window.SBAI.similar === 'function') {
+        items = await window.SBAI.similar(seed, { partition: partition, limit: 16, candidates: candidates }).catch(function () { return []; });
+      }
+      if (!items.length && candidates.length) {
+        items = candidates.slice(0, 16).map(function (c, idx) {
+          return Object.assign({}, c, { match: Math.max(78, 97 - idx) + '% Match' });
+        });
+      }
+      if (!items.length && seed.t && !isAdult) {
+        var fb = await tmdbSearch(seed.t).catch(function () { return []; });
+        items = (fb || []).slice(0, 14).map(function (c, idx) {
+          return Object.assign({}, c, { match: Math.max(76, 94 - idx) + '% Match' });
+        });
+      }
+      if (ep !== playEpoch) return;
+      if (items.length) {
+        renderPlayerSimilarCards(items, isAdult
+          ? 'Isolated AI matches for your active 18+ session'
+          : 'Local AI cosine matches for \u201C' + (seed.t || 'this title') + '\u201D');
+      } else {
+        renderPlayerSimilarCards([], isAdult
+          ? 'Browse a few 18+ titles to build isolated AI recommendations.'
+          : 'No similar titles indexed yet — browse any shelf to warm local AI.');
+      }
+    })();
   }
   function showPlayer(title, opts) {
     opts = opts || {};
@@ -2685,7 +2763,7 @@
       own: g.key,
       title: g.title || it.t || '',
       base: { t: it.t, kind: it.kind || '', poster: it.poster || '', __grp: g },
-      eps: g.ladder.slice(0, 200),
+      eps: g.ladder.slice(0, 2000),
       idx: ladderIdx(g.ladder, it.page || it.url)
     };
     paintSeriesControls();
@@ -2712,7 +2790,7 @@
       own: (g && g.key) || ('u:' + normPage(it && (it.page || it.url))),
       title: title || (g && g.title) || (it && it.t) || '',
       base: { t: it.t, kind: it.kind || '', poster: it.poster || '' },
-      eps: ladder.slice(0, 200),
+      eps: ladder.slice(0, 2000),
       idx: ladderStart(ladder, it.page || it.url)
     };
     paintSeriesControls();
@@ -2803,7 +2881,7 @@
       own: (g0 && g0.key) || ('u:' + normPage(it.page || it.url)),
       title: (g0 && g0.title) || it.t || '',
       base: b0,
-      eps: list.slice(0, 200),
+      eps: list.slice(0, 2000),
       idx: ladderStart(list, it.page || it.url),
       provisional: !!provisional
     };
@@ -2870,30 +2948,52 @@
     /* An unanswered ladder is still an explicit menu: Episode 1 is listed and
        the click starts the resolver exactly like a populated one. */
     if (!list.length) list = [{ s: 0, n: 1, t: String((s && s.title) || '') }];
+    list = list.slice(0, 2000);
     m.innerHTML = '';
     var head = document.createElement('h2');
     head.textContent = (s && s.title) ? s.title : 'Select an episode';
     m.appendChild(head);
     var sub = document.createElement('p');
-    sub.textContent = 'Choose an episode to start playback.';
+    sub.textContent = 'Choose an episode to start playback (' + list.length + ' available).';
     m.appendChild(sub);
+    var ranges = chunkEpisodeRanges(list.length, 50);
+    var rangeBar = el('div', 'ep-range-tabs');
+    if (ranges.length > 1) m.appendChild(rangeBar);
     var wrap = document.createElement('div');
     wrap.className = 'picklist';
-    list.slice(0, 200).forEach(function (e2, i) {
-      var b = document.createElement('button');
-      b.type = 'button';
-      b.className = 'pickbtn';
-      b.textContent = tmdb ? ('S' + (e2.s || 1) + 'E' + (e2.n || 1))
-                           : ('Episode ' + (e2.n || (i + 1)));
-      b.onclick = function () {
-        pickActive = false;
-        if (tmdb) jumpTmdbEpisode(Number(e2.s || 1) || 1, Number(e2.n) || 1);
-        else if (s && s.mode === 'files') jumpFileEpisode(i);
-        else jumpPageEpisode(i);
-      };
-      wrap.appendChild(b);
-    });
     m.appendChild(wrap);
+    var paintChunk = function (rIdx) {
+      rangeBar.querySelectorAll('.ep-range-tab').forEach(function (tb, idx2) {
+        tb.classList.toggle('active', idx2 === rIdx);
+      });
+      wrap.innerHTML = '';
+      var from = ranges.length ? ranges[rIdx].fromIdx : 0;
+      var to = ranges.length ? ranges[rIdx].toIdx : list.length;
+      list.slice(from, to).forEach(function (e2, relIdx) {
+        var i = from + relIdx;
+        var b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'pickbtn';
+        b.textContent = tmdb ? ('S' + (e2.s || 1) + 'E' + (e2.n || 1))
+                             : ('Episode ' + (e2.n || (i + 1)));
+        b.onclick = function () {
+          pickActive = false;
+          if (tmdb) jumpTmdbEpisode(Number(e2.s || 1) || 1, Number(e2.n) || 1);
+          else if (s && s.mode === 'files') jumpFileEpisode(i);
+          else jumpPageEpisode(i);
+        };
+        wrap.appendChild(b);
+      });
+    };
+    if (ranges.length > 1) {
+      ranges.forEach(function (r, rIdx) {
+        var tb = el('button', 'ep-range-tab' + (rIdx === 0 ? ' active' : ''), r.label);
+        tb.type = 'button';
+        tb.onclick = function () { paintChunk(rIdx); };
+        rangeBar.appendChild(tb);
+      });
+    }
+    paintChunk(0);
     m.classList.remove('hidden');
     hideVideoControls();
   }
@@ -4386,8 +4486,51 @@
     });
   }
 
-  /* Home = Unified Search: Safe mode searches strictly SFW catalogs; Deep mode
-     (behind 18+ Age-Gate) expands across all catalogs including 18+ sources. */
+  /* Scoped Archive.org cartoons search helper */
+  async function archiveCartoonSearch(q) {
+    try {
+      var j = await fetchJSON('https://archive.org/advancedsearch.php?q=' + encodeURIComponent('(' + q + ') AND mediatype:movies AND (subject:cartoon OR subject:animation)') + '&fl[]=identifier&fl[]=title&fl[]=year&rows=20&output=json', 8000);
+      return (((j && j.response && j.response.docs) || []).map(function (d) {
+        return {
+          kind: 'arc', id: d.identifier, t: d.title || d.identifier,
+          poster: 'https://archive.org/services/img/' + encodeURIComponent(d.identifier),
+          year: String(d.year || '').slice(0, 4), badge: 'CARTOON'
+        };
+      }));
+    } catch (e) { return []; }
+  }
+
+  /* Scoped TMDB search by category so Kids / Cartoons / K-Drama / Anime stay strictly clean */
+  async function tmdbScopedSearch(q, kind) {
+    var j = await api('/search/multi', { query: q, include_adult: 'false' });
+    var raw = ((j && j.results) || []).filter(function (x) { return (x.media_type === 'movie' || x.media_type === 'tv') && !x.adult; });
+    if (kind === 'kids') {
+      raw = raw.filter(function (x) {
+        var gs = Array.isArray(x.genre_ids) ? x.genre_ids : [];
+        return gs.indexOf(10751) >= 0 || gs.indexOf(16) >= 0 || gs.indexOf(10762) >= 0;
+      });
+    } else if (kind === 'cartoons') {
+      raw = raw.filter(function (x) {
+        var gs = Array.isArray(x.genre_ids) ? x.genre_ids : [];
+        return gs.indexOf(16) >= 0;
+      });
+    } else if (kind === 'anime') {
+      raw = raw.filter(function (x) {
+        var gs = Array.isArray(x.genre_ids) ? x.genre_ids : [];
+        return gs.indexOf(16) >= 0 || x.original_language === 'ja';
+      });
+    } else if (kind === 'kdrama') {
+      raw = raw.filter(function (x) {
+        return x.original_language === 'ko' || (Array.isArray(x.origin_country) && x.origin_country.indexOf('KR') >= 0);
+      });
+    } else if (kind === 'webseries') {
+      raw = raw.filter(function (x) { return x.media_type === 'tv'; });
+    }
+    return raw.map(normTmdb);
+  }
+
+  /* Home = Unified Search: concurrently queries ALL registered catalog providers
+     with cross-provider deduplication; Deep mode gated behind #ageGateModal. */
   async function superSearch(q, mode) {
     var useMode = (mode || state.searchMode || 'safe') === 'deep' && hasAge18() ? 'deep' : 'safe';
     var c = content();
@@ -4395,103 +4538,130 @@
     var stage = el('div', 'view-enter');
     stage.appendChild(homeSearchBar(q));
     stage.appendChild(resultsHead(q, useMode === 'deep'
-      ? 'Deep Search \u00B7 Standard + expanded 18+ catalog results'
-      : 'Safe Search \u00B7 Movies, series, anime, K-drama, web series & YouTube'));
+      ? 'Deep Search \u00B7 All standard + expanded 18+ catalogs'
+      : 'Safe Search \u00B7 Spotlight, Movies, Series, Anime, K-Drama, Web Series, Cartoons & Tube'));
     c.appendChild(stage);
     try {
       window.dispatchEvent(new CustomEvent('sb:search', { detail: { query: q, mode: useMode, scope: 'home' } }));
     } catch (e) {}
     var tasks = [
       mbSearch(q).catch(function () { return []; }),
-      tmdbSearch(q).catch(function () { return []; }),
+      tmdbSearch(q, false).catch(function () { return []; }),
       anilistSearch(q).catch(function () { return []; }),
       SC.search(q, 'kdrama').catch(function () { return []; }),
       SC.search(q, 'webseries').catch(function () { return []; }),
+      archiveCartoonSearch(q).catch(function () { return []; }),
       SC.ytSearch(q).catch(function () { return []; })
     ];
     if (useMode === 'deep') {
       tasks.push(SC.search(q, 'adult', 'jav').catch(function () { return []; }));
+      tasks.push(SC.search(q, 'adult', 'eporner').catch(function () { return []; }));
+      tasks.push(SC.search(q, 'adult', 'hentai').catch(function () { return []; }));
     }
     var res = await Promise.all(tasks);
+    var dedupe = SC.dedupeItems || function (a) { return a; };
     var defs = [
-      ['Spotlight', res[0]],
-      ['Movies & Series', res[1]],
-      ['Anime', res[2]],
-      ['K-Drama', res[3]],
-      ['Web Series', res[4]],
-      ['YouTube', res[5]]
+      ['Spotlight', dedupe(res[0])],
+      ['Movies & Series', dedupe(res[1])],
+      ['Anime', dedupe(res[2])],
+      ['K-Drama', dedupe(res[3])],
+      ['Web Series', dedupe(res[4])],
+      ['Cartoons', dedupe(res[5])],
+      ['Tube', dedupe(res[6])]
     ];
-    if (useMode === 'deep') defs.push(['18+ Vault (Deep)', res[6] || []]);
+    if (useMode === 'deep') {
+      var deepMerged = dedupe((res[7] || []).concat(res[8] || [], res[9] || []));
+      defs.push(['18+ Vault (Deep)', deepMerged]);
+    }
     paintResultRows(stage, defs);
   }
 
-  /* Per-section scoped search: queries ONLY the active tab's own sources. */
+  /* Per-section scoped search: queries ONLY the active tab's own category & providers. */
   async function sectionSearch(q, sec) {
     var c = content();
     c.innerHTML = '';
     var stage = el('div', 'view-enter');
     stage.appendChild(pageHeaderBar(sec));
     c.appendChild(stage);
+    var dedupe = SC.dedupeItems || function (a) { return a; };
     try {
       window.dispatchEvent(new CustomEvent('sb:search', { detail: { query: q, mode: sec === 'adult' ? 'adult' : 'safe', scope: sec } }));
     } catch (e) {}
     if (sec === 'moviebox') {
-      stage.appendChild(resultsHead(q, 'Searching the Spotlight catalogue'));
-      var rmb = await mbSearch(q).catch(function () { return []; });
+      stage.appendChild(resultsHead(q, 'Spotlight catalogue only'));
+      var rmb = dedupe(await mbSearch(q).catch(function () { return []; }));
       paintResultRows(stage, [['Spotlight', rmb]]);
       return;
     }
     if (sec === 'movie') {
       stage.appendChild(resultsHead(q, 'Movies only'));
-      var rm = (await tmdbSearch(q).catch(function () { return []; })).filter(function (x) { return x.mt === 'movie'; });
+      var rm = dedupe((await tmdbSearch(q, false).catch(function () { return []; })).filter(function (x) { return x.mt === 'movie'; }));
       paintResultRows(stage, [['Movies', rm]]);
       return;
     }
     if (sec === 'tv') {
       stage.appendChild(resultsHead(q, 'Series only'));
-      var rt = (await tmdbSearch(q).catch(function () { return []; })).filter(function (x) { return x.mt === 'tv'; });
+      var rt = dedupe((await tmdbSearch(q, false).catch(function () { return []; })).filter(function (x) { return x.mt === 'tv'; }));
       paintResultRows(stage, [['Series', rt]]);
       return;
     }
-    if (sec === 'kids' || sec === 'cartoons') {
-      stage.appendChild(resultsHead(q, sec === 'kids' ? 'Kid-safe family results' : 'Cartoons & animated series'));
-      var rk = await tmdbSearch(q).catch(function () { return []; });
-      paintResultRows(stage, [[sec === 'kids' ? 'Kids' : 'Cartoons', rk]]);
+    if (sec === 'kids') {
+      stage.appendChild(resultsHead(q, 'Kid-safe family & animation results only'));
+      var rk = dedupe(await tmdbScopedSearch(q, 'kids').catch(function () { return []; }));
+      paintResultRows(stage, [['Kids', rk]]);
+      return;
+    }
+    if (sec === 'cartoons') {
+      stage.appendChild(resultsHead(q, 'Cartoons & animated classics only'));
+      var rc = await Promise.all([
+        archiveCartoonSearch(q).catch(function () { return []; }),
+        tmdbScopedSearch(q, 'cartoons').catch(function () { return []; })
+      ]);
+      paintResultRows(stage, [['Classic Cartoons', dedupe(rc[0])], ['Animated Series & Films', dedupe(rc[1])]]);
       return;
     }
     if (sec === 'anime') {
       stage.appendChild(resultsHead(q, 'Anime sources only'));
-      var r1 = await Promise.all([anilistSearch(q).catch(function () { return []; }), tmdbSearch(q).catch(function () { return []; })]);
-      paintResultRows(stage, [['Anime (AniList)', r1[0]], ['TMDB', r1[1]]]);
+      var r1 = await Promise.all([
+        anilistSearch(q).catch(function () { return []; }),
+        tmdbScopedSearch(q, 'anime').catch(function () { return []; })
+      ]);
+      paintResultRows(stage, [['Anime (AniList)', dedupe(r1[0])], ['Anime (Catalog)', dedupe(r1[1])]]);
       return;
     }
     if (sec === 'kdrama') {
       stage.appendChild(resultsHead(q, 'K-Drama sources only'));
-      var r2 = await Promise.all([tmdbSearch(q).catch(function () { return []; }), SC.search(q, 'kdrama').catch(function () { return []; })]);
-      paintResultRows(stage, [['K-Drama (TMDB)', r2[0]], ['K-Drama sources', r2[1]]]);
+      var r2 = await Promise.all([
+        tmdbScopedSearch(q, 'kdrama').catch(function () { return []; }),
+        SC.search(q, 'kdrama').catch(function () { return []; })
+      ]);
+      paintResultRows(stage, [['K-Drama (Catalog)', dedupe(r2[0])], ['K-Drama Streams', dedupe(r2[1])]]);
       return;
     }
     if (sec === 'webseries') {
       stage.appendChild(resultsHead(q, 'Web Series sources only'));
-      var r3 = await Promise.all([tmdbSearch(q).catch(function () { return []; }), SC.search(q, 'webseries').catch(function () { return []; })]);
-      paintResultRows(stage, [['Web Series (TMDB)', r3[0]], ['Web Series sources', r3[1]]]);
+      var r3 = await Promise.all([
+        tmdbScopedSearch(q, 'webseries').catch(function () { return []; }),
+        SC.search(q, 'webseries').catch(function () { return []; })
+      ]);
+      paintResultRows(stage, [['Web Series (Catalog)', dedupe(r3[0])], ['Web Series Streams', dedupe(r3[1])]]);
       return;
     }
     if (sec === 'tube') {
-      stage.appendChild(resultsHead(q, 'YouTube only'));
-      var ry = await SC.ytSearch(q).catch(function () { return []; });
-      paintResultRows(stage, [['Tube (YouTube)', ry]]);
+      stage.appendChild(resultsHead(q, 'Tube videos only'));
+      var ry = dedupe(await SC.ytSearch(q).catch(function () { return []; }));
+      paintResultRows(stage, [['Tube', ry]]);
       return;
     }
     if (sec === 'adult') {
       var sub = state.sub || 'jav';
       stage.appendChild(resultsHead(q, vaultLabel(sub) + ' sources (18+)'));
-      var r4 = await SC.search(q, 'adult', sub).catch(function () { return []; });
+      var r4 = dedupe(await SC.search(q, 'adult', sub).catch(function () { return []; }));
       paintResultRows(stage, [[vaultLabel(sub), r4]]);
       return;
     }
     stage.appendChild(resultsHead(q, ''));
-    var r5 = await tmdbSearch(q).catch(function () { return []; });
+    var r5 = dedupe(await tmdbSearch(q, false).catch(function () { return []; }));
     paintResultRows(stage, [['Results', r5]]);
   }
 

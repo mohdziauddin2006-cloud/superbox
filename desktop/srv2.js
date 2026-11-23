@@ -52,6 +52,8 @@ const path = require('path');
 const os = require('os');
 const { Readable } = require('stream');
 const { URL } = require('url');
+const tmdbClient = require('./tmdb-client');
+const aiRecommend = require('./ai-recommend');
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
 const PORTS = [46901, 46902, 46903];
 let LIVE_PORT = PORTS[0];
@@ -1626,7 +1628,7 @@ function normPageKey(u) {
         (the show's own episode list) form the ladder.
    Anything else (page 2 of a list, links to other shows, category links) is
    never mistaken for an episode. */
-const EP_MAX = 400;
+const EP_MAX = 2000;
 function findEpisodeLinks(html, pageUrl) {
   const out = [], seen = {}, baseSeen = {};
   let curHost = '', curPath = '', curQuery = '';
@@ -1986,39 +1988,18 @@ const EPS_CACHE = new Map();
 const AI_EPS_CACHE = new Map();
 const JAV_EPS_CACHE = new Map();
 async function tmdbEpisodes(id) {
-  const key = String(id);
+  const key = String(id || '').trim();
+  if (!key) return null;
   const hit = EPS_CACHE.get(key);
   if (hit && Date.now() - hit.t < 600000) return hit.v;
-  const base2 = 'https://api.themoviedb.org/3/tv/' + encodeURIComponent(key);
-  let d = null;
-  try {
-    const r = await tmdbJson(base2 + '?api_key=' + TMDB_KEY, 9000);
-    if (!r || !r.ok) return null;
-    d = JSON.parse(r.body.toString('utf8'));
-  } catch (e) { return null; }
-  if (!d) return null;
-  const seasons = (Array.isArray(d.seasons) ? d.seasons : [])
-    .filter(function (s) { return s && Number(s.season_number) >= 0 && Number(s.episode_count) > 0; })
-    .sort(function (a, b) { return Number(a.season_number) - Number(b.season_number); })
-    .slice(0, 40);
-  const out = await Promise.all(seasons.map(async function (s) {
-    const n = Number(s.season_number);
-    const label = String(s.name || ('Season ' + n));
-    try {
-      const rr = await tmdbJson(base2 + '/season/' + n + '?api_key=' + TMDB_KEY, 9000);
-      if (!rr || !rr.ok) return { n: n, name: label, eps: [] };
-      const sd = JSON.parse(rr.body.toString('utf8'));
-      const eps = (Array.isArray(sd.episodes) ? sd.episodes : [])
-        .filter(function (e2) { return e2 && Number(e2.episode_number) > 0; })
-        .sort(function (a, b) { return Number(a.episode_number) - Number(b.episode_number); })
-        .slice(0, 200)
-        .map(function (e2) { return { n: Number(e2.episode_number), name: String(e2.name || ('Episode ' + e2.episode_number)), air: String(e2.air_date || '') }; });
-      return { n: n, name: label, eps: eps };
-    } catch (e) { return { n: n, name: label, eps: [] }; }
-  }));
-  const v = { ok: true, id: key, name: String(d.name || ''), seasons: out };
-  if (out.some(function (s) { return s.eps.length; })) EPS_CACHE.set(key, { t: Date.now(), v: v });
-  if (EPS_CACHE.size > 40) { const now = Date.now(); for (const [k2, v2] of EPS_CACHE) { if (now - v2.t > 600000) EPS_CACHE.delete(k2); } }
+  const v = await tmdbClient.fetchAllEpisodes(key, TMDB_KEY, { timeoutMs: 4200 });
+  if (v && Array.isArray(v.seasons) && v.seasons.some(function (s) { return s.eps && s.eps.length; })) {
+    EPS_CACHE.set(key, { t: Date.now(), v: v });
+  }
+  if (EPS_CACHE.size > 60) {
+    const now = Date.now();
+    for (const [k2, v2] of EPS_CACHE) { if (now - v2.t > 600000) EPS_CACHE.delete(k2); }
+  }
   return v;
 }
 
@@ -2516,29 +2497,10 @@ async function tmdbIps() {
   return ips;
 }
 async function tmdbJson(rawUrl, ms) {
-  const u = new URL(rawUrl);
-  const ips = await tmdbIps();
-  const lookup = function (host, opts, cb) {
-    if (!ips.length) return require('dns').lookup(host, opts, cb);
-    if (opts && opts.all) return cb(null, ips.map(function (a) { return { address: a, family: 4 }; }));
-    cb(null, ips[0], 4);
-  };
-  const https = require('https');
-  return new Promise(function (resolve, reject) {
-    const req = https.get(u, {
-      lookup: lookup,
-      timeout: ms || 9000,
-      headers: { 'User-Agent': UA, 'Accept': 'application/json', 'Accept-Language': 'en-US,en;q=0.9' }
-    }, function (r) {
-      const chunks = [];
-      r.on('data', function (c) { chunks.push(c); });
-      r.on('end', function () {
-        resolve({ status: r.statusCode || 0, ok: r.statusCode >= 200 && r.statusCode < 300, body: Buffer.concat(chunks), headers: r.headers || {} });
-      });
-    });
-    req.on('timeout', function () { req.destroy(new Error('tmdb timeout')); });
-    req.on('error', reject);
-  });
+  const opts = typeof ms === 'object' && ms !== null
+    ? ms
+    : { timeoutMs: Math.min(Number(ms) || 3800, 4500), retries: 2, allowFallback: false };
+  return tmdbClient.tmdbJson(rawUrl, opts);
 }
 
 // 10-second in-memory response cache
@@ -2839,6 +2801,59 @@ async function handle(req, res){
       let st = null;
       try { st = v.status(); } catch (e2) {}
       return send(500, { ok: false, state: 'error', error: String((e && e.message) || e), status: st });
+    }
+  }
+
+  /* ---- Local ONNX / TF-IDF AI Recommendation Service --------------------
+     Strictly partitioned ('safe' vs 'isolated') semantic similarity engine. */
+  if (path === '/api/ai/status' || path === '/api/ai/index' || path === '/api/ai/similar') {
+    const sendAi = function (code, obj) {
+      res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify(obj));
+    };
+    try {
+      if (path === '/api/ai/status') return sendAi(200, aiRecommend.status());
+      if (path === '/api/ai/index' && req.method === 'POST') {
+        const raw = await reqBody(req, 512 * 1024, 8000);
+        let parsed = {};
+        try { parsed = JSON.parse(raw.toString('utf8') || '{}'); } catch (e) { return sendAi(400, { ok: false, error: 'invalid json' }); }
+        const items = Array.isArray(parsed.items) ? parsed.items.slice(0, 400) : [];
+        const partition = parsed.partition === 'isolated' ? 'isolated' : 'safe';
+        const out = await aiRecommend.indexItems(items, partition);
+        return sendAi(200, Object.assign({ ok: true }, out));
+      }
+      if (path === '/api/ai/similar') {
+        let seed = {};
+        let partition = 'safe';
+        let limit = 16;
+        let candidates = null;
+        if (req.method === 'POST') {
+          const raw = await reqBody(req, 512 * 1024, 8000);
+          let parsed = {};
+          try { parsed = JSON.parse(raw.toString('utf8') || '{}'); } catch (e) { return sendAi(400, { ok: false, error: 'invalid json' }); }
+          seed = parsed.seed && typeof parsed.seed === 'object' ? parsed.seed : {};
+          partition = parsed.partition === 'isolated' ? 'isolated' : 'safe';
+          limit = Math.max(4, Math.min(24, Number(parsed.limit) || 16));
+          if (Array.isArray(parsed.candidates)) candidates = parsed.candidates.slice(0, 300);
+        } else {
+          partition = u.searchParams.get('partition') === 'isolated' ? 'isolated' : 'safe';
+          limit = Math.max(4, Math.min(24, Number(u.searchParams.get('limit')) || 16));
+          seed = {
+            t: u.searchParams.get('title') || '',
+            overview: u.searchParams.get('overview') || '',
+            genres: (u.searchParams.get('genres') || '').split(',').filter(Boolean),
+            tags: (u.searchParams.get('tags') || '').split(',').filter(Boolean),
+            cast: (u.searchParams.get('cast') || '').split(',').filter(Boolean),
+            tmdb: u.searchParams.get('tmdb') || undefined,
+            mt: u.searchParams.get('mt') || undefined
+          };
+        }
+        const out = await aiRecommend.querySimilar(seed, { partition: partition, limit: limit, candidates: candidates });
+        return sendAi(200, out);
+      }
+      return sendAi(405, { ok: false, error: 'method not allowed' });
+    } catch (e) {
+      return sendAi(500, { ok: false, error: String((e && e.message) || e).slice(0, 120) });
     }
   }
 
@@ -3167,21 +3182,27 @@ async function handle(req, res){
     catch (e) { res.writeHead(400, {'Content-Type':'application/json; charset=utf-8'}); return res.end('{"error":"bad tmdb path"}'); }
     if (!tgt.searchParams.get('api_key')) tgt.searchParams.set('api_key', TMDB_KEY);
     try {
-      /* One bounded public-DNS request (see tmdbJson); TMDB answers in ms once
-         the real CloudFront edge is reached, so no second attempt is needed. */
-      const r = await tmdbJson(tgt.href, 9000);
+      /* Non-blocking TMDB proxy: short AbortController timeout + disk cache +
+         retry-with-backoff + graceful fallback so TMDB outages never block UI. */
+      const r = await tmdbClient.tmdbJson(tgt.href, { timeoutMs: 3800, retries: 2, allowFallback: true });
       const body = r.body;
       const cType = (r.headers && r.headers['content-type']) || 'application/json; charset=utf-8';
-      const hdrs = { 'Content-Type': cType, 'X-Upstream-Status': String(r.status) };
-      setCached(req.url, r.status, hdrs, body);
-      /* Catalogue rows (trending/popular/discover, search pages) live 15
-         minutes; only a real 200 is cached, never a rate-limit/error body. */
-      if (r.status === 200) setCatalogCached(req.url, r.status, hdrs, body, CATALOG_TTL);
-      res.writeHead(r.status, hdrs);
+      const hdrs = {
+        'Content-Type': cType,
+        'X-Upstream-Status': String(r.status),
+        'X-TMDB-Cache': (r.headers && r.headers['x-tmdb-cache']) || (r.cached ? 'HIT' : 'MISS')
+      };
+      if (r.fallback) hdrs['X-TMDB-Fallback'] = '1';
+      if (r.status === 200 && !r.fallback) {
+        setCached(req.url, r.status, hdrs, body);
+        setCatalogCached(req.url, r.status, hdrs, body, CATALOG_TTL);
+      }
+      res.writeHead(r.status || 200, hdrs);
       return res.end(body);
     } catch (e) {
-      res.writeHead(502, {'Content-Type':'application/json; charset=utf-8'});
-      return res.end('{"error":"tmdb proxy failed: ' + String((e && e.message) || e).replace(/[^a-zA-Z0-9 .:_-]/g, '') + '"}');
+      const fb = tmdbClient.fallbackPayloadFor(tgt.href);
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'X-TMDB-Fallback': '1' });
+      return res.end(JSON.stringify(fb));
     }
   }
 
@@ -3257,7 +3278,7 @@ async function handle(req, res){
       if (Array.isArray(o.eps) && o.eps.length > 1) {
         o.eps = o.eps
           .filter(function (x) { return x && /^https?:/i.test(String(x.url || '')); })
-          .slice(0, 200)
+          .slice(0, 2000)
           .map(function (x) { return { n: Number(x.n) || 0, s: Number(x.s) || 0, url: String(x.url), t: String(x.t || ''), d: x.d ? 1 : 0, cur: x.cur ? 1 : 0 }; });
         if (o.eps.length < 2) delete o.eps;
       } else { delete o.eps; }

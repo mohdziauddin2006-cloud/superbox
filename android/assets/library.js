@@ -100,6 +100,9 @@
 
   // ---------------------------------------------------------------- helpers
   function getJson(url) {
+    if (/^\/tmdb\/3\//.test(String(url || '')) && SC && SC.tmdbFetch) {
+      return SC.tmdbFetch(url, { timeoutMs: 4500, retries: 2 });
+    }
     return fetch(url, { cache: 'no-store' }).then(function (r) {
       if (!r.ok) throw new Error('HTTP ' + r.status);
       return r.text();
@@ -577,12 +580,14 @@
       list = [];
     }
     if (token !== st.token || !q.el.isConnected) return;
+    var aiPart = (q.row && (q.row.sec === 'adult' || q.row.adult || /^(jav|ep|ai|htv)$/.test(q.row.kind || ''))) ? 'isolated' : 'safe';
     if (!list.length) {
       if (cached && cached.length) {
         if (!track) return;
         track.innerHTML = cards(cached.slice(0, 24));
         if (count) count.textContent = cached.length + ' cached';
         q.el.setAttribute('data-cached', '1');
+        if (window.SBAI && window.SBAI.index) window.SBAI.index(cached, aiPart);
         return;
       }
       q.el.classList.add('wa-empty-row');
@@ -595,6 +600,7 @@
     if (count) count.textContent = list.length + ' titles';
     if (track) track.innerHTML = cards(list.slice(0, 24));
     cachePut(q.row, list);
+    if (window.SBAI && window.SBAI.index) window.SBAI.index(list, aiPart);
   }
 
   function dedupe(list) {
@@ -642,36 +648,44 @@
       var list = [];
       try {
         if (scope === 'adult-video') {
-          if (SC.epRow) {
-            list = await SC.epRow({ q: q, order: 'most-popular', badge: '18+' }).catch(function () { return []; });
-          }
-          if (!list.length && SC.search) {
-            list = await SC.search(q, 'adult').catch(function () { return []; });
-          }
-        } else if (scope === 'webseries' || scope === 'kdrama') {
-          list = await SC.search(q, scope).catch(function () { return []; });
-          if (list.length < 4) {
-            var extra = await tmdbSearch(q);
-            list = dedupe(list.concat(extra));
-          }
+          var vSub = st.sub || 'jav';
+          var aJobs = [];
+          if (SC.search) aJobs.push(SC.search(q, 'adult', vSub).catch(function () { return []; }));
+          if (SC.epRow) aJobs.push(SC.epRow({ q: q, order: 'most-popular', badge: '18+' }).catch(function () { return []; }));
+          if (SC.search && vSub !== 'jav') aJobs.push(SC.search(q, 'adult', 'jav').catch(function () { return []; }));
+          var aRes = await Promise.all(aJobs);
+          aRes.forEach(function (part) { if (part && part.length) list = list.concat(part); });
+        } else if (scope === 'webseries') {
+          var wsParts = await Promise.all([
+            SC.search(q, 'webseries').catch(function () { return []; }),
+            tmdbSearch(q, { onlyType: 'tv' })
+          ]);
+          list = (wsParts[0] || []).concat(wsParts[1] || []);
+        } else if (scope === 'kdrama') {
+          var kdParts = await Promise.all([
+            SC.search(q, 'kdrama').catch(function () { return []; }),
+            tmdbSearch(q, { onlyType: 'tv', lang: 'ko' })
+          ]);
+          list = (kdParts[0] || []).concat(kdParts[1] || []);
         } else if (scope === 'tube') {
           list = await ytRow({ q: q, badge: 'YT' }).catch(function () { return []; });
         } else if (scope === 'cartoons') {
-          var u = 'https://archive.org/advancedsearch.php?q=' + enc('(' + q + ') AND mediatype:movies AND (collection:classic_cartoons OR subject:cartoon OR subject:animation)') +
-            '&fl[]=identifier&fl[]=title&fl[]=year&rows=24&page=1&output=json';
-          var j = await getJson('/page?url=' + enc(u)).catch(function () { return null; });
-          var docs = (j && j.response && j.response.docs) || [];
-          list = docs.map(function (d) {
-            return { kind: 'arc', arc: d.identifier, t: clean(d.title || d.identifier || ''), poster: 'https://archive.org/services/img/' + d.identifier, year: d.year || '', badge: 'ARCHIVE' };
-          });
+          var cParts = await Promise.all([
+            archiveCartoonSearch(q),
+            tmdbSearch(q, { genreIds: [16] })
+          ]);
+          list = (cParts[0] || []).concat(cParts[1] || []);
         } else if (scope === 'kids') {
-          var km = await tmdbSearch(q);
-          list = km;
+          var kParts = await Promise.all([
+            tmdbSearch(q, { genreIds: [10751, 16, 10762] }),
+            archiveCartoonSearch(q)
+          ]);
+          list = (kParts[0] || []).concat(kParts[1] || []);
         } else {
           list = await searchAll(q);
         }
       } catch (e) { list = []; }
-      list = dedupe(list || []).slice(0, 48);
+      list = (SC.dedupeItems ? SC.dedupeItems(list) : dedupe(list || [])).slice(0, 48);
       if (!resultsHost.isConnected) return;
       resultsHost.innerHTML = '<div class="section-head"><h2>Results for “' + esc(q) + '” <em>' + list.length + '</em></h2>' +
         '<button type="button" data-ss-reset="1">Clear</button></div>' +
@@ -785,31 +799,66 @@
   }
 
   // ---------------------------------------------------------------- search
+  async function archiveCartoonSearch(q) {
+    try {
+      var u = 'https://archive.org/advancedsearch.php?q=' + enc('(' + q + ') AND mediatype:movies AND (collection:classic_cartoons OR subject:cartoon OR subject:animation)') +
+        '&fl[]=identifier&fl[]=title&fl[]=year&rows=20&page=1&output=json';
+      var j = await getJson('/page?url=' + enc(u)).catch(function () { return null; });
+      var docs = (j && j.response && j.response.docs) || [];
+      return docs.map(function (d) {
+        return { kind: 'arc', arc: d.identifier, t: clean(d.title || d.identifier || ''), poster: 'https://archive.org/services/img/' + d.identifier, year: d.year || '', badge: 'ARCHIVE' };
+      });
+    } catch (e) { return []; }
+  }
+
   async function searchAll(q) {
     var jobs = [
       tmdbSearch(q),
-      SC.search(q, 'webseries').catch(function () { return []; }),
-      SC.search(q, 'kdrama').catch(function () { return []; })
+      SC.search ? SC.search(q, 'webseries').catch(function () { return []; }) : Promise.resolve([]),
+      SC.search ? SC.search(q, 'kdrama').catch(function () { return []; }) : Promise.resolve([]),
+      archiveCartoonSearch(q),
+      ytRow({ q: q, badge: 'YT' }).catch(function () { return []; })
     ];
+    var settled = await Promise.all(jobs);
     var out = [];
-    for (var i = 0; i < jobs.length; i++) {
-      try {
-        var part = await jobs[i];
-        if (part && part.length) out = out.concat(part);
-      } catch (e) {}
+    for (var i = 0; i < settled.length; i++) {
+      if (settled[i] && settled[i].length) out = out.concat(settled[i]);
     }
-    return dedupe(out).slice(0, 60);
+    var merged = (SC.dedupeItems ? SC.dedupeItems(out) : dedupe(out)).slice(0, 60);
+    if (window.SBAI && window.SBAI.index && merged.length) window.SBAI.index(merged, 'safe');
+    return merged;
   }
 
-  async function tmdbSearch(q) {
+  async function tmdbSearch(q, opts) {
+    opts = opts || {};
     try {
-      var j = await getJson('/tmdb/3/search/multi?query=' + enc(q) + '&include_adult=false&page=1');
+      var path = opts.onlyType === 'tv'
+        ? '/tmdb/3/search/tv?query=' + enc(q) + '&include_adult=false&page=1'
+        : opts.onlyType === 'movie'
+          ? '/tmdb/3/search/movie?query=' + enc(q) + '&include_adult=false&page=1'
+          : '/tmdb/3/search/multi?query=' + enc(q) + '&include_adult=false&page=1';
+      var j = await getJson(path);
       return ((j && j.results) || []).filter(function (m) {
-        return m.media_type === 'movie' || m.media_type === 'tv';
+        if (!m || m.adult) return false;
+        var mt = opts.onlyType || m.media_type;
+        if (mt !== 'movie' && mt !== 'tv') return false;
+        if (opts.lang && m.original_language && m.original_language !== opts.lang) {
+          var oc = Array.isArray(m.origin_country) ? m.origin_country : [];
+          if (opts.lang === 'ko' && oc.indexOf('KR') < 0) return false;
+          if (opts.lang !== 'ko') return false;
+        }
+        if (opts.genreIds && opts.genreIds.length) {
+          var gids = Array.isArray(m.genre_ids) ? m.genre_ids : [];
+          if (!opts.genreIds.some(function (id) { return gids.indexOf(id) >= 0; })) return false;
+        }
+        return true;
       }).map(function (m) {
+        var mt = opts.onlyType || m.media_type;
         return {
-          kind: 'tmdb', tmdb: m.id, mt: m.media_type,
+          kind: 'tmdb', tmdb: m.id, mt: mt,
           t: clean(m.title || m.name || ''),
+          overview: clean(m.overview || ''),
+          genre_ids: m.genre_ids || [],
           poster: m.poster_path ? 'https://image.tmdb.org/t/p/w342' + m.poster_path : '',
           year: String(m.release_date || m.first_air_date || '').slice(0, 4),
           rating: m.vote_average ? Number(m.vote_average).toFixed(1) : '', badge: 'TMDB'
@@ -826,17 +875,23 @@
       }).join('') + '</select>' +
       '<div class="scoped-search-bar" data-scoped-search="livetv" style="margin:0;flex:1">' +
       '<svg class="ss-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.2-3.2"></path></svg>' +
-      '<input id="waLiveFilter" class="ss-input" type="search" placeholder="Search Live TV channels..."></div>' +
+      '<input id="waLiveFilter" class="ss-input" type="search" placeholder="Search Live TV channels...">' +
+      '<button type="button" class="ss-clear hidden" id="waLiveClear" aria-label="Clear">×</button></div>' +
       '</div><div id="waLiveGrid" class="wa-livegrid"><div class="empty">Loading channels…</div></div>';
     var sel = document.getElementById('waLiveGroup');
     var filter = document.getElementById('waLiveFilter');
+    var clearBtn = document.getElementById('waLiveClear');
     function paint() {
       var grid = document.getElementById('waLiveGrid');
       if (!grid) return;
-      var f = String(filter && filter.value || '').toLowerCase();
-      var list = liveChs.filter(function (c) { return !f || String(c.name || '').toLowerCase().indexOf(f) >= 0; });
+      var f = String(filter && filter.value || '').trim().toLowerCase();
+      if (clearBtn) clearBtn.classList.toggle('hidden', !f);
+      var list = liveChs.filter(function (c) {
+        if (!f) return true;
+        return (String(c.name || '') + ' ' + String(c.group || '')).toLowerCase().indexOf(f) >= 0;
+      });
       if (!list.length) {
-        grid.innerHTML = '<div class="empty">No channels responded.</div>';
+        grid.innerHTML = '<div class="empty">No channels matched.</div>';
         return;
       }
       grid.innerHTML = list.slice(0, 200).map(function (c, i) {
@@ -854,6 +909,7 @@
       });
     }
     filter.oninput = paint;
+    if (clearBtn) clearBtn.onclick = function () { filter.value = ''; paint(); filter.focus(); };
     function load(i) {
       liveGroup = i;
       var grid = document.getElementById('waLiveGrid');
@@ -991,35 +1047,58 @@
       '</div>';
     detailEl.innerHTML = '<div class="wad-scroll" id="wadScroll">' + heroHtml(title, poster, backdrop, meta, it.badge || (mt === 'tv' ? 'SERIES' : 'MOVIE')) + body + '</div>';
     if (mt === 'tv') loadSeason(it, st.season);
-    loadTmdbSimilar(it, mt);
+    loadTmdbSimilar(it, mt, d);
   }
 
-  async function loadTmdbSimilar(it, mt) {
+  async function loadTmdbSimilar(it, mt, detailObj) {
     var track = document.getElementById('wadSimilarTrack');
-    if (!track || !it || !it.tmdb) return;
-    try {
-      var j = await getJson('/tmdb/3/' + mt + '/' + enc(it.tmdb) + '/recommendations?page=1');
-      var raw = (j && j.results) || [];
-      if (!raw.length) {
-        var j2 = await getJson('/tmdb/3/' + mt + '/' + enc(it.tmdb) + '/similar?page=1');
-        raw = (j2 && j2.results) || [];
-      }
-      if (st.current !== it || !track.isConnected) return;
-      var list = raw.slice(0, 16).map(function (m, idx) {
-        var mType = m.media_type === 'tv' || m.media_type === 'movie' ? m.media_type : mt;
-        return {
-          kind: 'tmdb', tmdb: m.id, mt: mType,
-          t: clean(m.title || m.name || ''),
-          poster: m.poster_path ? 'https://image.tmdb.org/t/p/w342' + m.poster_path : '',
-          year: String(m.release_date || m.first_air_date || '').slice(0, 4),
-          rating: m.vote_average ? Number(m.vote_average).toFixed(1) : '',
-          badge: (98 - (idx % 11)) + '% Match'
-        };
-      }).filter(function (x) { return x.t && x.tmdb; });
-      track.innerHTML = list.length ? cards(list) : '<div class="wa-note">No similar recommendations yet.</div>';
-    } catch (e) {
-      if (track && track.isConnected) track.innerHTML = '<div class="wa-note">Similar titles unavailable right now.</div>';
+    if (!track || !it) return;
+    var seed = {
+      kind: 'tmdb', tmdb: it.tmdb, mt: mt,
+      t: clean((detailObj && (detailObj.title || detailObj.name)) || it.t || ''),
+      overview: clean((detailObj && detailObj.overview) || it.overview || it.desc || ''),
+      genres: (detailObj && detailObj.genres) || it.genres || [],
+      cast: (detailObj && detailObj.credits && detailObj.credits.cast) ? detailObj.credits.cast.slice(0, 8).map(function (c) { return c.name; }) : [],
+      year: String((detailObj && (detailObj.release_date || detailObj.first_air_date)) || it.year || '').slice(0, 4),
+      poster: it.poster || ''
+    };
+    var candidates = [];
+    if (it.tmdb) {
+      try {
+        var j = await getJson('/tmdb/3/' + mt + '/' + enc(it.tmdb) + '/recommendations?page=1');
+        var raw = (j && j.results) || [];
+        if (!raw.length) {
+          var j2 = await getJson('/tmdb/3/' + mt + '/' + enc(it.tmdb) + '/similar?page=1');
+          raw = (j2 && j2.results) || [];
+        }
+        candidates = raw.slice(0, 24).map(function (m) {
+          var mType = m.media_type === 'tv' || m.media_type === 'movie' ? m.media_type : mt;
+          return {
+            kind: 'tmdb', tmdb: m.id, mt: mType,
+            t: clean(m.title || m.name || ''),
+            overview: clean(m.overview || ''),
+            genre_ids: m.genre_ids || [],
+            poster: m.poster_path ? 'https://image.tmdb.org/t/p/w342' + m.poster_path : '',
+            year: String(m.release_date || m.first_air_date || '').slice(0, 4),
+            rating: m.vote_average ? Number(m.vote_average).toFixed(1) : ''
+          };
+        }).filter(function (x) { return x.t && x.tmdb; });
+      } catch (e) { candidates = []; }
     }
+    if (st.current !== it || !track.isConnected) return;
+    var list = [];
+    try {
+      if (window.SBAI && window.SBAI.similar) {
+        list = await window.SBAI.similar(seed, { partition: 'safe', limit: 16, candidates: candidates });
+      }
+    } catch (e) { list = []; }
+    if (!list.length && candidates.length) {
+      list = candidates.slice(0, 16).map(function (c, idx) {
+        return Object.assign({}, c, { badge: (96 - (idx % 12)) + '% Match' });
+      });
+    }
+    if (st.current !== it || !track.isConnected) return;
+    track.innerHTML = list.length ? cards(list) : '<div class="wa-note">No similar recommendations yet.</div>';
   }
 
   function seasonChips(seasons, active) {
@@ -1057,24 +1136,37 @@
     }).join('');
   }
 
+  function synthesizeSeasonEps(se) {
+    var meta = (st.tmdb && st.tmdb.seasons || []).filter(function (s) { return s && s.season_number === se; })[0];
+    var count = Math.min(2000, Math.max(0, Number(meta && meta.episode_count) || 0));
+    var out = [];
+    for (var i = 1; i <= count; i++) {
+      out.push({ episode_number: i, name: 'Episode ' + i, air_date: '', runtime: 0 });
+    }
+    return out;
+  }
+
   async function loadSeason(it, se) {
     st.season = se;
     st.epChunk = 0;
     var host = document.getElementById('wadEps');
     if (host) host.innerHTML = '<div class="wa-note">Loading episodes…</div>';
+    var eps = [];
     try {
       var j = await getJson('/tmdb/3/tv/' + enc(it.tmdb) + '/season/' + se);
       if (st.current !== it) return;
-      var eps = (j && j.episodes) || [];
-      st.seasonEps = eps;
-      var chips = document.getElementById('wadSeasons');
-      if (chips && st.tmdb) chips.innerHTML = seasonChips(st.tmdb.seasons || [], se);
-      paintSeasonEpisodes(eps, 0);
-      var playBtn = $('[data-wad-play]', detailEl);
-      if (playBtn) playBtn.innerHTML = iconPlay() + ' Play S' + se + 'E' + st.ep;
+      eps = (j && j.episodes) || [];
     } catch (e) {
-      if (host) host.innerHTML = '<div class="wa-note">Could not load this season.</div>';
+      eps = [];
     }
+    if (st.current !== it) return;
+    if (!eps.length) eps = synthesizeSeasonEps(se);
+    st.seasonEps = eps;
+    var chips = document.getElementById('wadSeasons');
+    if (chips && st.tmdb) chips.innerHTML = seasonChips(st.tmdb.seasons || [], se);
+    paintSeasonEpisodes(eps, 0);
+    var playBtn = $('[data-wad-play]', detailEl);
+    if (playBtn) playBtn.innerHTML = iconPlay() + ' Play S' + se + 'E' + st.ep;
   }
 
   function heroHtml(title, poster, backdrop, meta, badge) {
@@ -1164,8 +1256,27 @@
       (desc ? '<p class="wad-desc">' + esc(desc) + '</p>' : '') +
       '<div class="wa-source">In-app source</div>' +
       (series ? '<div class="wad-eplist" id="wadParts">' + (parts && parts.length ? partsHtml(parts) : '<div class="wa-note">Looking for episodes…</div>') + '</div>' : '') +
+      '<section class="section wad-similar-sec" data-similar-host="custom-detail">' +
+      '<div class="section-head"><h2><span class="ai-spark">✦</span> Similar Results</h2><span class="wa-count">AI Picks</span></div>' +
+      '<div class="row-track" id="wadSimilarTrack">' + skeletonCards(5) + '</div></section>' +
       '</div>';
     detailEl.innerHTML = '<div class="wad-scroll" id="wadScroll">' + heroHtml(title, it.poster || '', it.poster || '', meta, timeBadge ? 'EPISODE' : (badge || 'SOURCE')) + body + '</div>';
+    loadCustomSimilar(it);
+  }
+
+  async function loadCustomSimilar(it) {
+    var track = document.getElementById('wadSimilarTrack');
+    if (!track || !it) return;
+    var isAdult = window.SBAI && window.SBAI.isAdult ? window.SBAI.isAdult(it) : /^(jav|ep|ai|htv)$/.test(it.kind || '');
+    var part = isAdult ? 'isolated' : 'safe';
+    var list = [];
+    try {
+      if (window.SBAI && window.SBAI.similar) {
+        list = await window.SBAI.similar(it, { partition: part, limit: 16 });
+      }
+    } catch (e) { list = []; }
+    if (st.current !== it || !track.isConnected) return;
+    track.innerHTML = list.length ? cards(list) : '<div class="wa-note">Explore more shelves to train instant local recommendations.</div>';
   }
 
   function partsHtml(parts, chunkIdx) {
@@ -1319,7 +1430,12 @@
         applyCustomPoster(it);
       }
       var parts = [];
-      try { parts = SC.partsFromHtml(html, pageUrl, { media: true }) || []; } catch (e) { parts = []; }
+      try {
+        parts = SC.fetchPaginatedParts
+          ? await SC.fetchPaginatedParts(pageUrl, html, { media: true, maxPages: 10 })
+          : (SC.partsFromHtml(html, pageUrl, { media: true }) || []);
+      } catch (e) { parts = []; }
+      if (st.current !== it) return;
       parts = (parts || []).filter(function (p) { return p && p.url; });
       if (parts.length < 2) {
         var loose = looseParts(html, pageUrl);
@@ -1331,7 +1447,11 @@
           try {
             var html2 = await SC.fetchText(show, 18000);
             if (st.current !== it) return;
-            var more = (SC.partsFromHtml(html2, show, { media: true }) || []).filter(function (p) { return p && p.url; });
+            var more = SC.fetchPaginatedParts
+              ? await SC.fetchPaginatedParts(show, html2, { media: true, maxPages: 10 })
+              : (SC.partsFromHtml(html2, show, { media: true }) || []);
+            if (st.current !== it) return;
+            more = (more || []).filter(function (p) { return p && p.url; });
             if (more.length < 2) more = looseParts(html2, show);
             if (more.length >= 2) {
               var hasFirst = more.some(function (p) { return Number(p.n) === 1; });

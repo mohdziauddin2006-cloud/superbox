@@ -373,7 +373,7 @@
       }
     }
     var finish = function (list) {
-      var s2 = list.slice(0, 200);
+      var s2 = list.slice(0, 2000);
       s2.sort(function (x, y) { return (x.s - y.s) || (x.n - y.n); });
       s2.forEach(function (x, i) { if (!x.n) x.n = i + 1; });
       return s2;
@@ -407,21 +407,109 @@
     if (medias.length > 1) return finish(medias);
     return out;
   }
+  /* Detect episode list pagination links (?page=2, /page/2/, paged=2, rel=next)
+     belonging to the same series page so shows with 65+ episodes never truncate
+     at the first page (often 6-10 items). */
+  function findEpisodePageUrls(html, pageUrl, maxPages) {
+    var urls = [], seen = {};
+    var cap = Math.max(1, Math.min(12, Number(maxPages) || 10));
+    var curHost = '', curPath = '', curLeaf = '';
+    try {
+      var cu = new URL(pageUrl);
+      curHost = cu.hostname.replace(/^www\./i, '');
+      curPath = cu.pathname.replace(/\/page\/\d+\/?$/i, '').replace(/\/+$/, '').toLowerCase();
+      curLeaf = leafOf(curPath);
+      seen[cu.href.replace(/#.*$/, '').toLowerCase()] = 1;
+    } catch (e) { return urls; }
+    var re = /<a\s+([^>]*)>([\s\S]{0,160}?)<\/a>/gi, m;
+    while ((m = re.exec(String(html || '')))) {
+      var attrs = m[1], inner = strip(m[2]);
+      var hm = attrs.match(/href\s*=\s*["']([^"']+)["']/i);
+      if (!hm) continue;
+      var u = abs(hm[1], pageUrl);
+      if (!u) continue;
+      var clean = u.replace(/#.*$/, '');
+      var key = clean.toLowerCase();
+      if (seen[key]) continue;
+      var tu;
+      try { tu = new URL(clean); } catch (e) { continue; }
+      if (tu.hostname.replace(/^www\./i, '') !== curHost) continue;
+      var p = tu.pathname.replace(/\/+$/, '').toLowerCase();
+      var q = tu.search || '';
+      var isPaginated = /[?&](?:page|paged|ep_page|p)=\d{1,3}(?:&|$)/i.test(q) || /\/page\/\d{1,3}$/i.test(p);
+      var isNextRel = /rel\s*=\s*["'][^"']*next[^"']*["']/i.test(attrs) || /^(?:next|next\s*page|\u00bb|\u203a|>\s*)$/i.test(inner);
+      if (!isPaginated && !isNextRel) continue;
+      var baseP = p.replace(/\/page\/\d+$/i, '');
+      var sameShow = baseP === curPath || (curLeaf && curLeaf.length >= 3 && leafOf(baseP) === curLeaf);
+      if (!sameShow) continue;
+      seen[key] = 1;
+      urls.push(clean);
+      if (urls.length >= cap) break;
+    }
+    return urls;
+  }
+  async function fetchPaginatedParts(pageUrl, initialHtml, opts) {
+    opts = opts || {};
+    var html = initialHtml;
+    if (!html) {
+      try { html = await fetchText(pageUrl, 12000); } catch (e) { return []; }
+    }
+    var merged = [], seen = {};
+    var addList = function (list) {
+      (list || []).forEach(function (x) {
+        if (!x || !x.url) return;
+        var k = (Number(x.n) > 0) ? ((Number(x.s) || 0) + '|' + Number(x.n)) : ('u|' + String(x.url).toLowerCase());
+        if (seen[k]) {
+          if (!seen[k].t && x.t) seen[k].t = x.t;
+          return;
+        }
+        seen[k] = x;
+        merged.push(x);
+      });
+    };
+    addList(partsFromHtml(html, pageUrl, opts));
+    var nextUrls = findEpisodePageUrls(html, pageUrl, opts.maxPages || 10);
+    if (nextUrls.length) {
+      var visited = {};
+      visited[String(pageUrl).replace(/#.*$/, '').toLowerCase()] = 1;
+      var queue = nextUrls.slice(0, 10);
+      var fetched = 0;
+      while (queue.length && fetched < 10) {
+        var batch = queue.splice(0, 3);
+        var htmls = await Promise.all(batch.map(function (u2) {
+          visited[u2.toLowerCase()] = 1;
+          fetched++;
+          return fetchText(u2, 7000).then(function (h) { return { u: u2, h: h }; }).catch(function () { return null; });
+        }));
+        htmls.forEach(function (res) {
+          if (!res || !res.h) return;
+          addList(partsFromHtml(res.h, res.u, opts));
+          var more = findEpisodePageUrls(res.h, res.u, 4);
+          more.forEach(function (mu) {
+            var mk = mu.toLowerCase();
+            if (!visited[mk] && queue.length + fetched < 10) {
+              visited[mk] = 1;
+              queue.push(mu);
+            }
+          });
+        });
+      }
+    }
+    merged.sort(function (x, y) { return ((x.s || 0) - (y.s || 0)) || ((x.n || 0) - (y.n || 0)); });
+    merged.forEach(function (x, i) { if (!x.n) x.n = i + 1; });
+    return merged.slice(0, 2000);
+  }
   /* The classic token-only ladder: kept for providers whose pages hold ONE
      video (hentai players) - media parts never apply there. */
   function ladderFromHtml(html, pageUrl) {
     return partsFromHtml(html, pageUrl, { media: false });
   }
-  /* Client-side part scrape for the Web Series tab: the Desi series pages are
-     readable from the real browser session, so the dropdown is filled here
-     even when the Node backend cannot fetch the mirror. */
+  /* Client-side part scrape for the Web Series tab: follows pagination across
+     all episode pages so 65+ episode shows load completely into the selector. */
   async function xsEpisodes(pageUrl, title) {
     if (!pageUrl) return null;
-    var html = '';
-    try { html = await fetchText(pageUrl, 15000); } catch (e) { return null; }
-    if (!html) return null;
     var parts = [];
-    try { parts = partsFromHtml(html, pageUrl, { media: true }); } catch (e) { parts = []; }
+    try { parts = await fetchPaginatedParts(pageUrl, '', { media: true, maxPages: 10 }); } catch (e) { parts = []; }
     if (parts.length < 2) return null;
     return {
       title: String(title || ''),
@@ -915,7 +1003,7 @@
           var raw = String((e2 && e2.url) || '');
           var em = raw.match(/\/e\/([a-z0-9_]+)/i);
           var n = Number(e2 && (e2.number || e2.n)) || (i + 1);
-          if (!em || n < 1 || n > 999 || seen[n]) return;
+          if (!em || n < 1 || n > 2000 || seen[n]) return;
           seen[n] = 1;
           var host = 'https://sadie-shop.site';
           try { host = new URL(raw, pageUrl).origin; } catch (e) {}
@@ -930,7 +1018,7 @@
       out.unshift({ ep: 1, title: 'Episode 1', url: pageUrl, direct: false });
     }
     out.sort(function (a, b) { return (a.ep || 0) - (b.ep || 0); });
-    return out.slice(0, 200);
+    return out.slice(0, 2000);
   }
   /* Episode map for one JAV video page. The backend always includes Episode 1
      (the page itself), so even a one-part video opens the picker with a real
@@ -1271,16 +1359,12 @@
      request carries every season with every episode; the backend caches it. */
   async function eps(tmdbId, ms) {
     if (!tmdbId) return null;
-    var B = await base();
-    /* Android has no /eps route. Build the exact same payload from the
-       key-injecting TMDB proxy so the player's season selector is always
-       populated. */
     try {
-      var show = await fetchJSON(B + '/tmdb/3/tv/' + enc(tmdbId), 12000);
+      var show = await tmdbFetch('tv/' + enc(tmdbId), { timeoutMs: Math.min(ms || 5000, 6000) });
       if (!show || !Array.isArray(show.seasons)) return null;
       var seasons = show.seasons.filter(function (s) {
         return s && Number(s.season_number) >= 0 && Number(s.episode_count) > 0;
-      }).sort(function (a, b) { return Number(a.season_number) - Number(b.season_number); }).slice(0, 40);
+      }).sort(function (a, b) { return Number(a.season_number) - Number(b.season_number); }).slice(0, 60);
       var results = new Array(seasons.length);
       var cursor = 0;
       async function worker() {
@@ -1288,15 +1372,23 @@
           var idx = cursor++;
           var s = seasons[idx], n = Number(s.season_number);
           try {
-            var sd = await fetchJSON(B + '/tmdb/3/tv/' + enc(tmdbId) + '/season/' + n, 12000);
-            results[idx] = {
-              n: n, name: String(s.name || ('Season ' + n)),
-              eps: ((sd && sd.episodes) || []).filter(function (e2) { return Number(e2.episode_number) > 0; })
-                .sort(function (a, b) { return Number(a.episode_number) - Number(b.episode_number); })
-                .map(function (e2) { return { n: Number(e2.episode_number), name: String(e2.name || ('Episode ' + e2.episode_number)), air: String(e2.air_date || '') }; })
-            };
+            var sd = await tmdbFetch('tv/' + enc(tmdbId) + '/season/' + n, { timeoutMs: 5000 });
+            var epArr = ((sd && sd.episodes) || []).filter(function (e2) { return Number(e2.episode_number) > 0; })
+              .sort(function (a, b) { return Number(a.episode_number) - Number(b.episode_number); })
+              .slice(0, 2000)
+              .map(function (e2) { return { n: Number(e2.episode_number), name: String(e2.name || ('Episode ' + e2.episode_number)), air: String(e2.air_date || '') }; });
+            if (!epArr.length && Number(s.episode_count) > 0) {
+              var cap = Math.min(2000, Number(s.episode_count));
+              for (var epNum = 1; epNum <= cap; epNum++) epArr.push({ n: epNum, name: 'Episode ' + epNum, air: '' });
+            }
+            results[idx] = { n: n, name: String(s.name || ('Season ' + n)), eps: epArr };
           } catch (e) {
-            results[idx] = { n: n, name: String(s.name || ('Season ' + n)), eps: [] };
+            var fbArr = [];
+            if (Number(s.episode_count) > 0) {
+              var cap2 = Math.min(2000, Number(s.episode_count));
+              for (var epNum2 = 1; epNum2 <= cap2; epNum2++) fbArr.push({ n: epNum2, name: 'Episode ' + epNum2, air: '' });
+            }
+            results[idx] = { n: n, name: String(s.name || ('Season ' + n)), eps: fbArr };
           }
         }
       }
@@ -1396,10 +1488,227 @@
     return out;
   }
 
+  /* ---------------- Non-Blocking TMDB Fetch (AbortController + Cache + Backoff) ---------------- */
+  var TMDB_LS_PREFIX = 'sb.tmdb.v1.';
+  var TMDB_MEM = new Map();
+  function tmdbLsGet(key, allowStale) {
+    var m = TMDB_MEM.get(key);
+    if (m && (allowStale || Date.now() < m.exp)) return m.v;
+    try {
+      var raw = localStorage.getItem(TMDB_LS_PREFIX + key);
+      if (!raw) return null;
+      var parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object') return null;
+      if (!allowStale && Date.now() > Number(parsed.exp || 0)) return null;
+      TMDB_MEM.set(key, { exp: Number(parsed.exp || 0), v: parsed.v });
+      return parsed.v;
+    } catch (e) { return null; }
+  }
+  function tmdbLsSet(key, val, ttlMs) {
+    var exp = Date.now() + (ttlMs || 15 * 60 * 1000);
+    if (TMDB_MEM.size > 160) TMDB_MEM.delete(TMDB_MEM.keys().next().value);
+    TMDB_MEM.set(key, { exp: exp, v: val });
+    try {
+      localStorage.setItem(TMDB_LS_PREFIX + key, JSON.stringify({ exp: exp, v: val }));
+    } catch (e) {
+      try {
+        var keys = [];
+        for (var i = 0; i < localStorage.length; i++) {
+          var k = localStorage.key(i);
+          if (k && k.indexOf(TMDB_LS_PREFIX) === 0) keys.push(k);
+        }
+        keys.slice(0, Math.ceil(keys.length / 2)).forEach(function (k) { localStorage.removeItem(k); });
+        localStorage.setItem(TMDB_LS_PREFIX + key, JSON.stringify({ exp: exp, v: val }));
+      } catch (e2) {}
+    }
+  }
+  async function tmdbFetch(pathAndQuery, opts) {
+    opts = opts || {};
+    var clean = String(pathAndQuery || '').replace(/^\/+/, '');
+    var key = clean.slice(0, 180);
+    if (!opts.bypassCache) {
+      var hit = tmdbLsGet(key, false);
+      if (hit) return hit;
+    }
+    var timeoutMs = Math.max(1500, Math.min(8000, Number(opts.timeoutMs) || 4500));
+    var retries = opts.retries != null ? opts.retries : 1;
+    var B = await base();
+    var backoffs = [250, 600];
+    for (var attempt = 0; attempt <= retries; attempt++) {
+      var ctl = new AbortController();
+      var tm = setTimeout(function () { try { ctl.abort(); } catch (e) {} }, timeoutMs);
+      try {
+        var r = await fetch(B + '/tmdb/3/' + clean, { cache: 'no-store', signal: ctl.signal });
+        if (r && r.ok) {
+          var j = await r.json();
+          clearTimeout(tm);
+          if (j && !j.fallback && !j.error) {
+            tmdbLsSet(key, j, opts.ttlMs || (/\/season\//i.test(clean) ? 6 * 3600000 : 20 * 60000));
+          }
+          return j || { results: [], fallback: true };
+        }
+        clearTimeout(tm);
+        if (r && r.status >= 400 && r.status < 500 && r.status !== 429) break;
+      } catch (e) {
+        clearTimeout(tm);
+      }
+      if (attempt < retries) {
+        await new Promise(function (res) { setTimeout(res, backoffs[attempt] || 500); });
+      }
+    }
+    var stale = tmdbLsGet(key, true);
+    if (stale) return stale;
+    return opts.fallback || { results: [], episodes: [], seasons: [], fallback: true };
+  }
+
+  /* ---------------- Cross-Provider Search Deduplication ---------------- */
+  function dedupeItems(list) {
+    var out = [], seen = {};
+    (list || []).forEach(function (it) {
+      if (!it || typeof it !== 'object') return;
+      var keys = [];
+      if (it.tmdb) keys.push('tmdb:' + (it.mt || 'm') + ':' + String(it.tmdb));
+      if (it.subjectId) keys.push('mb:' + String(it.subjectId));
+      if (it.vid) keys.push('yt:' + String(it.vid));
+      if (it.page) keys.push('pg:' + normMedia(it.page));
+      var normT = String(it.t || it.title || it.name || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+      if (normT.length >= 3) keys.push('t:' + normT + ':' + String(it.year || '').slice(0, 4) + ':' + (it.mt || it.kind || ''));
+      if (!keys.length) return;
+      for (var i = 0; i < keys.length; i++) {
+        if (seen[keys[i]]) return;
+      }
+      keys.forEach(function (k) { seen[k] = 1; });
+      out.push(it);
+    });
+    return out;
+  }
+
+  /* ---------------- On-Device Partitioned AI Similarity Engine (window.SBAI) ----------------
+     Strictly partitioned ('safe' vs 'isolated') TF-IDF + bigram cosine engine
+     running in milliseconds on Android WebView with zero external latency. */
+  var SBAI = (function () {
+    var ADULT_KINDS = { ep: 1, r34: 1, r34v: 1, hc: 1, htv: 1, jav: 1, ai: 1, hentai20: 1, nhentai: 1 };
+    var STOP = { the:1,and:1,for:1,with:1,that:1,this:1,from:1,into:1,your:1,have:1,will:1,about:1,after:1,before:1,when:1,where:1,what:1,which:1,while:1,their:1,there:1,they:1,them:1,episode:1,season:1,movie:1,series:1,watch:1,online:1,free:1,full:1,hd:1 };
+    var stores = { safe: new Map(), isolated: new Map() };
+    var dfs = { safe: new Map(), isolated: new Map() };
+    function isAdult(it) {
+      if (!it || typeof it !== 'object') return false;
+      if (it.adult === true || it.isAdult === true || it.partition === 'isolated') return true;
+      return !!ADULT_KINDS[String(it.kind || it.source || '').toLowerCase()];
+    }
+    function idOf(it) {
+      if (!it || typeof it !== 'object') return '';
+      if (it.id) return String(it.id);
+      if (it.tmdb) return 'tmdb:' + (it.mt === 'tv' ? 'tv' : 'movie') + ':' + String(it.tmdb);
+      if (it.subjectId) return 'mb:' + String(it.subjectId);
+      if (it.vid) return 'yt:' + String(it.vid);
+      if (it.page) return 'pg:' + normMedia(it.page).slice(0, 160);
+      var t = String(it.t || it.title || it.name || '').trim().toLowerCase();
+      return t ? ('t:' + t.slice(0, 100) + ':' + String(it.year || '')) : '';
+    }
+    function docOf(it) {
+      if (!it || typeof it !== 'object') return '';
+      var t = String(it.t || it.title || it.name || '').trim();
+      var d = String(it.overview || it.desc || it.synopsis || it.description || '').trim();
+      var g = Array.isArray(it.genres) ? it.genres.map(function (x) { return typeof x === 'string' ? x : (x && x.name) || ''; }).join(' ') : String(it.genre || '');
+      var tags = Array.isArray(it.tags) ? it.tags.join(' ') : String(it.tags || '');
+      var cast = Array.isArray(it.cast) ? it.cast.map(function (x) { return typeof x === 'string' ? x : (x && x.name) || ''; }).join(' ') : String(it.cast || '');
+      return [t, t, g, g, tags, cast, d, String(it.year || '').slice(0, 4), String(it.mt || it.kind || '')].filter(Boolean).join(' ').slice(0, 1500);
+    }
+    function tok(txt) {
+      var w = String(txt || '').toLowerCase().replace(/[^a-z0-9\u00c0-\u024f]+/g, ' ').trim().split(/\s+/).filter(function (x) { return x.length >= 2 && !STOP[x]; });
+      var out = [];
+      for (var i = 0; i < w.length && out.length < 140; i++) {
+        out.push(w[i]);
+        if (i + 1 < w.length) out.push(w[i] + '_' + w[i + 1]);
+      }
+      return out;
+    }
+    function tfVec(tokens) {
+      var tf = {}, len = tokens.length || 1;
+      for (var i = 0; i < tokens.length; i++) tf[tokens[i]] = (tf[tokens[i]] || 0) + 1;
+      var v = {}, nsq = 0, ks = Object.keys(tf);
+      for (var j = 0; j < ks.length; j++) {
+        var val = (1 + Math.log(tf[ks[j]])) / Math.sqrt(len);
+        v[ks[j]] = val;
+        nsq += val * val;
+      }
+      var norm = Math.sqrt(nsq) || 1;
+      for (var k = 0; k < ks.length; k++) v[ks[k]] /= norm;
+      return v;
+    }
+    function cos(a, b, df, N) {
+      var ka = Object.keys(a);
+      if (!ka.length) return 0;
+      var dot = 0, na = 0, nb = 0, nDocs = Math.max(2, N || 2);
+      for (var i = 0; i < ka.length; i++) {
+        var k = ka[i], idf = Math.log(1 + nDocs / (1 + (df.get(k) || 0))), wa = a[k] * idf;
+        na += wa * wa;
+        if (b[k]) dot += wa * (b[k] * idf);
+      }
+      var kb = Object.keys(b);
+      for (var j = 0; j < kb.length; j++) {
+        var k2 = kb[j], idf2 = Math.log(1 + nDocs / (1 + (df.get(k2) || 0))), wb = b[k2] * idf2;
+        nb += wb * wb;
+      }
+      return (na && nb) ? dot / (Math.sqrt(na) * Math.sqrt(nb)) : 0;
+    }
+    function index(items, partition) {
+      var reqP = partition === 'isolated' ? 'isolated' : 'safe';
+      (items || []).forEach(function (it) {
+        if (!it || typeof it !== 'object') return;
+        if (reqP === 'safe' && isAdult(it)) return;
+        var p = isAdult(it) ? 'isolated' : reqP;
+        var id = idOf(it);
+        var title = String(it.t || it.title || it.name || '').trim();
+        if (!id || !title) return;
+        var v = tfVec(tok(docOf(it)));
+        var st = stores[p], df = dfs[p];
+        var prev = st.get(id);
+        if (prev) Object.keys(prev.v).forEach(function (k) { var n = (df.get(k) || 1) - 1; if (n <= 0) df.delete(k); else df.set(k, n); });
+        Object.keys(v).forEach(function (k) { df.set(k, (df.get(k) || 0) + 1); });
+        st.set(id, { id: id, meta: it, v: v });
+        if (st.size > 1500) {
+          var fk = st.keys().next().value;
+          if (fk) st.delete(fk);
+        }
+      });
+      return Promise.resolve({ ok: true });
+    }
+    function similar(seed, opts) {
+      opts = opts || {};
+      var p = (opts.partition === 'isolated' || isAdult(seed)) ? 'isolated' : 'safe';
+      var lim = Math.max(4, Math.min(24, Number(opts.limit) || 16));
+      if (Array.isArray(opts.candidates) && opts.candidates.length) index(opts.candidates, p);
+      var st = stores[p], df = dfs[p];
+      if (!st.size) return Promise.resolve([]);
+      var qv = tfVec(tok(docOf(seed || {})));
+      var sid = idOf(seed), stitle = String((seed && (seed.t || seed.title || seed.name)) || '').trim().toLowerCase();
+      var scored = [];
+      st.forEach(function (entry) {
+        if (sid && entry.id === sid) return;
+        if (stitle && String(entry.meta.t || entry.meta.title || '').trim().toLowerCase() === stitle) return;
+        var s = cos(qv, entry.v, df, st.size);
+        if (seed && seed.year && entry.meta.year && Math.abs(Number(seed.year) - Number(entry.meta.year)) <= 3) s += 0.03;
+        if (s > 0.01) scored.push({ m: entry.meta, s: s });
+      });
+      scored.sort(function (a, b) { return b.s - a.s; });
+      var top = scored.slice(0, lim);
+      var maxS = top.length ? Math.max(0.25, top[0].s) : 1;
+      return Promise.resolve(top.map(function (r, idx) {
+        var pct = Math.max(74, Math.min(99, Math.round(74 + Math.min(1, r.s / maxS) * 24 - idx * 0.35)));
+        return Object.assign({}, r.m, { score: Math.round(r.s * 1000) / 1000, match: pct + '% Match' });
+      }));
+    }
+    return { index: index, similar: similar, isAdult: isAdult };
+  })();
+
   SC.base = base;
   SC.alt = alt;
   SC.fetchText = fetchText;
   SC.fetchJSON = fetchJSON;
+  SC.tmdbFetch = tmdbFetch;
+  SC.dedupeItems = dedupeItems;
   SC.katRow = katRow;
   SC.hdRow = hdRow;
   SC.hdSearch = hdSearch;
@@ -1429,6 +1738,7 @@
   SC.nhStream = nhStream;
   SC.ladderFromHtml = ladderFromHtml;
   SC.partsFromHtml = partsFromHtml;
+  SC.fetchPaginatedParts = fetchPaginatedParts;
   SC.xsEpisodes = xsEpisodes;
   SC.r34vKey = r34vKey;
   SC.normMedia = normMedia;
@@ -1442,6 +1752,8 @@
   SC.imgChain = imgChain;
   SC.search = search;
   SC.imgAlt = imgAlt;
+  SC.ai = SBAI;
+  window.SBAI = SBAI;
   window.SC = SC;
 })();
 

@@ -298,6 +298,9 @@
       S.indexById.clear();
       S.index.forEach(function (x) { S.indexById.set(x.id, x); });
     }
+    if (window.SBAI && window.SBAI.index && items && items.length) {
+      window.SBAI.index(items, "safe");
+    }
   }
 
   function getItem(id) {
@@ -478,7 +481,9 @@
   function cards(items, opts) {
     return (items || []).map(function (it, idx) {
       if (opts && opts.withMatch) {
-        return card(it, { match: (98 - (idx % 12)) + "% Match" });
+        var mLbl = it.matchPct ? (it.matchPct + "% Match")
+          : (it.badge && /match/i.test(it.badge) ? it.badge : ((98 - (idx % 12)) + "% Match"));
+        return card(it, { match: mLbl });
       }
       return card(it);
     }).join("");
@@ -604,14 +609,31 @@
     }).slice(0, 24);
     var libList = [];
     try {
-      if (window.LIB && window.LIB.searchAll) libList = await window.LIB.searchAll(q);
-      if (S.searchMode === "deep" && window.SC && window.SC.epRow) {
-        var deepRes = await window.SC.epRow({ q: q, order: "most-popular", badge: "18+" }).catch(function () { return []; });
-        libList = libList.concat(deepRes || []);
+      var jobs = [];
+      if (window.LIB && window.LIB.searchAll) {
+        jobs.push(window.LIB.searchAll(q).catch(function () { return []; }));
       }
+      if (S.searchMode === "deep" && window.SC) {
+        if (window.SC.epRow) jobs.push(window.SC.epRow({ q: q, order: "most-popular", badge: "18+" }).catch(function () { return []; }));
+        if (window.SC.search) {
+          jobs.push(window.SC.search(q, "adult", "jav").catch(function () { return []; }));
+          jobs.push(window.SC.search(q, "adult", "hentai").catch(function () { return []; }));
+        }
+      }
+      var settled = await Promise.all(jobs);
+      settled.forEach(function (part) { if (part && part.length) libList = libList.concat(part); });
+      if (window.SC && window.SC.dedupeItems) libList = window.SC.dedupeItems(libList);
+      var localTitles = {};
+      local.forEach(function (x) {
+        localTitles[String(x.t || "").toLowerCase().replace(/[^a-z0-9]+/g, "")] = 1;
+      });
+      libList = libList.filter(function (x) {
+        var tk = String((x && (x.t || x.title)) || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+        return !tk || !localTitles[tk];
+      }).slice(0, 48);
     } catch (e) {}
     if (tok !== homeSearchToken || !box.isConnected) return;
-    var libHtml = (libList && libList.length && window.LIB && window.LIB.cards) ? window.LIB.cards(libList.slice(0, 36)) : "";
+    var libHtml = (libList && libList.length && window.LIB && window.LIB.cards) ? window.LIB.cards(libList.slice(0, 40)) : "";
     var totalCount = local.length + (libList ? libList.length : 0);
     box.innerHTML = '<div class="section-head"><h2>' + (S.searchMode === "deep" ? "Deep" : "Safe") + ' results for “' + esc(q) + '” <em>' + totalCount + '</em></h2>' +
       '<button type="button" id="homeSearchClearBtn">Clear</button></div>' +
@@ -853,11 +875,32 @@
         try {
           var remote = await window.LIB.searchAll(q);
           if (!resHost.isConnected) return;
-          if (scope === "movies") remote = (remote || []).filter(function (x) { return x.mt !== "tv" && !x.isSeries; });
-          else if (scope === "series") remote = (remote || []).filter(function (x) { return x.mt === "tv" || x.isSeries; });
+          if (scope === "movies") {
+            remote = (remote || []).filter(function (x) { return x && x.mt !== "tv" && !x.isSeries && x.kind !== "yt"; });
+          } else if (scope === "series") {
+            remote = (remote || []).filter(function (x) { return x && (x.mt === "tv" || x.isSeries) && x.kind !== "yt"; });
+          } else if (scope === "anime") {
+            remote = (remote || []).filter(function (x) {
+              if (!x) return false;
+              var gids = Array.isArray(x.genre_ids) ? x.genre_ids : [];
+              if (gids.indexOf(16) >= 0) return true;
+              if (x.anilist || x.kind === "arc") return true;
+              var txt = ((x.t || "") + " " + (x.badge || "") + " " + (x.overview || "")).toLowerCase();
+              return /anime|animation|shonen|isekai|manga/.test(txt);
+            });
+          }
+          if (window.SC && window.SC.dedupeItems) remote = window.SC.dedupeItems(remote);
+          var seenLocal = {};
+          local.forEach(function (x) { seenLocal[String(x.t || "").toLowerCase().replace(/[^a-z0-9]+/g, "")] = 1; });
+          remote = (remote || []).filter(function (x) {
+            var tk = String((x && (x.t || x.title)) || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+            return !tk || !seenLocal[tk];
+          });
           var grid = document.getElementById("scopedTabGrid");
           if (grid && remote && remote.length && window.LIB.cards) {
             grid.insertAdjacentHTML("beforeend", window.LIB.cards(remote.slice(0, 24)));
+            var cntEl = resHost.querySelector(".section-head em");
+            if (cntEl) cntEl.textContent = String(local.length + Math.min(24, remote.length));
           }
           if (grid && !grid.children.length) {
             grid.innerHTML = '<div class="empty" style="grid-column:1/-1"><b>No results in ' + esc(scope) + '</b>Try another title or clear the search.</div>';
@@ -1311,7 +1354,7 @@
     raw.forEach(function (x) {
       var se = num(x && x.se, 0);
       var max = num(x && x.maxEp, 0);
-      if (max > 0) out.push({ se: se, maxEp: Math.min(max, 400) });
+      if (max > 0) out.push({ se: se, maxEp: Math.min(max, 2000) });
     });
     out.sort(function (a, b) { return a.se - b.se; });
     return out;
@@ -1985,7 +2028,15 @@
       track.innerHTML = '<div class="empty" style="padding:18px 8px">No similar recommendations yet.</div>';
       return;
     }
-    track.innerHTML = cards(list.slice(0, 16), { withMatch: true });
+    var spotlightItems = [];
+    var libItems = [];
+    list.slice(0, 16).forEach(function (it) {
+      if (it && it.id && (it.dp || S.indexById.has(String(it.id)))) spotlightItems.push(it);
+      else if (it) libItems.push(it);
+    });
+    var html = (spotlightItems.length ? cards(spotlightItems, { withMatch: true }) : "") +
+      (libItems.length && window.LIB && window.LIB.cards ? window.LIB.cards(libItems) : "");
+    track.innerHTML = html || '<div class="empty" style="padding:18px 8px">No similar recommendations yet.</div>';
     $$(".card[data-id]", track).forEach(function (b) {
       b.onclick = function () {
         var it = getItem(b.getAttribute("data-id"));
@@ -2004,19 +2055,37 @@
     if (!track) return;
     if (sub) sub.textContent = "AI picks similar to " + ((pb && pb.title) || "your stream");
     track.innerHTML = Array(5).join('<div class="sk-card"><div class="sk sk-poster"></div><div class="sk sk-line"></div></div>');
-    var list = [];
+    var candidates = [];
     try {
       if (pb && pb.subject && pb.subject.subjectId) {
-        var j = await api("rec?subjectId=" + enc(pb.subject.subjectId) + "&page=1&perPage=14");
-        list = (((j && j.data && (j.data.items || j.data.subjectList)) || [])).map(normSubject).filter(function (x) {
+        var j = await api("rec?subjectId=" + enc(pb.subject.subjectId) + "&page=1&perPage=18");
+        candidates = (((j && j.data && (j.data.items || j.data.subjectList)) || [])).map(normSubject).filter(function (x) {
           return x && x.id !== String(pb.subject.subjectId);
         });
-        mergeIndex(list);
+        mergeIndex(candidates);
       }
     } catch (e) {}
-    if (!list.length && S.index && S.index.length) {
-      var skipId = pb && pb.item && pb.item.id;
-      list = S.index.filter(function (x) { return x && x.id !== skipId; }).slice(0, 12);
+    var seed = {
+      id: (pb && pb.item && pb.item.id) || (pb && pb.subject && pb.subject.subjectId) || "",
+      t: (pb && pb.title) || (pb && pb.item && pb.item.t) || "",
+      desc: (pb && pb.item && pb.item.desc) || (pb && pb.subject && pb.subject.description) || "",
+      genre: (pb && pb.item && pb.item.genre) || (pb && pb.subject && pb.subject.genre) || "",
+      year: (pb && pb.item && pb.item.year) || "",
+      country: (pb && pb.item && pb.item.country) || ""
+    };
+    var list = [];
+    try {
+      if (window.SBAI && window.SBAI.similar) {
+        list = await window.SBAI.similar(seed, { partition: "safe", limit: 16, candidates: candidates });
+      }
+    } catch (e) { list = []; }
+    if (!list.length) {
+      if (candidates.length) {
+        list = candidates.slice(0, 14);
+      } else if (S.index && S.index.length) {
+        var skipId = pb && pb.item && pb.item.id;
+        list = S.index.filter(function (x) { return x && x.id !== skipId; }).slice(0, 12);
+      }
     }
     paintPlayerSimilarCards(list);
   }

@@ -880,7 +880,10 @@ public class LocalServer {
         }
     }
 
-    /* TMDB key-injecting proxy: /tmdb/3/<path>?<query>. */
+    /* Non-blocking TMDB key-injecting proxy: /tmdb/3/<path>?<query>.
+       Uses short connect/read timeouts, retry-with-backoff, stale disk cache
+       fallback, and clean empty fallback payloads so TMDB failures never stall
+       Android page loads or search. */
     private void handleTmdb(OutputStream out, String path, String query) throws IOException {
         String rest = path.substring("/tmdb/3/".length());
         StringBuilder u = new StringBuilder("https://api.themoviedb.org/3/").append(rest);
@@ -898,24 +901,42 @@ public class LocalServer {
                     "Cache-Control: private, max-age=3600\r\nX-SuperBox-Cache: HIT\r\n");
             return;
         }
-        HttpURLConnection c = null;
-        try {
-            c = openWeb(u.toString(), "https://www.themoviedb.org/");
-            int code = c.getResponseCode();
-            InputStream is = code >= 400 ? c.getErrorStream() : c.getInputStream();
-            byte[] body = is == null ? new byte[0] : readAll(is, 12 * 1024 * 1024);
-            if (code < 200 || code >= 300) {
-                send(out, 502, "application/json", bytes("{\"error\":\"tmdb " + code + "\"}"), null);
-                return;
+        int[] backoffs = new int[]{250, 600};
+        for (int attempt = 0; attempt <= 2; attempt++) {
+            HttpURLConnection c = null;
+            try {
+                c = openWeb(u.toString(), "https://www.themoviedb.org/");
+                c.setConnectTimeout(3500);
+                c.setReadTimeout(4500);
+                int code = c.getResponseCode();
+                InputStream is = code >= 400 ? c.getErrorStream() : c.getInputStream();
+                byte[] body = is == null ? new byte[0] : readAll(is, 12 * 1024 * 1024);
+                if (code >= 200 && code < 300 && body.length > 0) {
+                    apiCachePut(key, body, "application/json; charset=utf-8");
+                    send(out, 200, "application/json; charset=utf-8", body,
+                            "Cache-Control: private, max-age=3600\r\nX-SuperBox-Cache: MISS\r\n");
+                    return;
+                }
+                if (code >= 400 && code < 500 && code != 429) break;
+            } catch (Exception ignored) {
+            } finally {
+                if (c != null) c.disconnect();
             }
-            apiCachePut(key, body, "application/json; charset=utf-8");
-            send(out, 200, "application/json; charset=utf-8", body,
-                    "Cache-Control: private, max-age=3600\r\nX-SuperBox-Cache: MISS\r\n");
-        } catch (Exception e) {
-            send(out, 502, "application/json", bytes("{\"error\":\"tmdb unavailable\"}"), null);
-        } finally {
-            if (c != null) c.disconnect();
+            if (attempt < 2) {
+                try { Thread.sleep(backoffs[attempt]); } catch (InterruptedException ignored) { break; }
+            }
         }
+        byte[] stale = diskGet(key, Long.MAX_VALUE);
+        if (stale != null && stale.length > 0) {
+            send(out, 200, "application/json; charset=utf-8", stale,
+                    "Cache-Control: private, max-age=300\r\nX-SuperBox-Cache: STALE\r\n");
+            return;
+        }
+        String fb = rest.contains("/season/")
+                ? "{\"episodes\":[],\"fallback\":true}"
+                : "{\"page\":1,\"total_pages\":1,\"total_results\":0,\"results\":[],\"seasons\":[],\"fallback\":true}";
+        send(out, 200, "application/json; charset=utf-8", bytes(fb),
+                "Cache-Control: no-store\r\nX-TMDB-Fallback: 1\r\n");
     }
 
     /* Generic one-hop (plus one iframe) stream sniffer used by the custom
