@@ -18,7 +18,7 @@ const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
 
 /* Hosts the reading room is allowed to render. Anything else is refused so a
    stray localhost request can never turn this into an open browser. */
-const ALLOW_RE = /(^|\.)(asurascans\.com|asuracomic\.net|flamecomics\.xyz|vortexscans\.org|hivetoons\.org|comix\.to|manhuaus\.club|nelomanga\.net|tappytoon\.com|tapas\.io|allmanga\.to|allanime\.day|mangafire\.to|toonsutra\.com|hentai20\.io|mangadex\.org|webtoons\.com|naver\.com|mangapark\.net|batoto\.com)$/i;
+const ALLOW_RE = /(^|\.)(asurascans\.com|asuracomic\.net|flamecomics\.xyz|vortexscans\.org|hivetoons\.org|comix\.to|manhuaus\.club|nelomanga\.net|tappytoon\.com|tapas\.io|allmanga\.to|allanime\.day|mangafire\.to|toonsutra\.com|hentai20\.io|nhentai\.net|mangadex\.org|webtoons\.com|naver\.com|mangapark\.net|batoto\.com)$/i;
 
 const CACHE = new Map();
 const CAP_CACHE = new Map();

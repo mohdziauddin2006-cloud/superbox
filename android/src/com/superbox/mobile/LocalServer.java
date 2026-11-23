@@ -351,7 +351,7 @@ public class LocalServer {
             "(^|\\.)(asurascans\\.com|asuracomic\\.net|flamecomics\\.xyz|vortexscans\\.org|"
             + "hivetoons\\.org|comix\\.to|manhuaus\\.club|nelomanga\\.net|tappytoon\\.com|"
             + "tapas\\.io|allmanga\\.to|allanime\\.day|mangafire\\.to|toonsutra\\.com|"
-            + "hentai20\\.io|mangadex\\.org|mangadex\\.network|webtoons\\.com|naver\\.com|"
+            + "hentai20\\.io|nhentai\\.net|mangadex\\.org|mangadex\\.network|webtoons\\.com|naver\\.com|"
             + "mangapark\\.net|batoto\\.com)$", Pattern.CASE_INSENSITIVE);
 
     private static byte[] readRequestBody(InputStream in, Map<String, String> headers)
@@ -411,7 +411,7 @@ public class LocalServer {
                 java.util.Iterator<String> keys = wanted.keys();
                 while (keys.hasNext()) {
                     String k = keys.next();
-                    if (!k.matches("(?i)accept|accept-language|authorization|auth|os|content-type|x-[a-z0-9-]{1,60}")) continue;
+                    if (!k.matches("(?i)accept|accept-language|authorization|auth|os|user-agent|content-type|x-[a-z0-9-]{1,60}")) continue;
                     String v = wanted.optString(k, "");
                     if (v.isEmpty() || v.length() > 4096 || v.indexOf('\r') >= 0 || v.indexOf('\n') >= 0) continue;
                     c.setRequestProperty(k, v);
@@ -668,35 +668,43 @@ public class LocalServer {
                     "Cache-Control: public, max-age=604800, immutable\r\nX-SuperBox-Cache: HIT\r\n");
             return;
         }
-        String referer = imageReferer(url);
-        if (refHint != null && refHint.startsWith("http")) referer = refHint;
-        String[] refs = referer == null ? new String[]{null, SITE + "/"} : new String[]{referer, null, SITE + "/"};
-        for (String ref : refs) {
-            HttpURLConnection c = null;
-            try {
-                c = openImage(url, ref);
-                int code = c.getResponseCode();
-                /* 404/410 never becomes a valid image with another referer,
-                   but the weserv tier below CAN still rescue it (the CDN may
-                   only block this IP/UA), so do not break out of the chain. */
-                if (code < 200 || code >= 300) continue;
-                byte[] body = readAll(c.getInputStream(), 8 * 1024 * 1024);
-                if (body.length == 0) continue;
-                String type = c.getContentType();
-                boolean trusted = type != null && type.startsWith("image/");
-                if (!trusted) {
-                    type = sniffImageType(body);
-                    trusted = isImageBytes(body);
+        /* nhentai rotates thumbnails/pages across t1-t7 and i1-i7 and may
+           serve .webp, .jpg or .png for one gallery. Walk the mirrors before
+           giving up, bounded by a single image deadline. */
+        java.util.List<String> candidates = imageVariants(url);
+        long imgDeadline = System.currentTimeMillis() + 16000;
+        for (int ci = 0; ci < candidates.size(); ci++) {
+            if (ci > 0 && System.currentTimeMillis() > imgDeadline) break;
+            String cand = candidates.get(ci);
+            String referer = (refHint != null && refHint.startsWith("http")) ? refHint : imageReferer(cand);
+            String[] refs = referer == null ? new String[]{null, SITE + "/"} : new String[]{referer, null, SITE + "/"};
+            for (String ref : refs) {
+                HttpURLConnection c = null;
+                try {
+                    c = openImage(cand, ref);
+                    int code = c.getResponseCode();
+                    /* 404/410 never becomes a valid image with another referer,
+                       but the weserv tier below CAN still rescue it (the CDN may
+                       only block this IP/UA), so do not break out of the chain. */
+                    if (code < 200 || code >= 300) continue;
+                    byte[] body = readAll(c.getInputStream(), 8 * 1024 * 1024);
+                    if (body.length == 0) continue;
+                    String type = c.getContentType();
+                    boolean trusted = type != null && type.startsWith("image/");
+                    if (!trusted) {
+                        type = sniffImageType(body);
+                        trusted = isImageBytes(body);
+                    }
+                    if (!trusted) continue;
+                    apiCachePut(key, body, type);
+                    send(out, 200, type, body,
+                            "Cache-Control: public, max-age=604800, immutable\r\nX-SuperBox-Cache: MISS\r\n");
+                    return;
+                } catch (Exception e) {
+                    // try the next referer / mirror
+                } finally {
+                    if (c != null) c.disconnect();
                 }
-                if (!trusted) continue;
-                apiCachePut(key, body, type);
-                send(out, 200, type, body,
-                        "Cache-Control: public, max-age=604800, immutable\r\nX-SuperBox-Cache: MISS\r\n");
-                return;
-            } catch (Exception e) {
-                // try the next referer policy
-            } finally {
-                if (c != null) c.disconnect();
             }
         }
         /* Final tier: images.weserv.nl re-fetches the image server-side, which
@@ -759,6 +767,41 @@ public class LocalServer {
         return u;
     }
 
+    private static java.util.List<String> imageVariants(String raw) {
+        java.util.ArrayList<String> out = new java.util.ArrayList<>();
+        out.add(raw);
+        try {
+            URL u = new URL(raw);
+            String host = u.getHost().toLowerCase(Locale.US);
+            java.util.regex.Matcher m = Pattern.compile("^([ti])(\\d?)\\.nhentai\\.net$").matcher(host);
+            if (!m.matches()) return out;
+            String base = m.group(1);
+            String path = u.getPath();
+            String ext = "";
+            String stem = path;
+            int dot = path.lastIndexOf('.');
+            if (dot > path.lastIndexOf('/')) {
+                ext = path.substring(dot).toLowerCase(Locale.US);
+                stem = path.substring(0, dot);
+            }
+            for (int i = 1; i <= 7; i++) {
+                String v = "https://" + base + i + ".nhentai.net" + path;
+                if (!out.contains(v)) out.add(v);
+            }
+            String[] exts = {".webp", ".jpg", ".png"};
+            for (String e : exts) {
+                if (e.equals(ext)) continue;
+                for (int i = 0; i <= 2; i++) {
+                    String h = i == 0 ? "https://" + base + ".nhentai.net"
+                            : "https://" + base + i + ".nhentai.net";
+                    String v = h + stem + e;
+                    if (!out.contains(v)) out.add(v);
+                }
+            }
+        } catch (Exception ignored) {}
+        return out;
+    }
+
     private static String imageReferer(String url) {
         String host = hostOf(url);
         if (host == null) return null;
@@ -783,6 +826,7 @@ public class LocalServer {
         if (host.contains("allmanga") || host.contains("allanime")) return "https://allmanga.to/";
         if (host.contains("mangafire")) return "https://mangafire.to/";
         if (host.contains("toonsutra")) return "https://www.toonsutra.com/";
+        if (host.contains("nhentai")) return "https://nhentai.net/";
         if (host.contains("hentai1") || host.contains("hentai20")) return "https://hentai20.io/";
         return originOf(url);
     }

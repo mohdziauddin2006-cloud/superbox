@@ -1406,6 +1406,16 @@
       bar.appendChild(b);
     });
     c.appendChild(bar);
+    /* The 18+ Reading room is a dedicated, age-gated reader built from the
+       Hentai20 and nHentai native adapters. It never shares a provider,
+       title or cover with the general Reading room. */
+    if (sub === 'read18') {
+      var rh = el('div', 'vault-read18');
+      c.appendChild(rh);
+      if (window.READER) window.READER.render(rh, { adult: true });
+      else c.appendChild(el('div', 'empty', 'Reading is unavailable.'));
+      return;
+    }
     c.appendChild(searchStrip('adult', 'Search in ' + vaultLabel(sub) + '...'));
     paintRows(c, rowsFor('adult', sub));
   }

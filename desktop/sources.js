@@ -198,7 +198,8 @@
     { id:'aws',     t:'Adult Web Series' },
     { id:'amov',    t:'Adult Movies' },
     { id:'hentai',  t:'Hentai' },
-    { id:'ai',      t:'AI Video' }
+    { id:'ai',      t:'AI Video' },
+    { id:'read18',  t:'18+ Reading' }
   ];
 
   var VAULT = {};

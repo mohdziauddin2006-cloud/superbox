@@ -23,6 +23,7 @@
   var BASE = '';
   var root = null;
   var readerEl = null;
+  var ADULT_MODE = false;
   var scrollSaveTimer = 0;
   var searchTimer = 0;
 
@@ -267,7 +268,9 @@
     ctl: null,
     view: 'browse',
     detail: null,
-    wtPage: 1
+    wtPage: 1,
+    tab: '',
+    page: 1
   };
   function savePrefs() {
     lsSet('sb.read.lang', state.lang || 'en');
@@ -720,6 +723,353 @@
     return out.slice(0, 48);
   }
 
+  /* ------------------------------------------------- adult reading adapters
+     Hentai20 is a Madara/mangareader theme. Its catalogue is server-rendered
+     (data-src, data-lazy-src and srcset covers), its detail page carries the
+     complete #chapterlist, and every chapter embeds an ordered ts_reader.run
+     JSON page list. We use those three native surfaces directly instead of
+     scraping the rendered viewport, so pagination and every page survive. */
+  function lazyImg(im) {
+    if (!im) return '';
+    var attrs = ['data-src', 'data-lazy-src', 'data-original', 'data-url', 'src', 'data-cfsrc'];
+    for (var i = 0; i < attrs.length; i++) {
+      var v = im.getAttribute(attrs[i]);
+      if (v && !/^data:/i.test(v) && !/\/(blank|placeholder|spacer|loading|transparent)/i.test(v)) return v;
+    }
+    var ss = im.getAttribute('srcset') || im.getAttribute('data-srcset') || '';
+    if (ss) {
+      var parts = ss.split(',').map(function (x) { return x.trim().split(/\s+/)[0]; }).filter(Boolean);
+      if (parts.length) return parts[parts.length - 1];
+    }
+    return '';
+  }
+  function absoluteUrl(raw, baseUrl) {
+    try { return new URL(String(raw || ''), baseUrl).toString(); } catch (e) { return ''; }
+  }
+  function h20Doc(html) {
+    try { return new DOMParser().parseFromString(String(html || ''), 'text/html'); } catch (e) { return null; }
+  }
+  function h20PageUrl(opts) {
+    var page = Math.max(1, parseInt(opts.page, 10) || 1);
+    if (opts.q) return page === 1
+      ? 'https://hentai20.io/?s=' + enc(opts.q)
+      : 'https://hentai20.io/page/' + page + '/?s=' + enc(opts.q);
+    if (opts.genre) return 'https://hentai20.io/genres/' + opts.genre + '/' + (page > 1 ? 'page/' + page + '/' : '');
+    var tab = opts.tab === 'popular' || opts.tab === 'trending' ? opts.tab : 'latest';
+    if (tab === 'latest') return 'https://hentai20.io/home1/' + (page > 1 ? 'page/' + page + '/' : '');
+    return 'https://hentai20.io/manga/?status=&type=&order=' + tab + (page > 1 ? '&page=' + page : '');
+  }
+  async function hentai20Catalog(opts) {
+    opts = opts || {};
+    var url = h20PageUrl(opts);
+    var j = await readNet(url, { ms: 30000 });
+    var doc = h20Doc(j.body);
+    if (!doc) throw new Error('Hentai20 returned no catalogue');
+    var out = [], seen = {};
+    Array.prototype.forEach.call(doc.querySelectorAll('a[href*="/manga/"]'), function (a) {
+      var u = absoluteUrl(a.getAttribute('href'), url).replace(/[?#].*$/, '');
+      if (!/^https:\/\/hentai20\.io\/manga\/[^/?#]+\/?$/i.test(u)) return;
+      if (seen[u]) return;
+      var card = a.closest('.bs, .bsx, .utao, .listupd li') || a.parentElement;
+      var im = a.querySelector('img') || (card && card.querySelector('img'));
+      var title = cleanTitle(a.getAttribute('title') || a.textContent || (im && im.getAttribute('alt')) || '');
+      if (!title) return;
+      seen[u] = 1;
+      out.push({
+        source: 'hentai20', id: slugOf(u), title: title,
+        cover: absoluteUrl(lazyImg(im), url), url: u,
+        ref: 'https://hentai20.io/', adult: true
+      });
+    });
+    var next = doc.querySelector('link[rel="next"], a.next.page-numbers, .pagination a.next');
+    return { items: out, more: !!next && out.length > 0 };
+  }
+  async function hentai20Detail(item) {
+    var html = await page(item.url, 30000);
+    var doc = h20Doc(html);
+    if (!doc) throw new Error('Hentai20 returned no title');
+    var title = cleanTitle((doc.querySelector('.entry-title, .seriestuheader h1, h1') || {}).textContent || item.title);
+    var coverIm = doc.querySelector('.seriestucontl .thumb img, .thumb img, .summary_image img');
+    var cover = absoluteUrl(lazyImg(coverIm), item.url);
+    if (!cover) {
+      var og = doc.querySelector('meta[property="og:image"]');
+      cover = og ? absoluteUrl(og.getAttribute('content'), item.url) : '';
+    }
+    var descEl = doc.querySelector('.summary__content, .summary_content, .seriestucontent .entry-content, .description-summary');
+    var desc = descEl ? stripTags(descEl.textContent).slice(0, 1200) : '';
+    if (!desc) {
+      var meta = doc.querySelector('meta[name="description"]');
+      desc = meta ? stripTags(meta.getAttribute('content')).slice(0, 900) : '';
+    }
+    var tags = [];
+    Array.prototype.forEach.call(doc.querySelectorAll('.seriestugenre a, .genres a'), function (a) {
+      var t = stripTags(a.textContent);
+      if (t && tags.indexOf(t) < 0 && tags.length < 12) tags.push(t);
+    });
+    var chapters = [], seen = {};
+    function pushChapter(u, label, no) {
+      u = absoluteUrl(u, item.url).replace(/#.*$/, '');
+      if (!u || !/^https:\/\/hentai20\.io\/[^/?#]+-chapter-[\d.]+\/?$/i.test(u)) return;
+      if (seen[u]) return;
+      var lb = cleanTitle(label || ('Chapter ' + (no || '')));
+      if (!lb || nonEnglishLabel(lb)) return;
+      seen[u] = 1;
+      var n = parseFloat(no);
+      if (!isFinite(n)) n = chapterNoOf(lb, u);
+      chapters.push({ id: u, url: u, title: lb, no: n, lang: 'en' });
+    }
+    Array.prototype.forEach.call(doc.querySelectorAll('#chapterlist li'), function (li) {
+      var a = li.querySelector('a[href]');
+      if (!a) return;
+      var label = (li.querySelector('.chapternum') || a).textContent || '';
+      pushChapter(a.getAttribute('href'), label, li.getAttribute('data-num'));
+    });
+    if (!chapters.length) {
+      Array.prototype.forEach.call(doc.querySelectorAll('a[href*="-chapter-"]'), function (a) {
+        pushChapter(a.getAttribute('href'), a.textContent, '');
+      });
+    }
+    if (!chapters.length) {
+      /* Madara keeps the complete list behind admin-ajax on some skins. The
+         series id is the article id printed on the detail page. */
+      var art = doc.querySelector('article[id^="post-"], [id^="post-"]');
+      var mid = art ? (String(art.id).match(/post-(\d+)/) || [])[1] : '';
+      if (mid) {
+        try {
+          var aj = await readNet('https://hentai20.io/wp-admin/admin-ajax.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest' },
+            body: 'action=manga_get_chapters&manga=' + enc(mid), ms: 30000
+          });
+          var adoc = h20Doc(aj.body);
+          if (adoc) {
+            Array.prototype.forEach.call(adoc.querySelectorAll('li'), function (li) {
+              var a = li.querySelector('a[href]');
+              if (a) pushChapter(a.getAttribute('href'), (li.querySelector('.chapternum') || a).textContent, li.getAttribute('data-num'));
+            });
+          }
+        } catch (e) {}
+      }
+    }
+    chapters.sort(function (x, y) { return (x.no - y.no) || String(x.url).localeCompare(String(y.url)); });
+    if (!chapters.length) throw new Error('Hentai20 returned no English chapters');
+    return {
+      source: 'hentai20', id: item.id || slugOf(item.url),
+      title: title || item.title, cover: cover || item.cover || '',
+      desc: desc, author: 'Hentai20', genre: '', tags: tags,
+      url: item.url, ref: 'https://hentai20.io/', chapters: chapters,
+      more: false, chapterMode: 'native'
+    };
+  }
+  function h20ReaderJSON(html) {
+    var m = /ts_reader\.run\((\{[\s\S]*?\})\)\s*;/i.exec(String(html || ''));
+    if (!m) return null;
+    try { return JSON.parse(m[1]); } catch (e) { return null; }
+  }
+  async function hentai20Chapter(_detail, chapter) {
+    var html = await page(chapter.url, 30000);
+    var urls = [], seen = {};
+    function add(raw) {
+      var u = absoluteUrl(String(raw || '').replace(/\\\//g, '/'), chapter.url).replace(/^http:/i, 'https:');
+      if (!u || seen[u] || !/^https:\/\/img\.hentai1\.io\/.+\/chapter-[^/]+\/.+\.(?:jpe?g|png|webp)$/i.test(u)) return;
+      seen[u] = 1;
+      urls.push(u);
+    }
+    var data = h20ReaderJSON(html);
+    if (data && data.sources && data.sources.length) {
+      /* Multiple "servers" repeat the same chapter on different CDNs. Use the
+         single most complete source so pages cannot interleave or duplicate. */
+      var best = null;
+      data.sources.forEach(function (src) {
+        var n = (src && src.images) ? src.images.length : 0;
+        if (n && (!best || n > best.length)) best = src.images;
+      });
+      if (best) best.forEach(add);
+    }
+    if (!urls.length) {
+      var doc = h20Doc(html);
+      var scope = doc && doc.querySelector('.reading-content, #readerarea, .page-break, .entry-content');
+      var imgs = scope ? scope.querySelectorAll('img') : (doc ? doc.querySelectorAll('img') : []);
+      Array.prototype.forEach.call(imgs, function (im) { add(lazyImg(im)); });
+    }
+    if (!urls.length) throw new Error('Hentai20 returned no pages');
+    return urls;
+  }
+
+  /* --------------------------------------------------------- nhentai.net
+     Official v2 JSON API (the old /api/galleries endpoints now answer 403 and
+     point here). Search is always scoped to language:english and every list
+     row is verified against the English language tag (id 12227) instead of
+     trusting the query alone. A hidden-renderer fallback covers Cloudflare. */
+  var NH_API = 'https://nhentai.net/api/v2';
+  var NH_UA = 'SuperBox/1.3.1 (+https://github.com/mohdziauddin2006-cloud/superbox)';
+  var NH_EN = 12227;
+  var NH_CACHE = {};
+  function nhHeaders(extra) {
+    var h = { 'User-Agent': NH_UA, 'Accept': 'application/json' };
+    if (extra) Object.keys(extra).forEach(function (k) { h[k] = extra[k]; });
+    return h;
+  }
+  async function nhJSON(path) {
+    var j = await readNetJSON(NH_API + path, { headers: nhHeaders(), ms: 30000 });
+    if (j && j.ok === false) throw new Error(j.error || 'nhentai unavailable');
+    return j;
+  }
+  function nhCleanPath(p) {
+    return String(p || '').replace(/\.(webp|jpg|jpeg|png)\.\1$/i, '.$1');
+  }
+  function nhItem(g) {
+    var thumb = String(g.thumbnail || '');
+    if (!thumb && g.media_id) thumb = 'galleries/' + g.media_id + '/thumb.webp';
+    return {
+      source: 'nhentai', id: String(g.id),
+      title: cleanTitle(g.english_title || g.japanese_title || g.pretty_title || '') || 'Untitled',
+      cover: thumb ? 'https://t.nhentai.net/' + nhCleanPath(thumb) : '',
+      url: 'https://nhentai.net/g/' + g.id + '/',
+      ref: 'https://nhentai.net/', adult: true,
+      pages: Number(g.num_pages) || 0,
+      tags: (g.tags || []).map(function (t) { return t.name || ''; }).filter(Boolean).slice(0, 8)
+    };
+  }
+  function nhEnglish(g) {
+    if (g && g.tags) {
+      return g.tags.some(function (t) { return t && t.type === 'language' && /^english$/i.test(String(t.name || '')); });
+    }
+    var ids = (g && g.tag_ids) || [];
+    return ids.indexOf(NH_EN) >= 0;
+  }
+  function nhList(j) {
+    if (!j) return { list: [], more: false };
+    if (Array.isArray(j)) return { list: j, more: false };
+    return { list: j.result || j.galleries || [], more: !!j.num_pages && Number(j.page || 1) < Number(j.num_pages) };
+  }
+  async function nhRenderCatalog(url, page) {
+    var snap = await renderSnap(url, 'catalog');
+    var out = [], seen = {};
+    (snap.anchors || []).forEach(function (a) {
+      var u = String(a.h || '').replace(/[?#].*$/, '');
+      if (!/^https:\/\/nhentai\.net\/g\/\d+\/?$/i.test(u)) return;
+      if (seen[u]) return;
+      seen[u] = 1;
+      var title = cleanTitle(a.t || a.a || '');
+      if (!title) return;
+      out.push({
+        source: 'nhentai', id: (u.match(/\/g\/(\d+)/) || [])[1] || slugOf(u),
+        title: title, cover: a.i || '', url: u,
+        ref: 'https://nhentai.net/', adult: true
+      });
+    });
+    var more = false;
+    try {
+      var doc = new DOMParser().parseFromString(String(snap.html || ''), 'text/html');
+      more = !!(doc.querySelector('a[rel="next"], .pagination a.next, a.next'));
+    } catch (e) {}
+    return { items: out, more: more };
+  }
+  async function nhentaiCatalog(opts) {
+    opts = opts || {};
+    var page = Math.max(1, parseInt(opts.page, 10) || 1);
+    var tab = opts.tab === 'recent' ? 'recent' : 'popular';
+    var q = String(opts.q || '').trim();
+    var genre = String(opts.genre || '').trim();
+    try {
+      /* Search is the only v2 surface that paginates reliably. Scoping every
+         catalogue to language:english keeps Popular and Recent fully English
+         (the plain /galleries feed mixes every language and would leave most
+         pages empty after verification). */
+      var query = 'language:english' + (q ? ' ' + q : '') + (genre ? ' tag:"' + genre + '"' : '');
+      var sort = (q || genre) ? 'popular' : (tab === 'recent' ? 'date' : 'popular');
+      var j = await nhJSON('/search?query=' + enc(query) + '&page=' + page + '&sort=' + sort);
+      var got = nhList(j);
+      got.more = page < Number(j.num_pages || 0);
+      var verified = got.list.filter(nhEnglish).map(nhItem);
+      return { items: verified, more: got.more };
+    } catch (e) {
+      /* Cloudflare / 403 fallback: render the public HTML in the hidden,
+         muted window and read the same anchors. */
+      var htmlUrl;
+      if (q || genre) {
+        htmlUrl = 'https://nhentai.net/search/?q=' + enc(('language:english ' + (q || '') + (genre ? ' tag:"' + genre + '"' : '')).trim()) + '&sort=popular' + (page > 1 ? '&page=' + page : '');
+      } else if (tab === 'recent') {
+        htmlUrl = 'https://nhentai.net/' + (page > 1 ? '?page=' + page : '');
+      } else {
+        htmlUrl = 'https://nhentai.net/';
+      }
+      return await nhRenderCatalog(htmlUrl, page);
+    }
+  }
+  async function nhentaiDetail(item) {
+    var id = String(item.id || '').replace(/\D+/g, '');
+    if (!id) id = (String(item.url).match(/\/g\/(\d+)/) || [])[1] || '';
+    if (!id) throw new Error('nhentai title missing');
+    var d = NH_CACHE[id];
+    if (!d || Date.now() - d.t > 600000) {
+      var g = null;
+      try {
+        g = await nhJSON('/galleries/' + id);
+      } catch (e) {
+        /* Rendered fallback below. */
+      }
+      if (g && g.id) {
+        if (!nhEnglish(g)) throw new Error('nhentai title is not English');
+        var pages = (g.pages || []).map(function (p) { return nhCleanPath(p.path); }).filter(Boolean);
+        var coverPath = nhCleanPath((g.cover && g.cover.path) || (g.thumbnail && g.thumbnail.path) || '');
+        d = {
+          g: g, pages: pages, t: Date.now(),
+          title: cleanTitle((g.title && (g.title.english || g.title.pretty || g.title.japanese)) || '') || item.title,
+          cover: coverPath ? 'https://t.nhentai.net/' + coverPath : (item.cover || ''),
+          tags: (g.tags || []).filter(function (t) { return t.type === 'tag' || t.type === 'artist' || t.type === 'group'; })
+            .map(function (t) { return t.name; }).filter(Boolean).slice(0, 12),
+          desc: ''
+        };
+        NH_CACHE[id] = d;
+      } else {
+        var snap = await renderSnap(item.url, 'detail');
+        var doc = new DOMParser().parseFromString(String(snap.html || ''), 'text/html');
+        var english = !!doc.querySelector('a[href*="/language/english/"]');
+        if (!english) throw new Error('nhentai title is not English');
+        var imgs = [];
+        Array.prototype.forEach.call(doc.querySelectorAll('#thumbnail-container img, .thumb-container img, .gallerythumb img, img'), function (im) {
+          var s = absoluteUrl(lazyImg(im), item.url);
+          if (!/^https:\/\/t\d?\.nhentai\.net\/galleries\//i.test(s)) return;
+          var full = s.replace(/^https:\/\/t(\d?)\.nhentai\.net\//i, 'https://i$1.nhentai.net/');
+          full = full.replace(/(\d+)t\.(webp|jpg|png)$/i, '$1.$2');
+          if (imgs.indexOf(full) < 0) imgs.push(full);
+        });
+        var t2 = cleanTitle((doc.querySelector('h1, .title') || {}).textContent || '') || item.title;
+        var og2 = doc.querySelector('meta[property="og:image"]');
+        d = {
+          g: null, pages: imgs, t: Date.now(), title: t2,
+          cover: og2 ? absoluteUrl(og2.getAttribute('content'), item.url) : (item.cover || ''),
+          tags: [], desc: ''
+        };
+        NH_CACHE[id] = d;
+      }
+    }
+    return {
+      source: 'nhentai', id: id, title: d.title || item.title,
+      cover: d.cover || item.cover || '', desc: d.desc || '',
+      author: 'nhentai', genre: '', tags: d.tags || [],
+      url: item.url, ref: 'https://nhentai.net/',
+      chapters: [{
+        id: 'nh-' + id, url: 'nhentai://gallery/' + id,
+        title: 'Full gallery' + (d.pages.length ? ' \u00b7 ' + d.pages.length + ' pages' : ''),
+        no: 1, lang: 'en'
+      }],
+      more: false, chapterMode: 'native'
+    };
+  }
+  async function nhentaiChapter(detail, _chapter) {
+    var id = String(detail.id || '').replace(/\D+/g, '');
+    var d = NH_CACHE[id];
+    if (!d || !d.pages || !d.pages.length) {
+      await nhentaiDetail({ id: id, url: detail.url, title: detail.title, cover: detail.cover });
+      d = NH_CACHE[id];
+    }
+    if (!d || !d.pages || !d.pages.length) throw new Error('nhentai returned no pages');
+    return d.pages.map(function (p) { return 'https://i.nhentai.net/' + p; });
+  }
+
   var NATIVE_PROVIDERS = [
     {
       id: 'asura', name: 'Asura Scans', short: 'ASURA', ref: 'https://asurascans.com/',
@@ -826,7 +1176,14 @@
       chapterRe: /(?:chapter|episode)/i,
       render: false,
       catalog: toonCatalog, detail: toonDetail, chapter: toonChapter
-    },
+    }
+  ];
+
+  /* --------------------------------------------------------- 18+ reading
+     Adult reading lives in its own registry and is reachable only when the
+     caller mounts the reader with { adult: true } from the age-gated vault.
+     General Reading never sees these providers, their titles or covers. */
+  var ADULT_PROVIDERS = [
     {
       id: 'hentai20', name: 'Hentai20', short: 'H20', ref: 'https://hentai20.io/',
       home: 'https://hentai20.io/home1/',
@@ -834,11 +1191,42 @@
       seriesRe: /\/manga\/[^/?#]+\/?$/i,
       chapterRe: /\/[^/?#]+-chapter-[\d.]+\/?$/i,
       imgRe: /img\.hentai1\.io\/.+\/chapter-/i,
-      adult: true
+      adult: true,
+      tabs: [{ c: 'latest', n: 'Latest' }, { c: 'popular', n: 'Popular' }, { c: 'trending', n: 'Trending' }],
+      genres: [
+        { g: 'hentai', n: 'Hentai' }, { g: 'manhwa-hentai-26', n: 'Manhwa' },
+        { g: 'manga-hentai-902', n: 'Manga' }, { g: 'doujinshi', n: 'Doujinshi' },
+        { g: 'uncensored', n: 'Uncensored' }, { g: 'yuri', n: 'Yuri' },
+        { g: 'gl', n: 'GL' }, { g: 'ecchi', n: 'Ecchi' },
+        { g: 'adult', n: 'Adult' }, { g: 'supernatural', n: 'Supernatural' },
+        { g: 'isekai', n: 'Isekai' }, { g: 'martial-arts', n: 'Martial Arts' }
+      ],
+      catalog: hentai20Catalog, detail: hentai20Detail, chapter: hentai20Chapter
+    },
+    {
+      id: 'nhentai', name: 'nHentai', short: 'NH', ref: 'https://nhentai.net/',
+      home: 'https://nhentai.net/',
+      search: function (q) { return 'https://nhentai.net/search/?q=' + enc(q); },
+      seriesRe: /\/g\/\d+\/?$/i,
+      chapterRe: /\/g\/\d+\/\d+\/?$/i,
+      adult: true,
+      tabs: [{ c: 'popular', n: 'Popular' }, { c: 'recent', n: 'Recent' }],
+      genres: [
+        { g: 'big breasts', n: 'Big Breasts' }, { g: 'sole female', n: 'Sole Female' },
+        { g: 'sole male', n: 'Sole Male' }, { g: 'nakadashi', n: 'Nakadashi' },
+        { g: 'ahegao', n: 'Ahegao' }, { g: 'stockings', n: 'Stockings' },
+        { g: 'paizuri', n: 'Paizuri' }, { g: 'glasses', n: 'Glasses' },
+        { g: 'schoolgirl uniform', n: 'Schoolgirl' }, { g: 'femdom', n: 'Femdom' },
+        { g: 'mosaic censorship', n: 'Censored' }, { g: 'full color', n: 'Full Color' }
+      ],
+      catalog: nhentaiCatalog, detail: nhentaiDetail, chapter: nhentaiChapter
     }
   ];
+  function activeProviders() {
+    return ADULT_MODE ? ADULT_PROVIDERS : NATIVE_PROVIDERS;
+  }
   function providerById(id) {
-    return NATIVE_PROVIDERS.filter(function (p) { return p.id === id; })[0] || null;
+    return activeProviders().filter(function (p) { return p.id === id; })[0] || null;
   }
   function nativeRef(source) {
     var p = providerById(source);
@@ -1548,13 +1936,21 @@
     state.ctl = ctl;
     state.loading = true;
     state.more = false;
+    var page = append ? (state.page || 1) + 1 : 1;
     if (!append) { state.items = []; state.offset = 0; }
     paintBody();
     try {
-      var list = null;
+      var list = null, more = false;
       if (p.catalog) {
-        try { list = await p.catalog(state.q); }
-        catch (e) { list = null; }
+        try {
+          if (ADULT_MODE) {
+            var got = await p.catalog({ q: state.q, genre: state.genre, tab: state.tab, page: page });
+            list = (got && got.items) || got || [];
+            more = !!(got && got.more);
+          } else {
+            list = await p.catalog(state.q);
+          }
+        } catch (e) { list = null; }
       }
       if (!list) {
         var url = state.q && p.search ? p.search(state.q) : p.home;
@@ -1568,13 +1964,13 @@
         var hit = list.filter(function (it) { return it.title.toLowerCase().indexOf(q) >= 0; });
         if (hit.length) list = hit;
       }
-      state.items = list;
-      state.total = list.length;
-      state.more = false;
+      state.items = append ? state.items.concat(list) : list;
+      state.total = state.items.length;
+      state.more = ADULT_MODE ? more : false;
+      state.page = page;
     } catch (e) {
       if (req !== state.req) return;
-      state.items = [];
-      state.total = 0;
+      if (!append) { state.items = []; state.total = 0; }
       if (e && e.name === 'AbortError') return;
       toast(p.name + ' is unavailable');
     }
@@ -1670,6 +2066,10 @@
       '.rd-source button.on{background:#ffc105;color:#101010}',
       '.rd-source select{border:1px solid #2a2f39;background:#171a20;color:#e7e9ee;font-weight:700;font-size:12px;padding:9px 12px;border-radius:10px;cursor:pointer;outline:none;max-width:190px}',
       '.rd-source select option{background:#121419;color:#eceef2}',
+      '.rd-tabs{display:inline-flex;gap:4px;background:#111318;border:1px solid #23272f;border-radius:12px;padding:4px;margin:0 0 16px}',
+      '.rd-tabs button{border:0;background:transparent;color:#9aa0aa;font-weight:700;font-size:12px;padding:8px 15px;border-radius:9px;cursor:pointer;transition:.16s}',
+      '.rd-tabs button.on{background:#2a1b1b;color:#ff8b7a;box-shadow:inset 0 0 0 1px #5c2b2b}',
+      '.rd-adult-badge{border:1px solid #5a2424;background:#1c1111;color:#ff9a8b;border-radius:999px;padding:9px 14px;font-size:11.5px;font-weight:800;letter-spacing:.05em;text-transform:uppercase}',
       '.rd-tools{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:0 0 14px}',
       '.rd-filters{display:flex;gap:9px;flex-wrap:wrap;align-items:center;margin:0 0 15px}',
       '.rd-filters label{display:flex;align-items:center;gap:8px;background:#121419;border:1px solid #252a33;border-radius:12px;padding:7px 10px;font-size:11px;font-weight:700;color:#8f96a2;letter-spacing:.03em;text-transform:uppercase}',
@@ -1796,6 +2196,33 @@
     var langFilter = native
       ? '<label>Language<select id="rdLang" aria-label="Reading language" disabled><option>English</option></select></label>'
       : '<label>Language<select id="rdLang" aria-label="Reading language">' + optionHtml(LANGUAGES, state.lang) + '</select></label>';
+    if (ADULT_MODE) {
+      var ap = providerById(state.source) || ADULT_PROVIDERS[0];
+      var srcBtns = ADULT_PROVIDERS.map(function (x) {
+        return '<button data-rd-source="' + x.id + '" role="tab" aria-selected="' + (state.source === x.id) +
+          '" class="' + (state.source === x.id ? 'on' : '') + '">' + esc(x.name) + '</button>';
+      }).join('');
+      var tabBtns = (ap.tabs || []).map(function (t) {
+        return '<button type="button" data-rd-tab="' + t.c + '" class="' + (state.tab === t.c ? 'on' : '') + '">' + esc(t.n) + '</button>';
+      }).join('');
+      return '<div class="rd-shell rd-adult">' +
+        '<div class="rd-hero"><div><h1>18+ <em>Reading</em></h1>' +
+        '<p>Adult manga and doujinshi from Hentai20 and nHentai. This room is isolated from the general Reading room, stays inside the 18+ vault, and is never shown in Kids or All Ages mode.</p></div>' +
+        '<div class="rd-stat"><span>18+ only</span><span>English only</span><span>VPN routed</span><span>Native reader</span></div></div>' +
+        '<div class="rd-source" role="tablist">' + srcBtns + '</div>' +
+        (tabBtns ? '<div class="rd-tabs" role="group" aria-label="Catalogue">' + tabBtns + '</div>' : '') +
+        '<div class="rd-tools"><form class="rd-search" id="rdForm">' +
+        '<input id="rdSearch" type="search" autocomplete="off" placeholder="' + esc(placeholder) + '" value="' + esc(state.q) + '">' +
+        '<button class="rd-btn gold" type="submit">Search</button></form>' +
+        '<span class="rd-adult-badge">Age-gated · 18+</span></div>' +
+        '<div class="rd-filters">' +
+        langFilter +
+        '<button type="button" class="rd-btn ghost" id="rdReset">Reset filters</button>' +
+        '<span class="rd-fnote">' + note + ' · strict English metadata</span>' +
+        '</div>' +
+        '<div class="rd-chips" id="rdChips"></div>' +
+        '<div id="rdBody"></div></div>';
+    }
     return '<div class="rd-shell">' +
       '<div class="rd-hero"><div><h1>Reading <em>room</em></h1>' +
       '<p>Manga, manhwa and webcomics from 15 native providers. Every catalogue, chapter and page is fetched by SuperBox itself through the Shield tunnel — nothing opens an external browser.</p></div>' +
@@ -1824,6 +2251,10 @@
   }
 
   function genreChips() {
+    if (ADULT_MODE) {
+      var ap = providerById(state.source);
+      return [{ g: '', n: 'All genres' }].concat((ap && ap.genres) || []);
+    }
     if (state.source === 'md') {
       var list = MD_TAGS ? MD_GENRES.filter(function (g) {
         return MD_TAGS.some(function (t) { return t.n.toLowerCase() === g.toLowerCase(); });
@@ -1863,7 +2294,12 @@
     return out;
   }
   function historyRow() {
-    var list = history().slice(0, 12);
+    /* General Reading never surfaces an adult title, cover or source, even
+       from the continue-reading shelf. */
+    var list = history().filter(function (h) {
+      if (ADULT_MODE) return true;
+      return h.source === 'md' || h.source === 'wt' || isNativeSource(h.source);
+    }).slice(0, 12);
     if (!list.length) return '';
     return '<div class="rd-sec"><h2>Continue reading</h2><span class="muted">' + list.length + ' title' + (list.length === 1 ? '' : 's') + '</span></div>' +
       '<div class="rd-row">' + list.map(function (h) {
@@ -2387,10 +2823,29 @@
         state.source = s;
         state.items = [];
         state.offset = 0;
+        state.page = 1;
         state.genre = '';
         state.q = '';
+        var np = providerById(s);
+        state.tab = np && np.tabs ? np.tabs[0].c : '';
         state.type = typeForSource(state.type);
+        if (ADULT_MODE) lsSet('sb.read.adult.src', s);
         savePrefs();
+        paint();
+        reload();
+      };
+    });
+    $$('[data-rd-tab]', root).forEach(function (b) {
+      b.onclick = function () {
+        var t = b.getAttribute('data-rd-tab');
+        if (!t || t === state.tab) return;
+        state.tab = t;
+        state.items = [];
+        state.page = 1;
+        state.genre = '';
+        state.q = '';
+        var inp = $('#rdSearch', root);
+        if (inp) inp.value = '';
         paint();
         reload();
       };
@@ -2504,8 +2959,12 @@
     var out = { source: source, name: p.name };
     try {
       var list;
-      if (p.catalog) list = await p.catalog(query || 'solo leveling');
-      else list = parseNativeCatalog(await nativeSnapshot(p, query && p.search ? p.search(query) : p.home, 'catalog'), p);
+      if (p.catalog) {
+        var got0 = await p.catalog(query || 'solo leveling');
+        list = (got0 && got0.items) || got0 || [];
+      } else {
+        list = parseNativeCatalog(await nativeSnapshot(p, query && p.search ? p.search(query) : p.home, 'catalog'), p);
+      }
       list = (list || []).filter(function (x) { return x && x.url; });
       out.catalog = list.length;
       out.sample = list[0] ? { title: list[0].title, cover: !!list[0].cover, url: list[0].url } : null;
@@ -2542,8 +3001,32 @@
   var VERIFY = false;
   try { VERIFY = /(^|[?&])sbverify=1(&|$)/.test(location.search) || localStorage.getItem('sb:verify') === '1'; } catch (e) {}
   var publicApi = {
-    render: function (host) {
+    render: function (host, opts) {
       root = host || root;
+      var wantAdult = !!(opts && opts.adult);
+      if (wantAdult !== ADULT_MODE) {
+        ADULT_MODE = wantAdult;
+        state.view = 'browse';
+        state.detail = null;
+        state.q = '';
+        state.genre = '';
+        state.items = [];
+        state.offset = 0;
+        state.page = 1;
+        state.lang = 'en';
+        state.rating = wantAdult ? 'mature' : 'teen';
+        state.source = wantAdult ? (lsGet('sb.read.adult.src', 'hentai20') || 'hentai20') : 'md';
+        if (!providerById(state.source)) state.source = wantAdult ? 'hentai20' : 'md';
+        var np = providerById(state.source);
+        state.tab = np && np.tabs ? np.tabs[0].c : '';
+      } else if (wantAdult) {
+        state.rating = 'mature';
+        if (!providerById(state.source)) state.source = 'hentai20';
+        if (!state.tab) {
+          var np2 = providerById(state.source);
+          state.tab = np2 && np2.tabs ? np2.tabs[0].c : '';
+        }
+      }
       state.view = 'browse';
       state.detail = null;
       style();

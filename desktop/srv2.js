@@ -3534,6 +3534,8 @@ async function handle(req, res){
     else if (/(^|\.)mangadex\.(?:org|network)$/i.test(hh)) autoRef = 'https://mangadex.org/';
     else if (/(^|\.)(?:pstatic\.net|webtoons\.com|naver\.com)$/i.test(hh)) autoRef = 'https://www.webtoons.com/';
     else if (/(^|\.)tapas\.io$/i.test(hh)) autoRef = 'https://tapas.io/';
+    else if (/(^|\.)nhentai\.net$/i.test(hh)) autoRef = 'https://nhentai.net/';
+    else if (/(^|\.)hentai20\.io$/i.test(hh) || /(^|\.)hentai1\.io$/i.test(hh)) autoRef = 'https://hentai20.io/';
   } catch (e) {}
   try {
     if (path === '/img'){
@@ -3556,13 +3558,47 @@ async function handle(req, res){
         });
         return res.end(cached.buf);
       }
-      let r = null;
-      try { r = await grab(url, pRef || autoRef || undefined, undefined, pUA || undefined); } catch (e) {}
-      const ct = r ? String(r.headers.get('content-type') || '') : '';
-      if (!r || r.status >= 400 || !r.body || !/^image\//i.test(ct)) return blank();
-      const buf = await bodyBuffer(r, 24 * 1024 * 1024, 25000);
+      /* nhentai rotates thumbnails and pages across t1-t7 / i1-i7 and may
+         serve .webp, .jpg or .png for the same gallery. Try the exact URL
+         first, then the mirror hosts and formats before giving up. */
+      const nhImageVariants = function (raw) {
+        try {
+          const u = new URL(raw);
+          const m = /^([ti])(\d?)\.nhentai\.net$/i.exec(u.hostname.toLowerCase());
+          if (!m) return [raw];
+          const base = m[1].toLowerCase();
+          const hosts = ['https://' + base + '.nhentai.net'];
+          for (let i = 1; i <= 7; i++) hosts.push('https://' + base + i + '.nhentai.net');
+          const em = /\.(webp|jpe?g|png)$/i.exec(u.pathname);
+          const stem = em ? u.pathname.slice(0, em.index) : u.pathname;
+          const first = em ? em[0].toLowerCase() : '';
+          const out = hosts.map(function (h) { return h + u.pathname; });
+          ['.webp', '.jpg', '.png'].forEach(function (x) {
+            if (x === first) return;
+            hosts.slice(0, 3).forEach(function (h) { out.push(h + stem + x); });
+          });
+          return out;
+        } catch (e) { return [raw]; }
+      };
+      let ct = '', buf = null;
+      const origUrl = url;
+      const variants = /nhentai\.net$/i.test((function () { try { return new URL(url).hostname; } catch (e) { return ''; } })())
+        ? nhImageVariants(url) : [url];
+      const imgDeadline = Date.now() + 14000;
+      for (let vi = 0; vi < variants.length; vi++) {
+        if (vi > 0 && Date.now() > imgDeadline) break;
+        let r = null;
+        try { r = await grab(variants[vi], pRef || autoRef || undefined, undefined, pUA || undefined, 9000); } catch (e) {}
+        const c = r ? String(r.headers.get('content-type') || '') : '';
+        if (!r || r.status >= 400 || !r.body || !/^image\//i.test(c)) continue;
+        buf = await bodyBuffer(r, 24 * 1024 * 1024, 25000);
+        if (buf) { ct = c; url = variants[vi]; break; }
+      }
       if (!buf) return blank();
       imgCacheWrite(url, ct, buf);
+      /* Cache under the requested URL too, so the next view of this cover
+         does not walk the mirror/format matrix again. */
+      if (url !== origUrl) imgCacheWrite(origUrl, ct, buf);
       res.writeHead(200, {
         'Content-Type': ct || 'image/jpeg',
         'Content-Length': buf.length,
@@ -3792,7 +3828,7 @@ async function handle(req, res){
       };
       if (p.headers && typeof p.headers === 'object') {
         Object.keys(p.headers).forEach(function (k) {
-          if (!/^(accept|accept-language|authorization|auth|os|content-type|x-[a-z0-9-]{1,60})$/i.test(k)) return;
+          if (!/^(accept|accept-language|authorization|auth|os|user-agent|content-type|x-[a-z0-9-]{1,60})$/i.test(k)) return;
           const v = String(p.headers[k] || '');
           if (v && v.length < 4096 && !/[\r\n]/.test(v)) h[k] = v;
         });

@@ -654,14 +654,30 @@
       '<div id="libAdultRows"></div>';
     var token = st.token;
     var top = document.getElementById('libAdultRows');
-    paintRows(top, rowsFor('adult', st.sub), token);
+    /* The dedicated 18+ Reading room is mounted only inside this age-gated
+       vault. General Reading never imports these providers. */
+    if (st.sub === 'read18') {
+      top.innerHTML = '<div id="libAdultRead"></div>';
+      if (window.READER) window.READER.render(document.getElementById('libAdultRead'), { adult: true });
+      else top.innerHTML = '<div class="empty"><b>Reading is unavailable</b>Restart SuperBox and try again.</div>';
+    } else {
+      if (window.READER && window.READER.close) { try { window.READER.close(); } catch (e) {} }
+      paintRows(top, rowsFor('adult', st.sub), token);
+    }
     $$('#libAdultChips .chip').forEach(function (b) {
       b.onclick = function () {
         st.sub = b.getAttribute('data-vsub');
         top.innerHTML = '';
         $$('#libAdultChips .chip').forEach(function (x) { x.classList.toggle('on', x === b); });
         st.token++;
-        paintRows(top, rowsFor('adult', st.sub), st.token);
+        if (st.sub === 'read18') {
+          top.innerHTML = '<div id="libAdultRead"></div>';
+          if (window.READER) window.READER.render(document.getElementById('libAdultRead'), { adult: true });
+          else top.innerHTML = '<div class="empty"><b>Reading is unavailable</b>Restart SuperBox and try again.</div>';
+        } else {
+          if (window.READER && window.READER.close) { try { window.READER.close(); } catch (e) {} }
+          paintRows(top, rowsFor('adult', st.sub), st.token);
+        }
       };
     });
     window.scrollTo(0, 0);

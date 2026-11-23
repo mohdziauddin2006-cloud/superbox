@@ -519,6 +519,7 @@ body::before {
   background: linear-gradient(120deg, var(--lime), var(--gold2));
   border-color: transparent; color: #071006; font-weight: 800;
 }
+.vault-read18 { min-height: 64vh; }
 .searchhead { padding: 26px 40px 6px; }
 .searchhead h3 { margin: 0; font: 900 24px/1.1 var(--display); letter-spacing: -.01em; text-transform: uppercase; color: #fff; }
 .searchhead .sub { margin: 7px 0 0; font: 500 11.5px var(--body); color: var(--dim2); }
