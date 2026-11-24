@@ -1702,6 +1702,7 @@ body[data-sec="adult-reading"] .subnav .chip.active {
 .vpn-power-btn.off .vpn-power-core svg { color: var(--accent); }
 .vpn-power-core b { font-size: 15px; font-weight: 850; letter-spacing: 0.02em; }
 .vpn-power-core small { font-size: 11px; color: var(--muted); font-weight: 600; }
+.vpn-power-copy { display: flex; align-items: baseline; gap: 8px; }
 
 .vpn-pulse-ring {
   position: absolute;
@@ -1857,3 +1858,41 @@ body[data-sec="adult-reading"] .subnav .chip.active {
     scroll-behavior: auto !important;
   }
 }
+
+/* ---------------- Internal source directory overlay ---------------- */
+.src-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 95;
+  display: flex;
+  flex-direction: column;
+  background: #07080b;
+}
+.src-overlay.hidden { display: none; }
+.src-overlay-bar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 20px;
+  border-bottom: 1px solid #1c1f27;
+  background: #0b0d12;
+}
+.src-overlay-bar b { font-size: 15px; letter-spacing: .02em; }
+.src-overlay-bar span { color: #8b919d; font-size: 12px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.src-overlay-bar button {
+  border: 1px solid #2a2f3a;
+  background: #14171e;
+  color: #e9eaee;
+  border-radius: 9px;
+  padding: 8px 16px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.src-overlay-bar button:hover { border-color: var(--gold, #ffc105); color: var(--gold, #ffc105); }
+.src-overlay-host { flex: 1; overflow: auto; }
+.srcframe { position: fixed; inset: 0; z-index: 90; display: flex; flex-direction: column; background: #07080b; }
+.srcbar { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid #1c1f27; background: #0b0d12; }
+.srcbar button { border: 1px solid #2a2f3a; background: #14171e; color: #e9eaee; border-radius: 8px; padding: 7px 13px; cursor: pointer; }
+.srcbar b { font-size: 14px; }
+.srcbar span { color: #8b919d; font-size: 12px; flex: 1; }
+.srcpage { flex: 1; width: 100%; border: 0; background: #000; }

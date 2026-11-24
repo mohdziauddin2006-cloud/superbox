@@ -186,6 +186,10 @@
       <span id="setVpnDetail">Checking VPN status…</span>
       <button id="setVpnToggle" class="ghost" type="button">Disconnect</button>
     </div>
+    <div class="vpn-settings-row">
+      <span>Source directory · every movie, anime &amp; reading provider</span>
+      <button id="setSources" class="ghost" type="button">Browse</button>
+    </div>
     <div class="boxactions">
       <button id="setClose" class="ghost" type="button">Cancel</button>
       <button id="setSave" class="primary" type="button">Save</button>
@@ -229,8 +233,7 @@
           <span class="vpn-pulse-ring" aria-hidden="true"></span>
           <span class="vpn-power-core">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2v9m5.6-6.2a8 8 0 1 1-11.2 0" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
-            <b id="vpnToggleLabel">VPN ON</b>
-            <small id="vpnToggleSub">Tap to disconnect</small>
+            <span class="vpn-power-copy"><b id="vpnToggleLabel">VPN ON</b><small id="vpnToggleSub">Tap to disconnect</small></span>
           </span>
         </button>
       </div>
@@ -267,8 +270,19 @@
   </div>
 </aside>
 
+<!-- INTERNAL SOURCE DIRECTORY (not a public tab) -->
+<div id="sourcesOverlay" class="src-overlay hidden" role="dialog" aria-modal="true" aria-label="Source directory">
+  <div class="src-overlay-bar">
+    <b>Source Directory</b>
+    <span>Every movie, anime and reading provider from source.txt</span>
+    <button id="sourcesOverlayClose" type="button">Close</button>
+  </div>
+  <div id="sourcesOverlayHost" class="src-overlay-host"></div>
+</div>
+
 <script src="hls.min.js"></script>
 <script src="sources.js"></script>
+<script src="sources-hub.js"></script>
 <script src="libraries.js"></script>
 <script src="reading.js"></script>
 <script src="renderer.js"></script>

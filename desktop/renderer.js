@@ -174,6 +174,8 @@
       : 'This area contains explicit adult material and is strictly isolated from standard Reading, Kids, and Safe Search. Confirmation lasts for this session only.';
     m.classList.remove('hidden');
   }
+  window.SBRequireAge = requireAge18;
+
   function wireAgeGate() {
     var m = $('#ageGateModal');
     if (!m || m.dataset.wired) return;
@@ -4699,7 +4701,21 @@
     sel.value = store.lang || 'en-US';
     m.classList.remove('hidden');
   }
+  function openSourcesDirectory() {
+    var o = $('#sourcesOverlay');
+    if (!o) return;
+    $('#settingsModal').classList.add('hidden');
+    o.classList.remove('hidden');
+    if (window.SOURCES_HUB) window.SOURCES_HUB.render($('#sourcesOverlayHost'));
+  }
+  function closeSourcesDirectory() {
+    var o = $('#sourcesOverlay');
+    if (o) o.classList.add('hidden');
+  }
   function wireSettings() {
+    $('#setSources').onclick = openSourcesDirectory;
+    var soClose = $('#sourcesOverlayClose');
+    if (soClose) soClose.onclick = closeSourcesDirectory;
     $('#setClose').onclick = function () { $('#settingsModal').classList.add('hidden'); };
     $('#setSave').onclick = function () {
       store.key = $('#setTmdb').value.trim();
@@ -4737,6 +4753,7 @@
     document.addEventListener('keydown', function (e) {
       if (e.key === 'Escape') {
         if ($('#ageGateModal') && !$('#ageGateModal').classList.contains('hidden')) { closeAgeGate(); return; }
+        if ($('#sourcesOverlay') && !$('#sourcesOverlay').classList.contains('hidden')) { closeSourcesDirectory(); return; }
         if ($('#vpnPanel') && $('#vpnPanel').classList.contains('open')) { closeVpnPanel(); return; }
         if (!$('#settingsModal').classList.contains('hidden')) { $('#settingsModal').classList.add('hidden'); return; }
         if (window.READER && window.READER.back()) return;
@@ -4750,6 +4767,7 @@
       if ($('#ageGateModal') && !$('#ageGateModal').classList.contains('hidden')) { closeAgeGate(); return true; }
       if ($('#vpnPanel') && $('#vpnPanel').classList.contains('open')) { closeVpnPanel(); return true; }
       if (window.READER && window.READER.back()) return true;
+      if ($('#sourcesOverlay') && !$('#sourcesOverlay').classList.contains('hidden')) { closeSourcesDirectory(); return true; }
       if (sourceFrame) { closeSourceFrame(); renderSection(state.section && state.section !== 'sources' ? state.section : 'home'); return true; }
       if (!$('#settingsModal').classList.contains('hidden')) { $('#settingsModal').classList.add('hidden'); return true; }
       if (!player().classList.contains('hidden')) { closePlayer(); return true; }

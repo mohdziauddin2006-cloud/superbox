@@ -225,6 +225,8 @@
     }, 240);
     agePendingCb = null;
   }
+  window.SBRequireAge = function (reason, onOk) { return requireAge18(reason, onOk); };
+
   function requireAge18(reason, onOk) {
     var verified = false;
     try { verified = sessionStorage.getItem("sb.age18.ok") === "1"; } catch (e) {}
@@ -996,6 +998,7 @@
       "</div></div>" +
       '<div class="me-section"><h3>Catalogue</h3><div class="me-list">' +
       '<button class="me-row" data-setting="refresh"><span class="ic">↻</span><span class="tx"><b>Refresh catalogue</b><span>Fetch the latest SuperBox rows</span></span><span class="rt">Refresh</span></button>' +
+      '<button class="me-row" data-setting="sources"><span class="ic">⌘</span><span class="tx"><b>Source directory</b><span>Every movie, anime and reading provider</span></span><span class="rt">Browse</span></button>' +
       '<button class="me-row" data-setting="vpn"><span class="ic">?</span><span class="tx"><b>SuperBox Shield</b><span>Embedded VPN status and region</span></span><span class="rt" id="meVpnState">Checking?</span></button>' +
       '<button class="me-row" data-setting="clear"><span class="ic">×</span><span class="tx"><b>Clear temporary data</b><span>Quality preference and cached UI state</span></span><span class="rt">Clear</span></button>' +
       '<button class="me-row" data-setting="about"><span class="ic">i</span><span class="tx"><b>About SuperBox</b><span>Version ' + esc(version) + " · Mobile</span></span><span class=\"rt\">Info</span></button>" +
@@ -2596,6 +2599,14 @@
     });
   }
 
+  function openSourcesDirectory() {
+    openSheet('<div class="sheet-title">Source Directory</div><div class="sheet-sub">Every movie, anime and reading provider from source.txt</div>' +
+      '<div id="sourcesSheetHost" style="padding-bottom:28px"></div>', function () {
+        var host = document.getElementById("sourcesSheetHost");
+        if (host && window.SOURCES_HUB) window.SOURCES_HUB.render(host);
+      });
+  }
+
   function openAboutSheet() {
     var version = "1.1.0";
     try { if (window.SBAndroid && window.SBAndroid.version) version = window.SBAndroid.version(); } catch (e) {}
@@ -2764,6 +2775,8 @@
         S.speed = 1;
         toast("Temporary data cleared");
         renderMe();
+      } else if (what === "sources") {
+        openSourcesDirectory();
       } else if (what === "about") {
         openAboutSheet();
       } else if (what === "vpn") {

@@ -2743,6 +2743,21 @@
         showReaderHud(true);
       };
     }
+    var swipeBody = $('#rdRBody', readerEl);
+    if (swipeBody) {
+      var swX = 0, swY = 0, swT = 0;
+      swipeBody.addEventListener('touchstart', function (ev) {
+        if (ev.touches.length !== 1) return;
+        swX = ev.touches[0].clientX; swY = ev.touches[0].clientY; swT = Date.now();
+      }, { passive: true });
+      swipeBody.addEventListener('touchend', function (ev) {
+        if (readerPrefs.mode === 'webtoon' || !ev.changedTouches.length) return;
+        var dx = ev.changedTouches[0].clientX - swX;
+        var dy = ev.changedTouches[0].clientY - swY;
+        if (Date.now() - swT > 800 || Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.4) return;
+        stepReaderPage(dx < 0 ? 1 : -1);
+      }, { passive: true });
+    }
     readerCtx.keyHandler = function (ev) {
       if (!readerEl) return;
       if (ev.key === 'Escape') {

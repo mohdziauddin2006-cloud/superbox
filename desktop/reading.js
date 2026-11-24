@@ -2893,6 +2893,17 @@
       if (ev.target.closest('button, input, a')) return;
       toggleReaderHud();
     });
+    /* Swipe left/right to page in single/spread modes. */
+    var swX = 0, swY = 0, swT = 0;
+    body.addEventListener('pointerdown', function (ev) {
+      swX = ev.clientX; swY = ev.clientY; swT = Date.now();
+    });
+    body.addEventListener('pointerup', function (ev) {
+      if (state.readerMode === 'webtoon') return;
+      var dx = ev.clientX - swX, dy = ev.clientY - swY;
+      if (Date.now() - swT > 800 || Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.4) return;
+      stepReaderPage(dx < 0 ? 1 : -1);
+    });
     readerEl.addEventListener('mousemove', function (ev) {
       if (ev.clientY < 86 || ev.clientY > window.innerHeight - 104) showReaderHud(false);
     });
