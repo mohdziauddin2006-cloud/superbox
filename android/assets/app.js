@@ -511,19 +511,39 @@
     return s + "</div></section>";
   }
 
+  function setAmbientArtwork(url) {
+    try {
+      if (url) {
+        document.documentElement.style.setProperty("--ambient-img", cssUrl(url));
+        document.body.classList.add("has-ambient");
+      } else {
+        document.documentElement.style.removeProperty("--ambient-img");
+        document.body.classList.remove("has-ambient");
+      }
+    } catch (e) {}
+  }
+
   function heroMarkup() {
     if (!S.banners.length) return "";
     var slides = S.banners.map(function (b, i) {
       var meta = [];
-      if (b.rating) meta.push("<b>★ " + esc(b.rating) + "</b>");
-      if (b.year) meta.push(esc(b.year));
-      if (b.country) meta.push(esc(b.country));
-      if (b.genre) meta.push(esc(String(b.genre).split(",")[0].trim()));
-      return '<div class="hero-slide" style="background-image:' + cssUrl(b.bg || b.poster) + '">' +
+      if (b.rating) meta.push('<span class="hero-pill rate">★ ' + esc(b.rating) + "</span>");
+      if (b.year) meta.push('<span class="hero-pill">' + esc(b.year) + "</span>");
+      if (b.country) meta.push('<span class="hero-pill">' + esc(b.country) + "</span>");
+      if (b.genre) meta.push('<span class="hero-pill">' + esc(String(b.genre).split(",")[0].trim()) + "</span>");
+      meta.push('<span class="hero-pill accent">' + (b.stype === 2 ? "Series" : "Movie") + "</span>");
+      var primary = b.bg || b.poster || "";
+      var fallback = b.poster || "";
+      var imgTag = primary
+        ? '<img class="hero-bg-img" src="' + esc(imgUrl(primary)) + '" alt="" loading="' + (i === 0 ? "eager" : "lazy") + '" decoding="async" referrerpolicy="no-referrer"' +
+          (fallback && fallback !== primary ? ' onerror="if(!this.dataset.fb){this.dataset.fb=1;this.src=\'' + esc(imgUrl(fallback)).replace(/'/g, "\\'") + '\';}else{this.style.display=\'none\';}"' : ' onerror="this.style.display=\'none\'"') + '>'
+        : "";
+      return '<div class="hero-slide' + (i === 0 ? " active" : "") + '" style="background-image:' + cssUrl(primary) + '">' +
+        imgTag +
         '<div class="hero-inner">' +
-        '<div class="hero-badge"><i class="dot"></i><span>' + (i === 0 ? "SuperBox feature" : "Now streaming") + "</span></div>" +
+        '<div class="hero-badge"><i class="dot"></i><span>' + (i === 0 ? "Featured" : "Now Streaming") + '</span><em class="hero-src-pill">SuperBox</em></div>' +
         '<h1 class="hero-title">' + esc(b.t) + "</h1>" +
-        '<div class="hero-meta">' + meta.map(function (x) { return "<span>" + x + "</span>"; }).join('<i class="sep"></i>') + "</div>" +
+        '<div class="hero-meta">' + meta.join("") + "</div>" +
         (b.desc ? '<p class="hero-desc">' + esc(b.desc) + "</p>" : "") +
         '<div class="hero-actions">' +
         '<button class="btn-primary" data-hero-play="' + i + '">' + ICON.play + " Play now</button>" +
@@ -548,8 +568,11 @@
       '</div>' +
       '<button type="submit" class="hs-go" aria-label="Search">Go</button>' +
       '</form>' +
+      '<div class="home-search-status-row">' +
       '<div class="home-search-status" id="homeSearchStatus">' +
       (deep ? "Deep mode active · Searching all catalogs (18+ verified)" : "Safe mode active · Family-friendly standard catalog") +
+      '</div>' +
+      '<span class="ai-search-pill"><i class="ai-spark-dot" aria-hidden="true">✦</i> AI Smart Search</span>' +
       '</div></div>' +
       '<div id="homeSearchResults" class="hidden" style="padding:0 16px 16px"></div>';
   }
@@ -761,22 +784,26 @@
     var dots = document.getElementById("heroDots");
     if (!track) return;
     var slides = $$(".hero-slide", track);
-    if (slides.length < 2) return;
+    if (!slides.length) return;
     var current = 0;
-    function setDot(i) {
-      if (!dots) return;
-      $$("i", dots).forEach(function (d, k) { d.classList.toggle("on", k === i); });
+    function setActive(i) {
+      slides.forEach(function (s, k) { s.classList.toggle("active", k === i); });
+      if (dots) $$("i", dots).forEach(function (d, k) { d.classList.toggle("on", k === i); });
+      var b = S.banners && S.banners[i];
+      if (b) setAmbientArtwork(b.bg || b.poster || "");
     }
+    setActive(0);
+    if (slides.length < 2) return;
     track.addEventListener("scroll", function () {
       var i = Math.round(track.scrollLeft / Math.max(1, track.clientWidth));
-      if (i !== current) { current = i; setDot(i); }
+      if (i !== current && i >= 0 && i < slides.length) { current = i; setActive(i); }
     }, { passive: true });
     if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
     S.heroTimer = setInterval(function () {
       if (document.hidden || !track.isConnected) return;
       current = (current + 1) % slides.length;
       track.scrollTo({ left: current * track.clientWidth, behavior: "smooth" });
-      setDot(current);
+      setActive(current);
     }, 6500);
   }
 
@@ -838,6 +865,7 @@
     return '<form class="scoped-search-bar" data-scoped-search="' + esc(scope) + '">' +
       '<svg class="ss-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.2-3.2"></path></svg>' +
       '<input type="search" class="ss-input" autocomplete="off" spellcheck="false" placeholder="' + esc(placeholder) + '">' +
+      '<span class="ai-search-pill compact" aria-label="AI Smart Search"><i class="ai-spark-dot" aria-hidden="true">✦</i> AI Smart Search</span>' +
       '<button type="button" class="ss-clear hidden" aria-label="Clear">×</button>' +
       '<button type="submit" class="ss-go">Search</button>' +
       '</form>';
@@ -983,15 +1011,60 @@
     return "Auto";
   }
 
+  function getTheme() {
+    try {
+      var t = localStorage.getItem("sb.theme");
+      if (t === "light" || t === "dark") return t;
+    } catch (e) {}
+    return "dark";
+  }
+  function applyTheme(theme) {
+    var next = theme === "light" ? "light" : "dark";
+    try { localStorage.setItem("sb.theme", next); } catch (e) {}
+    document.documentElement.setAttribute("data-theme", next);
+    if (document.body) document.body.setAttribute("data-theme", next);
+    var meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute("content", next === "light" ? "#f4f6fb" : "#0a0b0f");
+    var btn = document.getElementById("themeToggleBtn");
+    if (btn) {
+      btn.setAttribute("data-theme-mode", next);
+      btn.setAttribute("aria-pressed", String(next === "light"));
+    }
+    var meTheme = document.getElementById("meThemeState");
+    if (meTheme) meTheme.textContent = next === "light" ? "Light" : "Dark";
+    try { window.dispatchEvent(new CustomEvent("sb:theme", { detail: { theme: next } })); } catch (e) {}
+    return next;
+  }
+  function toggleTheme() {
+    var next = applyTheme(getTheme() === "light" ? "dark" : "light");
+    toast(next === "light" ? "Switched to Light Mode" : "Switched to Dark Mode");
+    return next;
+  }
+  function isContinueHidden() {
+    try { return localStorage.getItem("sb.read.hideContinue") === "1"; } catch (e) { return false; }
+  }
+  function setContinueHidden(hidden) {
+    try { localStorage.setItem("sb.read.hideContinue", hidden ? "1" : "0"); } catch (e) {}
+    if (window.READER && typeof window.READER.setContinueHidden === "function") {
+      try { window.READER.setContinueHidden(!!hidden); } catch (e) {}
+    }
+  }
+
   function renderMe() {
     clearInterval(S.heroTimer);
     var version = "1.4.0";
     try { if (window.SBAndroid && window.SBAndroid.version) version = window.SBAndroid.version(); } catch (e) {}
+    var curTheme = getTheme();
+    var hideCont = isContinueHidden();
     view.innerHTML =
       '<div class="page-head" style="padding-top:14px"><div class="page-kicker">Your space</div><h1 class="page-title">Me</h1></div>' +
       '<div class="me-card"><div class="me-avatar">S</div><h2 class="me-name">SuperBox</h2>' +
       '<div class="me-sub">Your ad-free entertainment hub</div>' +
       '<div class="me-badges"><span>NO ADS</span><span>NO ACCOUNT</span><span>NO TRACKERS</span></div></div>' +
+      '<div class="me-section"><h3>Appearance &amp; Reading</h3><div class="me-list">' +
+      '<button class="me-row" data-setting="theme"><span class="ic">◐</span><span class="tx"><b>Theme</b><span>Switch between Dark Obsidian &amp; Light Frosted</span></span><span class="rt" id="meThemeState">' + (curTheme === "light" ? "Light" : "Dark") + "</span></button>" +
+      '<button class="me-row" data-setting="hide-continue"><span class="ic">⊟</span><span class="tx"><b>Hide "Continue Reading" shelf</b><span>Toggle recent titles shelf in Reading Room</span></span><span class="switch ' + (hideCont ? "on" : "") + '"></span></button>' +
+      "</div></div>" +
       '<div class="me-section"><h3>Playback</h3><div class="me-list">' +
       '<button class="me-row" data-setting="quality"><span class="ic">HD</span><span class="tx"><b>Default quality</b><span>Start streams on a smooth tier</span></span><span class="rt">' + qualityText(S.quality) + "</span></button>" +
       '<button class="me-row" data-setting="autoplay"><span class="ic">▶</span><span class="tx"><b>Autoplay next episode</b><span>Continue series without a tap</span></span><span class="switch ' + (S.autoplay ? "on" : "") + '"></span></button>' +
@@ -999,7 +1072,7 @@
       '<div class="me-section"><h3>Catalogue</h3><div class="me-list">' +
       '<button class="me-row" data-setting="refresh"><span class="ic">↻</span><span class="tx"><b>Refresh catalogue</b><span>Fetch the latest SuperBox rows</span></span><span class="rt">Refresh</span></button>' +
       '<button class="me-row" data-setting="sources"><span class="ic">⌘</span><span class="tx"><b>Source directory</b><span>Every movie, anime and reading provider</span></span><span class="rt">Browse</span></button>' +
-      '<button class="me-row" data-setting="vpn"><span class="ic">?</span><span class="tx"><b>SuperBox Shield</b><span>Embedded VPN status and region</span></span><span class="rt" id="meVpnState">Checking?</span></button>' +
+      '<button class="me-row" data-setting="vpn"><span class="ic">⚡</span><span class="tx"><b>SuperBox Shield</b><span>Embedded VPN status and region</span></span><span class="rt" id="meVpnState">Connecting…</span></button>' +
       '<button class="me-row" data-setting="clear"><span class="ic">×</span><span class="tx"><b>Clear temporary data</b><span>Quality preference and cached UI state</span></span><span class="rt">Clear</span></button>' +
       '<button class="me-row" data-setting="about"><span class="ic">i</span><span class="tx"><b>About SuperBox</b><span>Version ' + esc(version) + " · Mobile</span></span><span class=\"rt\">Info</span></button>" +
       "</div></div>" +
@@ -1058,13 +1131,22 @@
     var on = vpnOn(st);
     var off = vpnOff(st);
     var failed = !!st && st.state === "error";
+    var wait = !on && !off && !failed;
     chip.classList.toggle("ok", on);
     chip.classList.toggle("off", off);
     chip.classList.toggle("err", failed && !on && !off);
+    chip.classList.toggle("wait", wait);
+    var dot = $("#vpnChipDot");
+    if (dot) {
+      dot.classList.toggle("ok", on);
+      dot.classList.toggle("off", off);
+      dot.classList.toggle("err", failed && !on && !off);
+      dot.classList.toggle("wait", wait);
+    }
     var label = $("#vpnChipLabel");
     var ping = $("#vpnChipPing");
-    if (label) label.textContent = on ? "Shield" : off ? "Off" : failed ? "Retry" : "Shield";
-    if (ping) ping.textContent = off ? "Direct" : (st && st.ping > 0 ? st.ping + " ms" : "— ms");
+    if (label) label.textContent = on ? "Protected" : off ? "Direct" : failed ? "Retry" : "Connecting…";
+    if (ping) ping.textContent = off ? "VPN Off" : (st && st.ping > 0 ? st.ping + " ms" : (wait ? "Shield" : "— ms"));
   }
   function paintVpnServerList(filter) {
     var host = $("#vpnServerList");
@@ -1169,7 +1251,8 @@
     var off = vpnOff(st);
     var failed = !!st && st.state === "error";
     var phase = (st && st.phase) || "";
-    gate.classList.toggle("hidden", on || off);
+    /* Instant launch: bypass full-screen blocking VPN gate; status lives in #vpnChip */
+    gate.classList.add("hidden");
     gate.classList.toggle("on", on);
     gate.classList.toggle("err", failed && !off);
     var title = document.getElementById("vpnTitle");
@@ -1220,12 +1303,9 @@
       vpnGateTimer = setTimeout(watchVpnGate, vpnOff(st) ? 14000 : (vpnOn(st) ? 8000 : 1600));
     }).catch(function () {
       var gate = document.getElementById("vpnGate");
-      if (gate) gate.classList.remove("hidden");
-      var title = document.getElementById("vpnTitle");
-      if (title) title.textContent = "Starting the Shield";
-      var msg = document.getElementById("vpnMsg");
-      if (msg) msg.textContent = "Waiting for the local engine to answer. This usually takes a few seconds.";
-      vpnGateTimer = setTimeout(watchVpnGate, 1400);
+      if (gate) gate.classList.add("hidden");
+      paintVpnChip(null);
+      vpnGateTimer = setTimeout(watchVpnGate, 1800);
     });
   }
   function switchVpnRegion(region) {
@@ -2754,7 +2834,15 @@
     var setting = e.target.closest("[data-setting]");
     if (setting) {
       var what = setting.getAttribute("data-setting");
-      if (what === "quality") {
+      if (what === "theme") {
+        toggleTheme();
+      } else if (what === "hide-continue") {
+        var nextHide = !isContinueHidden();
+        setContinueHidden(nextHide);
+        var swc = $(".switch", setting);
+        if (swc) swc.classList.toggle("on", nextHide);
+        toast(nextHide ? "Continue Reading shelf hidden" : "Continue Reading shelf visible");
+      } else if (what === "quality") {
         var order = [0, 480, 720, 1080];
         var pos = order.indexOf(num(S.quality, 0));
         S.quality = order[(pos + 1) % order.length];
@@ -3284,17 +3372,20 @@
   };
 
   function init() {
+    applyTheme(getTheme());
     S.quality = num(prefGet("sb.quality"), 0);
     S.autoplay = prefGet("sb.autoplay") !== "0";
     S.speed = num(prefGet("sb.speed"), 1);
     bindEvents();
+    var themeBtn = document.getElementById("themeToggleBtn");
+    if (themeBtn) themeBtn.onclick = toggleTheme;
     startVpnGate();
     requestAnimationFrame(updateTabIndicator);
     renderHome();
     loadHome().then(function () {
       removeBoot();
     }).catch(function () { removeBoot(); });
-    setTimeout(removeBoot, 7000);
+    setTimeout(removeBoot, 1200);
   }
 
   window.SBApp = {
@@ -3318,6 +3409,9 @@
   window.SuperBoxUI = {
     navigate: navigateSection,
     setSearchMode: setHomeSearchMode,
+    setTheme: applyTheme,
+    getTheme: getTheme,
+    toggleTheme: toggleTheme,
     openVpnDrawer: openVpnSheet,
     openAgeGate: requireAge18,
     setSimilarResults: paintPlayerSimilarCards,

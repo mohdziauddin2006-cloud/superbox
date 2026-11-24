@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-<meta name="theme-color" content="#000000">
+<meta name="theme-color" content="#0a0b0f">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>SuperBox</title>
@@ -60,6 +60,10 @@ window.__SB_TOKEN__ = "__SB_TOKEN_VALUE__";
       <button id="vpnChip" class="vpn-chip" type="button" aria-haspopup="dialog" aria-label="VPN control">
         <span class="vpn-chip-dot" id="vpnChipDot"></span>
         <span class="vpn-chip-text"><b id="vpnChipLabel">Shield</b><i id="vpnChipPing">—</i></span>
+      </button>
+      <button id="themeToggleBtn" class="icon-btn theme-toggle" type="button" aria-label="Switch light or dark theme" title="Switch Theme">
+        <svg class="ico-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4.5"></circle><path d="M12 2.5v2.2M12 19.3v2.2M4.9 4.9l1.6 1.6M17.5 17.5l1.6 1.6M2.5 12h2.2M19.3 12h2.2M4.9 19.1l1.6-1.6M17.5 6.5l1.6-1.6"></path></svg>
+        <svg class="ico-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.2 14.8A8.5 8.5 0 1 1 9.2 3.8a7 7 0 0 0 11 11Z"></path></svg>
       </button>
       <button id="searchBtn" class="icon-btn" aria-label="Search">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.2-3.2"></path></svg>
@@ -153,7 +157,7 @@ window.__SB_TOKEN__ = "__SB_TOKEN_VALUE__";
 
 <!-- SUPERBOX SHIELD GATE: unskippable until the embedded WARP tunnel
      reports warp=on. Polls /api/vpn/status (token auto-signed). -->
-<div id="vpnGate" class="vpn-gate" role="dialog" aria-modal="true" aria-labelledby="vpnTitle">
+<div id="vpnGate" class="vpn-gate hidden" role="dialog" aria-modal="true" aria-labelledby="vpnTitle">
   <div class="vpn-card">
     <div class="vpn-mark" aria-hidden="true"><span>S</span></div>
     <span class="vpn-kicker">SUPERBOX SHIELD</span>
@@ -193,6 +197,7 @@ window.__SB_TOKEN__ = "__SB_TOKEN_VALUE__";
     <div class="search-field">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.2-3.2"></path></svg>
       <input id="searchInput" type="search" autocomplete="off" autocorrect="off" spellcheck="false" placeholder="Search movies, series, anime...">
+      <span class="ai-search-pill compact" aria-label="AI Smart Search"><i class="ai-spark-dot" aria-hidden="true">✦</i> AI Smart Search</span>
       <button id="searchClear" class="search-clear hidden" aria-label="Clear search">×</button>
     </div>
   </div>
