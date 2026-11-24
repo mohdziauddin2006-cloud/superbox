@@ -54,6 +54,7 @@
     { id: 'mangafire', n: 'MangaFire', u: 'https://mangafire.to/', k: 'manga', r: 'Global', note: 'Large manga index' },
     { id: 'toonsutra', n: 'ToonSutra', u: 'https://www.toonsutra.com/manhwa', k: 'manga', r: 'IN', note: 'Indian comics and manhwa' },
     { id: 'hentai20', n: 'Hentai20', u: 'https://hentai20.io/', k: 'manga', r: 'Global', note: 'Adults only', adult: true },
+    { id: 'nhentai', n: 'nHentai', u: 'https://nhentai.net/', k: 'manga', r: 'Global', note: 'Adults only, English galleries', adult: true },
 
     /* ---------------------------------------------------------------- anime */
     { id: 'aniwaves', n: 'AniWaves', u: 'https://aniwaves.tv/home', k: 'anime', r: 'Global', note: 'Anime streams and schedule' },
@@ -88,6 +89,10 @@
     if (window.SBAutoVpn) { try { window.SBAutoVpn(item.r); } catch (e) {} }
     if (window.SBAndroid && window.SBAndroid.openWeb) {
       window.SBAndroid.openWeb(item.u, item.n);
+      return;
+    }
+    if (window.SBOpenWeb) {
+      window.SBOpenWeb(item.u, item.n, item.r);
       return;
     }
     try { window.open(item.u, '_blank', 'noopener'); } catch (e) {}
@@ -192,6 +197,9 @@
       var item = find(b.getAttribute('data-src'));
       if (!item) return;
       if (item.adult) {
+        var go = function () { open(item, opts); };
+        if (typeof window.SBRequireAge === 'function') { window.SBRequireAge('Adult source directory', go); return; }
+        if (window.SBAndroid && typeof window.SBAndroid.requireAge18 === 'function') { window.SBAndroid.requireAge18('Adult source directory', go); return; }
         var ok = false;
         try { ok = window.confirm('This source is for adults only (18+). Continue?'); } catch (err) {}
         if (!ok) return;
