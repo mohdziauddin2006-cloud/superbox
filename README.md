@@ -367,3 +367,20 @@ components remain under their own licenses.
   </p>
   <sub>Built for touch. Tuned for quiet. Zero ads.</sub>
 </div>
+
+
+---
+
+## What's new in 1.4.1
+
+- Living frosted-glass UI across Desktop and Android with animated hero backdrop slides.
+- Instant background launch: Home opens immediately while the Shield connects asynchronously.
+- In-app auto-updater wired to GitHub Releases with SHA-256 verification.
+- App-wide offline ONNX AI semantic search across Home and every scoped search bar.
+- Real multi-country VPN egress selection with live uptime counter.
+- Complete Light/Dark theme switching with persisted preference.
+- Removable, hideable, and clearable Continue Reading shelf.
+
+Release assets:
+- SuperBox-Setup-1.4.1.exe — 237.1 MB — SHA-256: 11e10ba91af20541463af1dd64c6b5d4a2c7e817c4e9da6c125f1f4f26107083
+- SuperBox-1.4.1.apk — 288.27 MB — SHA-256: 4c5a8ad2ae4bb3dccdddf84d94e46cad83cd9476dbab8b47658ff0cd282c6f1f

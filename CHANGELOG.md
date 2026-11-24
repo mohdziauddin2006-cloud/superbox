@@ -321,3 +321,17 @@ working HLS/DASH/MP4 playback and a hardened Android build.
 [1.2.0]: https://github.com/mohdziauddin2006-cloud/superbox/releases/tag/v1.2.0
 [1.1.0]: https://github.com/mohdziauddin2006-cloud/superbox/releases/tag/v1.1.0
 [1.0.0]: https://github.com/mohdziauddin2006-cloud/superbox/releases/tag/v1.0.0
+
+
+## 1.4.1
+
+- Living frosted-glass UI, animated hero slides, spaced metadata pills.
+- Instant background VPN launch with real multi-country egress and live uptime.
+- Frosted-glass in-app auto-updater with verified GitHub Releases backend.
+- App-wide offline ONNX AI semantic search and reranking.
+- Artwork fallbacks and full cross-check audit.
+- Light/Dark mode and removable Continue Reading controls.
+
+Assets:
+- SuperBox-Setup-1.4.1.exe (248658572 bytes) SHA-256 11e10ba91af20541463af1dd64c6b5d4a2c7e817c4e9da6c125f1f4f26107083
+- SuperBox-1.4.1.apk (302270911 bytes) SHA-256 4c5a8ad2ae4bb3dccdddf84d94e46cad83cd9476dbab8b47658ff0cd282c6f1f
