@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="560" viewBox="0 0 1600 560" role="img" aria-label="SuperBox 1.4.0 — one box, infinite library">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#050508"/>
+      <stop offset="0.5" stop-color="#0b0b10"/>
+      <stop offset="1" stop-color="#050508"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.42" r="0.58">
+      <stop offset="0" stop-color="#ffc105" stop-opacity="0.18"/>
+      <stop offset="0.5" stop-color="#ffc105" stop-opacity="0.04"/>
+      <stop offset="1" stop-color="#ffc105" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#fff3c4"/>
+      <stop offset="0.3" stop-color="#ffc105"/>
+      <stop offset="0.68" stop-color="#c98a00"/>
+      <stop offset="1" stop-color="#ffe9a3"/>
+    </linearGradient>
+    <pattern id="dots" width="32" height="32" patternUnits="userSpaceOnUse">
+      <circle cx="1" cy="1" r="1" fill="#ffffff" fill-opacity="0.045"/>
+    </pattern>
+    <filter id="soft" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="10" result="b"/>
+      <feMerge>
+        <feMergeNode in="b"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="halo" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="34"/>
+    </filter>
+  </defs>
+  <rect width="1600" height="560" fill="url(#bg)"/>
+  <rect width="1600" height="560" fill="url(#dots)"/>
+  <rect width="1600" height="560" fill="url(#glow)"/>
+  <g opacity="0.05" stroke="#ffc105" fill="none" stroke-width="1">
+    <path d="M0 80 H1600 M0 480 H1600 M120 0 V560 M1480 0 V560"/>
+  </g>
+  <text x="800" y="330" text-anchor="middle" font-family="Segoe UI, Inter, Helvetica, Arial, sans-serif" font-size="300" font-weight="700" fill="#ffc105" opacity="0.04" letter-spacing="10">&#8734;</text>
+  <g filter="url(#halo)" opacity="0.55">
+    <path d="M800 208 C700 96 540 128 540 208 C540 288 700 320 800 208 C900 96 1060 128 1060 208 C1060 288 900 320 800 208" fill="none" stroke="#ffc105" stroke-width="10" stroke-linecap="round"/>
+  </g>
+  <path d="M800 208 C700 96 540 128 540 208 C540 288 700 320 800 208 C900 96 1060 128 1060 208 C1060 288 900 320 800 208" fill="none" stroke="url(#gold)" stroke-width="8" stroke-linecap="round" filter="url(#soft)"/>
+  <circle cx="800" cy="208" r="4" fill="#fff8dc" opacity="0.9"/>
+  <text x="800" y="414" text-anchor="middle" font-family="Segoe UI, Inter, Helvetica, Arial, sans-serif" font-size="76" font-weight="700" letter-spacing="26" fill="#f7f4ea">SUPERBOX</text>
+  <text x="800" y="462" text-anchor="middle" font-family="Segoe UI, Inter, Helvetica, Arial, sans-serif" font-size="19" letter-spacing="9" fill="#d8c58a">ONE BOX &#183; INFINITE LIBRARY</text>
+  <g font-family="Segoe UI, Inter, Helvetica, Arial, sans-serif" font-size="14" letter-spacing="4" fill="#8f8b80" text-anchor="middle">
+    <text x="800" y="516">V1.4.0 &#183; OFFLINE ONNX AI &#183; EMBEDDED VPN &#183; ZERO ADS</text>
+  </g>
+</svg>

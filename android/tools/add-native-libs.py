@@ -15,8 +15,41 @@ Android allows the app to execute it.
 Usage: add-native-libs.py <base.apk> <ffmpeg.aar> [vpn-libs-dir]
 """
 import os
+import struct
 import sys
 import zipfile
+import zlib
+
+
+def read_entry(zf: zipfile.ZipFile, info: zipfile.ZipInfo) -> bytes:
+    """Read an entry, tolerating aapt2's Windows backslash local headers.
+
+    aapt2 writes nested asset paths with `\\` in the local file header while
+    the central directory uses `/`, which Python 3.13 rejects as a mismatch.
+    The central directory is authoritative, so fall back to the raw deflate
+    stream at the recorded offset.
+    """
+    try:
+        return zf.read(info)
+    except (zipfile.BadZipFile, KeyError):
+        pass
+    with open(zf.filename, "rb") as fh:
+        fh.seek(info.header_offset)
+        header = fh.read(30)
+        if len(header) != 30:
+            raise zipfile.BadZipFile("truncated local header")
+        fields = struct.unpack("<IHHHHHIIIHH", header)
+        if fields[0] != 0x04034B50:
+            raise zipfile.BadZipFile("bad local header signature")
+        name_len, extra_len = fields[9], fields[10]
+        fh.seek(name_len + extra_len, 1)
+        data = fh.read(info.compress_size)
+        if info.compress_type == zipfile.ZIP_STORED:
+            return data
+        if info.compress_type == zipfile.ZIP_DEFLATED:
+            return zlib.decompress(data, -15)
+        raise zipfile.BadZipFile(
+            "unsupported compression type %d" % info.compress_type)
 
 
 def add_so(zout: zipfile.ZipFile, abi: str, soname: str, data: bytes, date_time) -> None:
@@ -48,7 +81,7 @@ def main() -> int:
             zipfile.ZipFile(tmp, "w") as zout:
         # Preserve every existing entry (resources, assets, classes.dex).
         for info in zin.infolist():
-            zout.writestr(info, zin.read(info.filename))
+            zout.writestr(info, read_entry(zin, info))
 
         for info in az.infolist():
             name = info.filename

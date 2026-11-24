@@ -1,259 +1,323 @@
-# Changelog
+<div align="center">
+  <img src="docs/hero-1.4.svg" alt="SuperBox 1.4.0" width="640">
+  <h1>CHANGELOG</h1>
+  <p><b>One box. Infinite library.</b></p>
+  <p>
+    <img alt="Version 1.4.0" src="https://img.shields.io/badge/release-v1.4.0-FFC105?style=flat-square&labelColor=0B0B0F">
+    <img alt="Offline ONNX AI" src="https://img.shields.io/badge/AI-offline%20ONNX-FFC105?style=flat-square&labelColor=0B0B0F">
+    <img alt="Embedded VPN" src="https://img.shields.io/badge/VPN-embedded%20WARP-FFC105?style=flat-square&labelColor=0B0B0F">
+    <img alt="Zero ads" src="https://img.shields.io/badge/ads-zero-FFC105?style=flat-square&labelColor=0B0B0F">
+  </p>
+</div>
 
 All notable changes to SuperBox are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.4.0] — 2026-11-24
+
+**The intelligence release.** Recommendations now run entirely on-device, the
+reader gained a complete HUD, every catalogue ships behind one private shell,
+and the VPN became a real control panel instead of a status light.
 
 ### Added
 
-- Native Reading adapters for all 13 remaining `source.txt` providers
-  (Asura, Flame, Vortex, HiveToons, Comix, ManhuaUS, NeloManga, Tappytoon,
-  Tapas, AllManga, MangaFire, ToonSutra, Hentai20), with in-app catalogues,
-  detail pages, chapter lists and readers. No provider website is opened.
-- Interactive VPN panel on desktop and Android: live state, country/city,
-  real-time ping, Auto-Region Routing and a searchable 13-server selector.
-- Tapas catalogue now reads the public JSON catalogue directly, so titles and
-  covers render without a hidden browser.
+- **Offline AI recommendations.** The quantized q8 `all-MiniLM-L6-v2` ONNX
+  model, tokenizer, vocabulary and runtime are bundled with Windows and
+  Android. Loading uses `local_files_only: true`; there is no inference key,
+  no cloud request and no external model download.
+- **384-dimensional semantic matching.** Candidate shortlists are embedded in
+  batches of 16, documents are cached, and a query is a single dense pass.
+  Measured: 42 ms to index 16 titles cold, 10 ms warm on Windows; 151 ms first
+  and 19 ms warm on Android.
+- **12–16 similar previews.** The recommendation section paints poster cards
+  with percentage match pills and joins the existing detail page instead of
+  replacing it.
+- **Independent vector partitions.** Safe and adult metadata are embedded,
+  stored and queried separately. Adult items are rejected by the safe index,
+  and the isolated store stays empty unless the 18+ vault is active.
+- **Reader HUD.** Paged, vertical and continuous modes with a chapter drawer,
+  progress, chapter jump and mode-aware layout on both platforms.
+- **Reader input parity.** Arrow keys, Page Up/Down, Space and Home/End on
+  desktop; guarded swipe navigation on touch. Keyboard and swipe move exactly
+  one page in paged modes and one viewport in continuous modes.
+- **Strict language filtering.** Feeds request the chosen language and verify
+  hosted pages; chapters without hosted pages are dropped instead of opening a
+  blank reader.
+- **Episode range tabs.** Seasons plus `1–50`, `51–100` and `101+` pagination,
+  generated from the real episode total on desktop and Android.
+- **Non-blocking metadata fallback.** When the primary metadata service is slow
+  or unreachable, the catalogue answer is used and the detail page still
+  renders; the request is capped and never blocks first paint.
+- **Unified scoped search.** Every search surface can scope itself and clears
+  in one tap. Deep search shares the bar and opens through the age gate.
+- **VPN control panel.** Status chip, pulse ring, power copy, manual ON/OFF,
+  live latency badge, Auto-Region switch and searchable region cards.
+- **Complete catalogue activation.** Native adapters, detail pages, chapter
+  lists and readers for every reading catalogue, with desktop and Android
+  parity and ordered page extraction.
+- **Private adult vault.** Adult reading catalogues sit together only inside
+  **18+ Reading**, behind the age gate, with pagination, lazy covers, chapter
+  fallback, image rotation and English-tag verification. A separate **18+
+  Video** search is isolated the same way. Standard Reading and Kids contain
+  zero adult items.
 
 ### Changed
 
-- The Sources hub was removed from both platforms; `/sources` returns Home and
-  no provider domain or "Open on ..." action is exposed in the UI.
-- Reading language filtering is strict: MangaDex feeds request
-  `translatedLanguage[]=<lang>` with `includeExternalUrl=0`, and both the feed
-  and client keep only chapters that have hosted pages in the selected language.
-- Manual VPN OFF switches Node, Chromium and the Android WebView to direct
-  routing instead of leaving requests pointed at a stopped local proxy.
+- The AI Studio backend is merged into both apps instead of running beside
+  them: one renderer state, one adult mode, one reader registry and one scoped
+  search path.
+- Desktop and Android keep a separate adult provider registry. Provider lookup
+  searches both registries; the public interface never sees the adult one.
+- AI candidate embedding moved from one inference pass per title to batched
+  passes of 16, with cached dense vectors on re-index.
+- SBAI index requests now allow a 9 s budget and similarity requests 2.5 s;
+  local scoring still answers immediately if the BFF is busy.
+- Android now serves `.mjs` as JavaScript and `.wasm` as `application/wasm`,
+  and the asset reader accepts up to 40 MB for the ONNX model and asyncify
+  runtime.
+- The internal catalogue directory is reachable from Settings (Windows) and Me
+  (Android), and every entry opens through the same in-app shell.
+- Reader page caches, covers and chapter lists are scoped to the active
+  catalogue and language, preventing cross-catalogue bleed.
+- The version is now 1.4.0 everywhere; APK `versionCode=5`.
 
 ### Fixed
 
-- Dropped TLS sockets no longer terminate the process with
-  `TypeError: terminated`; every outbound fetch has a timeout, retry budget and
-  stream error handler, and a failed request only logs instead of raising the
-  crash dialog.
-- Tapas chapter lists use the real anchor labels and its reader is scoped to
-  the requested episode, so avatars, thumbnails and the previous episode's
-  pages never leak into the reader.
-- Madara-based sources (ManhuaUS) read the complete embedded chapter JSON, and
-  featured/cover art is filtered out of HiveToons chapters.
-- Flame, Vortex and HiveToons catalogues now parse their current URLs without
-  stripping leading title numbers.
+- `undici` and `TLSSocket` guards: a terminated socket logs once and fails the
+  request instead of raising a process-level crash dialog.
+- Every outbound fetch has a timeout, retry budget and stream error handler.
+- Stale AI results no longer paint after a seed change; a late response is
+  discarded by request generation.
+- Desktop source overlay closes on Escape and backdrop click, and no longer
+  leaves the page scroll locked.
+- Android source sheet closes cleanly and restores the previous route.
+- Episode rows no longer duplicate when a range tab is reselected, and season
+  switches reset the active range.
+- Reader HUD mode changes preserve the current page instead of jumping to the
+  start.
+- The VPN chip reflects manual OFF and direct mode truthfully; the latency
+  badge stops polling when the panel is closed.
+- A failed ONNX load falls back to the local TF-IDF engine without disabling
+  recommendations.
+- Mobile AI assets are decrypted before use, so the bundled runtime and model
+  load from the encrypted asset store.
+
+### Security
+
+- Adult provider identifiers and endpoints are excluded from the public shell,
+  public search and public vector partition.
+- The age gate is the only route into adult reading; deep search and the 18+
+  video lane reuse the same verification.
+- Android privileged routes still require the per-session token, and all
+  first-party JavaScript remains encrypted at rest.
+- Raw provider URLs are resolved inside the app and never exposed in the UI.
+
+### Verified
+
+- Windows: `mode=onnx`, `Xenova/all-MiniLM-L6-v2`, 384 dimensions; 16 titles
+  indexed in 42 ms cold; 16 previews at 98% top match in 10 ms warm.
+- Android: bundled ONNX loaded in 907 ms; 384 dimensions; first pass 151 ms,
+  warm pass 19 ms, 95% top match.
+- Vector isolation: safe index populated, isolated index empty until the 18+
+  vault is active.
+- Reader: HUD modes, chapter drawer, keyboard and swipe handlers present on
+  both platforms.
+- Search: scoped inputs and clear controls present on every search surface;
+  deep search gated.
+- Episodes: `1–50`, `51–100`, `101+` and season selection verified.
+- VPN: power control, pulse ring, latency badge, Auto-Region and region search
+  verified.
+- Catalogue adapters: ordered pages and chapter lists returned within the
+  ten-second ceiling.
+- JavaScript: every desktop and Android bundle passes `node --check`.
+- Java: server, activity, VPN and player sources compile.
+- APK: universal, `versionCode=5`, four ABIs, ONNX assets, signature verified.
+- Media: every verification stream ran muted and was stopped under 10 seconds.
 
 ## [1.3.0] — 2026-11-12
 
-The everywhere release: an embedded open-source VPN, Moviebox restored on both
-platforms, all 47 `source.txt` catalogues and a native MangaDex/WEBTOON
-Reading room.
+**The everywhere release.** An embedded open-source VPN, restored catalogue
+playback on both platforms, every catalogue wired, and a native reading room.
 
 ### Added
 
-- Shield VPN: bundled `usque` v4.2.1 (GPL-3.0) speaking Cloudflare WARP over
-  MASQUE, with anonymous registration and a UI gate that stays closed until
-  `warp=true`.
-- 13 region profiles (Global, US, Canada, UK, Australia, India, Germany, Japan,
-  Singapore, Hong Kong, South Korea, France, Brazil), 12 endpoint profiles per
-  region, rotated for redundancy.
-- Desktop VPN transport: hidden `usque l4-http-proxy` on `127.0.0.1:46950`,
-  `undici` proxy agent for Node and `session.setProxy` for Chromium.
-- Android VPN transport: `libusque.so` per ABI, `LocalServer` upstream proxy
-  and `androidx.webkit` `ProxyController` for the WebView.
-- Moviebox Spotlight on desktop and Android: hero, 50-card front page, 16 rows,
-  detail pages, seasons, episodes and audio tracks.
-- Moviebox media proxy with a 2 MB first window, 8 MB follow-ups, 128 KB chunks
-  and 24 parallel range workers; scoped direct split tunnel for the CDN.
-- 47-source directory: 23 movies/TV, 10 anime and 14 manga/manhwa, searchable
-  and grouped, with every URL from `source.txt`.
-- Reading room: MangaDex API catalogue (49,463 titles at verification),
-  WEBTOON catalogue, genre/age filters, cached covers and pages, native readers
-  and an external-chapter fallback card.
-- Reading filters: choose a language (English first), a format (Manga, Manhwa,
-  Manhua, Other) and a genre; requests are sequenced and aborted so rapid
-  changes can never paint a stale result.
-- IPv6-first Shield transport on both platforms: `2606:4700:103::2` is tried
-  first (10 s budget), then the IPv4 ladder.
-- Hentai.tv signed-URL probe: an offscreen iframe on desktop and a 1×1 WebView
-  on Android capture the short-lived `?verify=` URL minted by nhplayer.
-- Rule34 quality ladder parsing (`_360`, `_480p`, `_720p`, …) with the signed
-  `?v-acctoken` preserved, and de-duplicated rows.
-- Universal Android APK with all four ABIs, bundled VPN per ABI and
-  `versionCode=4`.
-- `docs/RELEASE_NOTES_v1.3.0.md` and a rewritten `docs/VERIFY.md`.
+- Shield VPN: bundled open-source Cloudflare WARP over MASQUE, anonymous
+  registration and a gate that stays closed until the tunnel reports healthy.
+- 13 region profiles, 12 endpoint profiles per region, rotated for redundancy.
+- Desktop transport: hidden local proxy, `undici` agent for Node and Chromium
+  proxy configuration, with loopback bypassed.
+- Android transport: bundled native core per ABI, loopback upstream proxy and
+  WebView proxy routing.
+- Catalogue spotlight on both platforms: hero, front-page rows, detail pages,
+  seasons, episodes and audio tracks.
+- Media proxy with a small first window, larger follow-ups, parallel range
+  workers and a scoped direct path for the CDN that rejects VPN egress.
+- Searchable internal catalogue directory with stable native rows where an API
+  exists and an in-app shell everywhere else.
+- Reading room: public catalogue APIs, genre and age filters, cached covers and
+  pages, native readers and an external-chapter fallback card.
+- Language, format and genre filters with request sequencing and cancellation.
+- IPv6-first Shield transport, falling back to the IPv4 ladder.
+- Short-lived signed-URL capture for players that mint a verification token.
+- Quality ladder parsing, signed-token preservation and de-duplicated rows.
+- Universal Android APK with all four ABIs and `versionCode=4`.
 
 ### Changed
 
 - Auto-region switching is preference-only while the tunnel is healthy; a
-  healthy tunnel is no longer torn down mid-session.
-- VPN stop/restart waits for port release (desktop 2.6 s, Android 1.2 s plus
-  900 ms between endpoint attempts).
-- MangaDex covers are rewritten to the working at-home host, learned once and
-  cached in `localStorage`.
-- MangaDex catalogue requests retry once after 1.4 s to survive rate limits.
+  healthy tunnel is never torn down mid-session.
+- VPN stop/restart waits for port release on both platforms.
+- Covers are rewritten to the working image host, learned once and cached.
+- Catalogue requests retry once to survive rate limits.
 
 ### Fixed
 
-- Android Moviebox media path: signed `&t=` URLs are used unescaped, and
-  `/raw` returns real `206 video/mp4` windows instead of anti-bot HTML.
-- Desktop Moviebox retry bookkeeping (`session.tried[q.id]`) and stale play
-  payload handling.
-- Android image cache rejects anti-bot HTML with magic-byte sniffing instead of
-  painting a broken image.
-- External-only MangaDex chapters no longer open a blank reader.
-- Rule34 rows no longer repeat titles or show model/category tiles, and play
-  the highest signed rendition instead of the 360p default.
-- Hentaicity 3D / CG and Futanari rows use the final `videos/straight/*` URLs
-  instead of the `301` redirect targets.
-- Hentaicity playback on Android: the signed
-  `.../.mp4.urlset/master.m3u8?hash=` URL is preserved end to end and loaded
-  through hls.js instead of being truncated to `.mp4`.
-- Android Home / Movies / Series / Anime shelves tag every TMDB and archive
-  descriptor with its resolver, so no header row is left empty.
-- Hentai.tv playback on Android: the bare r2 mp4 is replaced by the signed
-  `?verify=` URL captured from nhplayer and played directly in the WebView
-  (the r2 CDN rejects Java's TLS fingerprint).
-- Hentai.tv page-two row no longer duplicates the newest row.
+- Signed media URLs are used unescaped, and the media route returns real
+  `206 video/mp4` windows instead of anti-bot HTML.
+- Retry bookkeeping and stale play payload handling.
+- Image cache rejects anti-bot HTML with magic-byte sniffing.
+- External-only chapters no longer open a blank reader.
+- Quality rows no longer repeat titles or show model/category tiles, and play
+  the highest signed rendition instead of a low default.
+- Signed HLS URLs are preserved end to end instead of being truncated.
+- Home shelves tag every descriptor with its resolver, so no header row is
+  left empty.
+- The signed verification URL is captured and played directly when the media
+  CDN rejects the platform TLS fingerprint.
 
 ## [1.2.0] — 2026-11-09
 
-The hardening release: faster cold starts, self-healing artwork, a universal
+**The hardening release.** Faster cold starts, self-healing artwork, a universal
 fat APK and a playback ladder that keeps trying until a source actually plays.
 
 ### Added
 
-- Universal fat APK: every ABI (arm64-v8a, armeabi-v7a, x86, x86_64) plus a
-  bundled FFmpeg decoder archive, stored uncompressed for zero-copy loading.
-- Stale-while-revalidate row cache on both platforms (`sb.rows.v2`), so shelves
-  paint from localStorage first and refresh silently.
-- Viewport-driven row hydration: the first four rows load eagerly, the rest
-  start ~700 px before they scroll into view, cutting launch requests sharply.
-- Hover-intent prefetch for 18+ cards on desktop (episode/JAV/Rule34/AI).
-- Three-tier artwork fallback: local `/img` cache → origin → images.weserv.nl.
-- Native Android `video.onerror` handling, 18 s/45 s load watchdogs and a
-  `fallback → embed → page` handoff when a direct stream never starts.
-- Desktop stall watchdog rotates sources only after 15 s of zero progress
-  (45 s absolute cap) and cleans media listeners between sources.
-- Headless verification mode (`SB_HEADLESS=1`) with process-level audio mute,
-  hidden window and CDP on port 9333.
+- Universal fat APK: every ABI plus a bundled FFmpeg decoder archive, stored
+  uncompressed for zero-copy loading.
+- Stale-while-revalidate row cache, so shelves paint from local storage first
+  and refresh silently.
+- Viewport-driven row hydration: the first rows load eagerly, the rest start
+  shortly before they scroll into view.
+- Hover-intent prefetch for adult cards on desktop.
+- Three-tier artwork fallback: local cache, origin, then image resizer.
+- Native video error handling, load watchdogs and a fallback-to-embed-to-page
+  handoff when a direct stream never starts.
+- Desktop stall watchdog that rotates sources only after zero progress and
+  cleans media listeners between sources.
+- Headless verification mode with process-level audio mute, a hidden window
+  and a debugging port.
 
 ### Changed
 
-- Desktop releases are NSIS-only; the portable target and split builds are gone.
-- Eporner extraction uses an embed-only fast path, a 4-minute resolver cache,
-  15-minute signed-file reuse and automatic re-signing on failure.
-- `/ep` requests carry a 9 s timeout and purge cached URLs on 502 responses.
-- Windows and Android versions bumped to 1.2.0; APK `versionCode=3`.
+- Desktop releases are NSIS-only; portable and split builds are gone.
+- Signed-file extraction uses a fast path, a resolver cache and reuse with
+  automatic re-signing on failure.
+- Episode requests carry a timeout and purge cached URLs on gateway errors.
+- Version 1.2.0 on both platforms; APK `versionCode=3`.
 
 ### Fixed
 
-- Galleries and 18+ lanes that never resolved: JAV now races the backend route
-  against the client parser on desktop, with `/extract` playback.
-- Infinite loading shelves: every row has a hard ceiling and paints cache
-  before any network work starts.
-- Memory/listener leaks in both players when switching sources.
-- Dead-image replay and stuck initials placeholders across all sections.
+- Galleries and adult lanes that never resolved now race the backend route
+  against the client parser.
+- Infinite loading shelves: every row has a ceiling and paints cache before
+  network work starts.
+- Memory and listener leaks when switching sources.
+- Dead-image replay and stuck initials placeholders.
 
 ### Verified
 
-- Windows Setup installed silently, reports 1.2.0, first paint 276 ms with
+- Windows Setup installed silently, reported 1.2.0, first paint 276 ms with
   104 cards.
-- Desktop: Rule34, MMS/JAV, AWS MP4, Hentai and AI lanes all started playback
-  headless and muted, with teardown within one second.
-- Android: APK installed on the Android 14 emulator, cold launch 4.5 s, visible
-  artwork resolved through the retry chain.
-- Android player: direct MP4 advanced 0 → 1.0 s → 2.5 s and HLS advanced
-  0 → 0.9 s → 2.8 s, both muted and both stopped inside the 10-second cap.
-- APK: four ABIs, 48/48 uncompressed native libraries, decoder archive and
-  `classes.dex` present, signature verified with `apksigner`.
+- Desktop adult lanes started playback headless and muted, with teardown within
+  one second.
+- Android cold launch 4.5 s; artwork resolved through the retry chain.
+- Android direct MP4 and HLS advanced muted and stopped inside the 10-second
+  cap.
+- APK: four ABIs, native libraries, decoder archive, `classes.dex`, signature
+  verified.
 
 ## [1.1.0] — 2026-11-05
 
-The unification release: one library, faster startup, reliable artwork, working
-HLS/DASH/MP4 playback and a hardened Android build.
+**The unification release.** One library, faster startup, reliable artwork,
+working HLS/DASH/MP4 playback and a hardened Android build.
 
 ### Added
 
-- Unified `window.LIB` library layer. Movies, Series and Anime now render the
-  extra-library rows inline, with Live TV / 18+ / Sources filter chips and
-  combined search. The separate Vault UI, drawer group and hero are gone.
-- Bundled `hls.js` and `dash.js` engines with lazy loading, media-error
-  recovery, network recovery and an ordered quality fallback chain.
-- Disk caches in `LocalServer` for API JSON, TMDB responses, proxied pages,
-  images, HLS playlists and DASH manifests.
-- Per-session localhost token. Privileged endpoints reject requests without it,
-  and the token is injected into `index.html` at serve time.
+- Unified library layer: Movies, Series and Anime render extra-library rows
+  inline, with filter chips and combined search.
+- Bundled HLS and DASH engines with lazy loading, media-error recovery and an
+  ordered quality fallback chain.
+- Disk caches for API JSON, metadata, proxied pages, images and manifests.
+- Per-session localhost token; privileged endpoints reject requests without it,
+  and the token is injected into the page at serve time.
 - AES-256-GCM encryption for every JavaScript asset at rest, plus obfuscation
-  of first-party scripts in the Android asset pipeline.
-- Image retry handling (`SBIMG`) so transient CDN failures do not leave cards
-  stuck on their initials.
-- New infinity app icon across every Android mipmap and Windows executable.
+  of first-party scripts.
+- Image retry handling so transient CDN failures do not leave cards stuck.
+- New infinity app icon across Android mipmaps and the Windows executable.
 
 ### Changed
 
-- `vault.js` became `library.js`; the old `window.WA` namespace is removed.
-- Home JSON paints instantly from `localStorage`, then refreshes in the
-  background. Cold start measured 1.39 s on the test emulator.
-- `/stream` now uses 128 KB parallel chunks and a small first window, cutting
-  MP4 playback start from ~45 s to ~9 s on the reference emulator.
-- Library fetches go through the local proxy, eliminating repeated YouTube and
-  allorigins CORS failures.
-- The Cloudflare challenge detector no longer rejects large pages that merely
-  contain a `<noscript>` warning, which fixed YouTube page parsing.
-- Dead Vault/drawer CSS was removed from the Android stylesheet.
-- Desktop version bumped to 1.1.0; the baked-in TMDB key was removed from the
-  renderer catalogue (the local proxy injects it server-side).
+- The old vault namespace was folded into the library layer.
+- Home paints from local storage, then refreshes in the background.
+- Stream requests use smaller first windows and parallel chunks.
+- Library fetches go through the local proxy, eliminating CORS failures.
+- The challenge detector no longer rejects large pages that merely contain a
+  warning block.
+- Version 1.1.0; the baked-in metadata key was removed from the renderer and
+  injected server-side.
 
 ### Fixed
 
-- The `index.html` fetch wrapper only signed relative URLs, so library calls
-  made with an absolute `http://127.0.0.1:<port>` base were rejected with 403.
-  It now signs same-origin absolute URLs too, restoring Live TV and every
-  scraper fetch.
+- The page fetch wrapper now signs same-origin absolute loopback URLs,
+  restoring live TV and catalogue calls.
+- Stale view state no longer survives a tab switch.
 
 ### Verified
 
-- Android: 102-title Movies tab with merged library rows, posters loading via
-  retry, live HLS channel playing, 480p episode playing, no CORS spam.
-- Live TV: 845 India channels parsed through `/page`, 4 SIDES TV played.
-- APK: `versionCode=2`, `versionName=1.1.0`, one `classes.dex`, only `.js.enc`
-  assets, R8 applied.
-- Windows: installer and portable builds launch, load the catalogue and carry
-  the new icon and version metadata.
+- Android: 102-title Movies tab, posters loading through retry, live HLS
+  channel playing, 480p episode playing, no CORS spam.
+- Live TV: hundreds of channels parsed and played.
+- APK: `versionCode=2`, one `classes.dex`, encrypted assets, R8 applied.
+- Windows: installer launches, loads the catalogue and carries the new icon
+  and version metadata.
 
 ## [1.0.0] — 2026-11-05
 
-The first standalone SuperBox release. One brand, two apps, one library.
+**The first standalone SuperBox release.** One brand, two apps, one library.
 
 ### Added
 
-- **SuperBox Vault** — a separate library section with its own drawer group,
-  hero, ten curated sections and an infinity motif.
-- **Library sources** sheet, reachable from the Vault hero, the drawer and the
-  Me page. It names every catalogue behind the Vault.
-- Gold **infinite aura** visual system: breathing logo glow, aura rings, an
-  `∞` watermark, source chips and a premium drawer card.
+- A separate curated library with its own drawer group, hero, sections and
+  infinity motif.
+- Catalogue sheet reachable from the hero, the drawer and Me, naming every
+  catalogue behind the library.
+- Gold infinite-aura visual system: breathing logo glow, aura rings, an
+  infinity watermark, source chips and a premium drawer card.
 - Native playback for real MP4/HLS streams, with an ordered provider ladder
   that rotates past dead shells.
 - Touch-first Android UI: five-tab navigation, search, details, seasons,
   episodes, quality/audio/speed sheets and rotation.
 - Windows installer with a normal wizard and a freely chosen install folder or
-  drive, plus a no-install portable build.
+  drive.
 
 ### Changed
 
-- The extended library is branded **SuperBox Vault** everywhere. Old library
-  and upstream brand names were removed from the shipped UI.
-- `watcha.js` became `vault.js`; the internal `WA` namespace is kept for
-  stability.
-- The Android APK is signed with the SuperBox release key and verified before
+- The extended library is branded SuperBox Vault everywhere; upstream brand
+  names were removed from the shipped UI.
+- The APK is signed with the SuperBox release key and verified before
   packaging.
 
 ### Verified
 
 - Spotlight: 226 cards on Home; Movies 103, Series 115, Anime 26.
-- Vault: 5 rows / 104 cards on Home; Web Series 9 rows / 193 titles; Live TV
-  17 groups / 200 channels.
-- Vault detail, sources sheet and native playback tested on `emulator-5554`.
-- APK signature and SHA-256 recorded in [docs/VERIFY.md](docs/VERIFY.md).
+- Shared library: five rows and 104 cards on Home; 193 web-series titles; live
+  TV with 17 groups and 200 channels.
+- Detail, catalogue sheet and native playback tested on the reference emulator.
+- APK signature and SHA-256 recorded in the release notes.
 
+[1.4.0]: https://github.com/mohdziauddin2006-cloud/superbox/releases/tag/v1.4.0
+[1.3.0]: https://github.com/mohdziauddin2006-cloud/superbox/releases/tag/v1.3.0
+[1.2.0]: https://github.com/mohdziauddin2006-cloud/superbox/releases/tag/v1.2.0
+[1.1.0]: https://github.com/mohdziauddin2006-cloud/superbox/releases/tag/v1.1.0
 [1.0.0]: https://github.com/mohdziauddin2006-cloud/superbox/releases/tag/v1.0.0

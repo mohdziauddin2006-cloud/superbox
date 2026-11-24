@@ -985,7 +985,7 @@
 
   function renderMe() {
     clearInterval(S.heroTimer);
-    var version = "1.3.0";
+    var version = "1.4.0";
     try { if (window.SBAndroid && window.SBAndroid.version) version = window.SBAndroid.version(); } catch (e) {}
     view.innerHTML =
       '<div class="page-head" style="padding-top:14px"><div class="page-kicker">Your space</div><h1 class="page-title">Me</h1></div>' +
@@ -2608,7 +2608,7 @@
   }
 
   function openAboutSheet() {
-    var version = "1.1.0";
+    var version = "1.4.0";
     try { if (window.SBAndroid && window.SBAndroid.version) version = window.SBAndroid.version(); } catch (e) {}
     var html = '<div class="sheet-title">About SuperBox</div><div class="sheet-sub">Mobile ' + esc(version) + "</div>" +
       '<div style="padding:8px 20px 10px;color:#b6b6c1;font-size:12.5px;line-height:1.7;user-select:text">' +
