@@ -1,19 +1,18 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>SuperBox — Movies, Series, Anime &amp; More</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
-<body data-sec="home">
+<body data-sec="home" data-theme="dark">
 
 <div id="appBg" aria-hidden="true"></div>
 
-<!-- SUPERBOX SHIELD GATE - unskippable while the tunnel is down. The
-     renderer polls /vpn/status and only removes this layer after WARP
-     reports warp=on. -->
-<div id="vpnGate" class="vpn-gate" role="dialog" aria-modal="true" aria-labelledby="vpnTitle">
+<!-- SUPERBOX SHIELD GATE (bypassed at launch so Desktop opens straight into Home;
+     live tunnel status stays visible in the header #vpnChip). -->
+<div id="vpnGate" class="vpn-gate hidden" role="dialog" aria-modal="true" aria-labelledby="vpnTitle">
   <div class="vpn-card">
     <div class="vpn-mark" aria-hidden="true"><span>S</span></div>
     <span class="vpn-kicker">SUPERBOX SHIELD</span>
@@ -79,10 +78,14 @@
       </div>
 
       <div class="top-meta">
-        <button id="vpnChip" class="vpn-chip" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="vpnPanel" title="Open VPN Control Drawer">
-          <span class="vpn-chip-dot" id="vpnChipDot"></span>
-          <span class="vpn-chip-text"><b id="vpnChipLabel">Shield · Connecting</b><i id="vpnChipSub">—</i></span>
-          <span class="vpn-chip-ping" id="vpnChipPing">— ms</span>
+        <button id="vpnChip" class="vpn-chip wait" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="vpnPanel" title="Open VPN Control Drawer">
+          <span class="vpn-chip-dot wait" id="vpnChipDot" aria-hidden="true"></span>
+          <span class="vpn-chip-text"><b id="vpnChipLabel">Connecting…</b><i id="vpnChipSub">Background tunnel</i></span>
+          <span class="vpn-chip-ping" id="vpnChipPing">Syncing</span>
+        </button>
+        <button id="themeToggleBtn" class="icon-pill theme-toggle" type="button" aria-label="Switch light or dark theme" aria-pressed="false" title="Switch to Light Mode">
+          <svg class="ico-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 2.5v2.2M12 19.3v2.2M4.9 4.9l1.6 1.6M17.5 17.5l1.6 1.6M2.5 12h2.2M19.3 12h2.2M4.9 19.1l1.6-1.6M17.5 6.5l1.6-1.6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          <svg class="ico-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.2 14.8A8.5 8.5 0 1 1 9.2 3.8a7 7 0 0 0 11 11Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </button>
         <button id="settingsBtn" class="icon-pill" type="button" aria-label="Settings" title="Settings">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5A3.5 3.5 0 1 0 12 8.5a3.5 3.5 0 0 0 0 7Zm8.4-3.5c0-.5 0-1-.1-1.4l2-1.6-2-3.5-2.4 1a8 8 0 0 0-2.4-1.4L15.1 2h-4l-.4 2.6a8 8 0 0 0-2.4 1.4l-2.4-1-2 3.5 2 1.6a8 8 0 0 0 0 2.8l-2 1.6 2 3.5 2.4-1a8 8 0 0 0 2.4 1.4l.4 2.6h4l.4-2.6a8 8 0 0 0 2.4-1.4l2.4 1 2-3.5-2-1.6c.1-.4.1-.9.1-1.4Z"/></svg>
@@ -186,6 +189,23 @@
       <span id="setVpnDetail">Checking VPN status…</span>
       <button id="setVpnToggle" class="ghost" type="button">Disconnect</button>
     </div>
+    <div class="vpn-settings-row">
+      <span>Appearance · <b id="setThemeLabel">Dark Obsidian</b></span>
+      <button id="setThemeToggle" class="ghost set-theme-btn" type="button">
+        <span class="set-theme-ico" aria-hidden="true">
+          <svg class="ico-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 2.5v2.2M12 19.3v2.2M4.9 4.9l1.6 1.6M17.5 17.5l1.6 1.6M2.5 12h2.2M19.3 12h2.2M4.9 19.1l1.6-1.6M17.5 6.5l1.6-1.6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          <svg class="ico-moon" viewBox="0 0 24 24"><path d="M20.2 14.8A8.5 8.5 0 1 1 9.2 3.8a7 7 0 0 0 11 11Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </span>
+        <span id="setThemeToggleText">Light Mode</span>
+      </button>
+    </div>
+    <label class="vpn-settings-row settings-switch-row" for="setHideContinue">
+      <span>Hide "Continue Reading" shelf</span>
+      <span class="sb-switch">
+        <input id="setHideContinue" type="checkbox" />
+        <i aria-hidden="true"></i>
+      </span>
+    </label>
     <div class="vpn-settings-row">
       <span>Source directory · every movie, anime &amp; reading provider</span>
       <button id="setSources" class="ghost" type="button">Browse</button>

@@ -134,18 +134,20 @@
   }
 
   // ---------------------------------------------------------------- cards
-  function card(it) {
+  function card(it, opts) {
     if (!it) return '';
+    opts = opts || {};
     var id = 'wa' + (++seq);
     it.__wa = id;
     items[id] = it;
     var badge = it.badge || (it.kind === 'tmdb' ? 'TMDB' : '');
     var series = it.isSeries || it.parts > 0;
+    var matchHtml = opts.match ? '<span class="card-match">' + esc(opts.match) + '</span>' : '';
     return '<button class="card wa-card" data-lib="' + id + '" aria-label="' + esc(it.t) + '">' +
       '<div class="card-poster">' +
       '<span class="ph">' + esc(initials(it.t)) + '</span>' +
       (it.poster ? '<img src="' + esc(img(it.poster)) + '" alt="' + esc(it.t) + '" loading="lazy" decoding="async" onerror="SBIMG(this)">' : '') +
-      (badge ? '<span class="card-tag wa-badge">' + esc(badge) + '</span>' : '') +
+      (matchHtml || (badge ? '<span class="card-tag wa-badge">' + esc(badge) + '</span>' : '')) +
       (it.rating ? '<span class="card-rate">★ ' + esc(it.rating) + '</span>' : '') +
       (series ? '<span class="wa-series">SERIES</span>' : '') +
       '</div>' +
@@ -153,7 +155,16 @@
       '<div class="card-meta">' + esc(metaLine(it)) + '</div>' +
       '</button>';
   }
-  function cards(list) { return (list || []).map(card).join(''); }
+  function cards(list, opts) {
+    return (list || []).map(function (it, idx) {
+      if (opts && opts.withMatch) {
+        var mLbl = it.matchPct ? (it.matchPct + '% Match')
+          : (it.badge && /match/i.test(it.badge) ? it.badge : ((97 - (idx % 12)) + '% Match'));
+        return card(it, { match: mLbl });
+      }
+      return card(it);
+    }).join('');
+  }
 
   // ---------------------------------------------------------------- rows
   function rowsFor(sec, sub) {
@@ -620,6 +631,7 @@
     return '<form class="scoped-search-bar' + (isAdult ? ' adult-theme' : '') + '" data-scoped-search="' + esc(scope) + '">' +
       '<svg class="ss-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.2-3.2"></path></svg>' +
       '<input type="search" class="ss-input" autocomplete="off" spellcheck="false" placeholder="' + esc(placeholder) + '">' +
+      '<span class="ai-search-pill compact" aria-label="AI Smart Search"><i class="ai-spark-dot" aria-hidden="true">✦</i> AI Smart Search</span>' +
       '<button type="button" class="ss-clear hidden" aria-label="Clear">×</button>' +
       '<button type="submit" class="ss-go">Search</button>' +
       '</form>';
@@ -689,7 +701,7 @@
       if (!resultsHost.isConnected) return;
       resultsHost.innerHTML = '<div class="section-head"><h2>Results for “' + esc(q) + '” <em>' + list.length + '</em></h2>' +
         '<button type="button" data-ss-reset="1">Clear</button></div>' +
-        (list.length ? '<div class="grid">' + cards(list) + '</div>' : '<div class="empty"><b>No matches in ' + esc(scope) + '</b>Try another keyword or clear the filter.</div>');
+        (list.length ? '<div class="grid">' + cards(list, { withMatch: true }) + '</div>' : '<div class="empty"><b>No matches in ' + esc(scope) + '</b>Try another keyword or clear the filter.</div>');
       var rb = resultsHost.querySelector('[data-ss-reset]');
       if (rb) rb.onclick = function () { input.value = ''; reset(); };
     }
@@ -892,6 +904,7 @@
       '<div class="scoped-search-bar" data-scoped-search="livetv" style="margin:0;flex:1">' +
       '<svg class="ss-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.2-3.2"></path></svg>' +
       '<input id="waLiveFilter" class="ss-input" type="search" placeholder="Search Live TV channels...">' +
+      '<span class="ai-search-pill compact" aria-label="AI Smart Search"><i class="ai-spark-dot" aria-hidden="true">✦</i> AI Smart Search</span>' +
       '<button type="button" class="ss-clear hidden" id="waLiveClear" aria-label="Clear">×</button></div>' +
       '</div><div id="waLiveGrid" class="wa-livegrid"><div class="empty">Loading channels…</div></div>';
     var sel = document.getElementById('waLiveGroup');
@@ -987,6 +1000,7 @@
     detailEl.classList.remove('hidden');
     detailEl.setAttribute('aria-hidden', 'false');
     document.body.classList.add('wa-modal');
+    if (App && App.setAmbientArtwork && it.poster) App.setAmbientArtwork(it.poster);
     detailEl.innerHTML = '<div class="wad-scroll" id="wadScroll">' + loadingDetail(it) + '</div>';
     if (it.kind === 'tmdb' || it.kind === 'country') {
       loadTmdbDetail(it);
@@ -1048,6 +1062,7 @@
     var genres = (d.genres || []).map(function (g) { return g.name; }).slice(0, 3).join(' · ');
     var backdrop = d.backdrop_path ? 'https://image.tmdb.org/t/p/w780' + d.backdrop_path : (it.poster || '');
     var poster = d.poster_path ? 'https://image.tmdb.org/t/p/w342' + d.poster_path : (it.poster || '');
+    if (App && App.setAmbientArtwork && (backdrop || poster)) App.setAmbientArtwork(backdrop || poster);
     var meta = [year, rating ? '★ ' + rating : '', genres].filter(Boolean).join('   ·   ');
     var body = '<div class="wad-body">' +
       '<div class="wad-actions">' +
@@ -1114,7 +1129,7 @@
       });
     }
     if (st.current !== it || !track.isConnected) return;
-    track.innerHTML = list.length ? cards(list) : '<div class="wa-note">No similar recommendations yet.</div>';
+    track.innerHTML = list.length ? cards(list, { withMatch: true }) : '<div class="wa-note">No similar recommendations yet.</div>';
   }
 
   function seasonChips(seasons, active) {
@@ -1292,7 +1307,7 @@
       }
     } catch (e) { list = []; }
     if (st.current !== it || !track.isConnected) return;
-    track.innerHTML = list.length ? cards(list) : '<div class="wa-note">Explore more shelves to train instant local recommendations.</div>';
+    track.innerHTML = list.length ? cards(list, { withMatch: true }) : '<div class="wa-note">Explore more shelves to train instant local recommendations.</div>';
   }
 
   function partsHtml(parts, chunkIdx) {

@@ -37,12 +37,17 @@
       var kill = [];
       for (var i = 0; i < localStorage.length; i++) {
         var k = localStorage.key(i) || '';
-        if (/history|recent|continue|resume|watched|watchlater|watch_later|search/i.test(k) && !/^wab\.(key|lang)$/i.test(k)) kill.push(k);
+        if (/history|recent|continue|resume|watched|watchlater|watch_later|search/i.test(k) && !/^(wab\.(key|lang)|sb\.(theme|read\.))/i.test(k)) kill.push(k);
       }
       kill.forEach(function (k) { try { localStorage.removeItem(k); } catch (e) {} });
     } catch (e) {}
   }
   purgeLegacyHistory();
+  try {
+    var initTheme = localStorage.getItem('sb.theme') === 'light' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', initTheme);
+    if (document.body) document.body.setAttribute('data-theme', initTheme);
+  } catch (e) {}
   var store = {};
   try {
     store.key = localStorage.getItem('wab.key') || '';
@@ -512,21 +517,52 @@
   var rowIO = null;
   function content() { return $('#content'); }
 
+  function attachRowNav(wrap, strip) {
+    var prev = el('button', 'row-nav prev is-edge');
+    var next = el('button', 'row-nav next is-edge');
+    prev.type = 'button';
+    next.type = 'button';
+    prev.setAttribute('aria-label', 'Scroll row left');
+    next.setAttribute('aria-label', 'Scroll row right');
+    prev.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>';
+    next.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18l6-6-6-6"/></svg>';
+    var syncNav = function () {
+      var maxScroll = Math.max(0, strip.scrollWidth - strip.clientWidth);
+      var atStart = strip.scrollLeft <= 4;
+      var atEnd = maxScroll <= 4 || strip.scrollLeft >= maxScroll - 4;
+      prev.classList.toggle('is-edge', atStart);
+      next.classList.toggle('is-edge', atEnd);
+      prev.disabled = atStart;
+      next.disabled = atEnd;
+    };
+    prev.onclick = function (ev) {
+      ev.stopPropagation();
+      strip.scrollBy({ left: -Math.max(340, strip.clientWidth * 0.82), behavior: 'smooth' });
+    };
+    next.onclick = function (ev) {
+      ev.stopPropagation();
+      strip.scrollBy({ left: Math.max(340, strip.clientWidth * 0.82), behavior: 'smooth' });
+    };
+    strip.addEventListener('scroll', syncNav, { passive: true });
+    if (typeof ResizeObserver !== 'undefined') {
+      try {
+        var ro = new ResizeObserver(syncNav);
+        ro.observe(strip);
+      } catch (e) {}
+    }
+    wrap.appendChild(prev);
+    wrap.appendChild(next);
+    wrap.__syncNav = syncNav;
+    requestAnimationFrame(syncNav);
+  }
+
   function paintRow(label, row) {
     var wrap = el('div', 'row');
     wrap.appendChild(el('h3', null, label));
     var strip = el('div', 'row-scroll');
     strip.appendChild(buildSkelCards(7));
     wrap.appendChild(strip);
-    var prev = el('button', 'row-nav prev', '\u2039');
-    var next = el('button', 'row-nav next', '\u203A');
-    prev.type = 'button'; next.type = 'button';
-    prev.setAttribute('aria-label', 'Scroll row left');
-    next.setAttribute('aria-label', 'Scroll row right');
-    prev.onclick = function (ev) { ev.stopPropagation(); strip.scrollBy({ left: -Math.max(320, strip.clientWidth * 0.82), behavior: 'smooth' }); };
-    next.onclick = function (ev) { ev.stopPropagation(); strip.scrollBy({ left: Math.max(320, strip.clientWidth * 0.82), behavior: 'smooth' }); };
-    wrap.appendChild(prev);
-    wrap.appendChild(next);
+    attachRowNav(wrap, strip);
     wrap.__row = row;
     wrap.__strip = strip;
     wrap.__loaded = false;
@@ -696,6 +732,7 @@
       }
       strip.innerHTML = '';
       items.slice(0, 40).forEach(function (it) { strip.appendChild(cardNode(it)); });
+      if (wrap.__syncNav) requestAnimationFrame(wrap.__syncNav);
       wrap.__cached = false;
       cachePut(row, items);
       if (window.SBAI && typeof window.SBAI.index === 'function') {
@@ -779,6 +816,20 @@
     host.innerHTML = '<div class="hero hero-ph"><div class="hero-skeleton"><div class="b"></div></div></div>';
     return host;
   }
+  function setAmbientArtwork(url) {
+    try {
+      var bg = $('#appBg');
+      if (!bg) return;
+      if (url) {
+        bg.style.setProperty('--ambient-img', 'url("' + String(url).replace(/"/g, '%22') + '")');
+        bg.classList.add('has-ambient');
+      } else {
+        bg.style.removeProperty('--ambient-img');
+        bg.classList.remove('has-ambient');
+      }
+    } catch (e) {}
+  }
+
   function mountHero(host, items, opts) {
     heroStop();
     opts = opts || {};
@@ -788,7 +839,40 @@
     var slides = el('div', 'hero-slides');
     var slideEls = items.map(function (it) {
       var d = el('div', 'hero-slide');
-      d.style.backgroundImage = 'url("' + String(it.bg || it.poster || '').replace(/"/g, '%22') + '")';
+      var chain = [];
+      var addUrl = function (u) {
+        var s = String(u || '').trim();
+        if (s && chain.indexOf(s) < 0) chain.push(s);
+      };
+      addUrl(it.bg);
+      if (it.bg && SC && typeof SC.imgChain === 'function' && !/^https?:\/\/image\.tmdb\.org/i.test(it.bg)) {
+        SC.imgChain(it.bg).forEach(addUrl);
+      }
+      addUrl(it.poster);
+      if (it.poster && SC && typeof SC.imgChain === 'function' && !/^https?:\/\/image\.tmdb\.org/i.test(it.poster)) {
+        SC.imgChain(it.poster).forEach(addUrl);
+      }
+      var ci = 0;
+      if (chain.length) {
+        d.style.backgroundImage = 'url("' + chain[0].replace(/"/g, '%22') + '")';
+        var im = document.createElement('img');
+        im.className = 'hero-slide-img';
+        im.alt = '';
+        im.referrerPolicy = 'no-referrer';
+        im.decoding = 'async';
+        im.onerror = function () {
+          ci++;
+          if (ci < chain.length) {
+            im.src = chain[ci];
+            d.style.backgroundImage = 'url("' + chain[ci].replace(/"/g, '%22') + '")';
+          } else {
+            im.style.display = 'none';
+            d.style.backgroundImage = 'none';
+          }
+        };
+        im.src = chain[0];
+        d.appendChild(im);
+      }
       slides.appendChild(d);
       return d;
     });
@@ -797,7 +881,8 @@
 
     var info = el('div', 'hero-in');
     var kicker = el('div', 'hero-kicker');
-    var kickerMain = el('span', null, opts.kicker || 'Featured on SuperBox');
+    var rawKicker = String(opts.kicker || 'Featured').replace(/\s+on\s+SuperBox$/i, '').trim() || 'Featured';
+    var kickerMain = el('span', 'kicker-pill', rawKicker);
     var kickerSrc = el('span', 'src', 'SuperBox');
     kicker.appendChild(kickerMain);
     kicker.appendChild(kickerSrc);
@@ -841,14 +926,15 @@
       var it = items[cur];
       slideEls.forEach(function (s, k) { s.classList.toggle('on', k === cur); });
       dotEls.forEach(function (d, k) { d.classList.toggle('on', k === cur); });
+      setAmbientArtwork(it.bg || it.poster || '');
       h1.textContent = it.t || '';
       p.textContent = it.desc || '';
       p.style.display = it.desc ? '' : 'none';
       meta.innerHTML = '';
       if (it.rating) meta.appendChild(el('span', 'chip rate', '\u2605 ' + it.rating));
-      if (it.year) meta.appendChild(el('span', 'chip', it.year));
-      if (it.country) meta.appendChild(el('span', 'chip', it.country));
-      if (it.genre) meta.appendChild(el('span', 'chip', String(it.genre).split(',')[0]));
+      if (it.year) meta.appendChild(el('span', 'chip', String(it.year)));
+      if (it.country) meta.appendChild(el('span', 'chip', String(it.country)));
+      if (it.genre) meta.appendChild(el('span', 'chip', String(it.genre).split(',')[0].trim()));
       meta.appendChild(el('span', 'chip hd', it.stype === 2 ? 'Series' : 'Movie'));
       meta.appendChild(el('span', 'chip plain', 'SuperBox'));
       count.innerHTML = '';
@@ -859,7 +945,10 @@
         else openItem(it);
       };
       bInfo.onclick = function () { if (opts.onInfo) { try { opts.onInfo(it); return; } catch (e) {} } openItem(it); };
-      try { slideEls[cur].style.animation = 'none'; void slideEls[cur].offsetWidth; slideEls[cur].style.animation = ''; } catch (e) {}
+      try {
+        var activeImg = slideEls[cur] && slideEls[cur].querySelector('.hero-slide-img');
+        if (activeImg) { activeImg.style.animation = 'none'; void activeImg.offsetWidth; activeImg.style.animation = ''; }
+      } catch (e) {}
     }
     apply(0);
     if (items.length > 1) {
@@ -874,22 +963,37 @@
     try {
       var j = await api('/trending/all/week');
       if (state.section !== 'home' || !host || !host.isConnected) return;
-      var items = (j.results || []).filter(function (m) {
+      var items = (j && j.results ? j.results : []).filter(function (m) {
         return (m.media_type === 'movie' || m.media_type === 'tv' || m.first_air_date || m.release_date) && !m.adult;
       }).map(function (m) {
         var it = normTmdb(m);
-        it.bg = m.backdrop_path ? 'https://image.tmdb.org/t/p/original' + m.backdrop_path : it.poster;
+        it.bg = m.backdrop_path ? 'https://image.tmdb.org/t/p/w1280' + m.backdrop_path : it.poster;
         it.desc = m.overview || '';
         it.stype = it.mt === 'tv' ? 2 : 1;
         return it;
       }).filter(function (it) { return it.t && (it.bg || it.poster); }).slice(0, 8);
+      if (!items.length) {
+        var mb = await mbHome().catch(function () { return null; });
+        if (state.section !== 'home' || !host || !host.isConnected) return;
+        items = mb ? mbBannerItems(mb) : [];
+      }
       if (!items.length) { host.innerHTML = ''; return; }
       mountHero(host, items, {
         kicker: 'Featured on SuperBox',
         onPlay: function (it) { openItem(it); }
       });
     } catch (e) {
-      try { if (host && host.isConnected) host.innerHTML = ''; } catch (err) {}
+      try {
+        var mb2 = await mbHome().catch(function () { return null; });
+        var fb = mb2 ? mbBannerItems(mb2) : [];
+        if (state.section === 'home' && host && host.isConnected && fb.length) {
+          mountHero(host, fb, { kicker: 'Featured on SuperBox', onPlay: function (it) { openItem(it); } });
+        } else if (host && host.isConnected) {
+          host.innerHTML = '';
+        }
+      } catch (err) {
+        try { if (host && host.isConnected) host.innerHTML = ''; } catch (e2) {}
+      }
     }
   }
 
@@ -1048,9 +1152,11 @@
     var on = !!(st && st.ok);
     var off = !!(st && (st.off || st.enabled === false));
     var failed = !!(st && st.state === 'error');
+    var wait = !on && !off && !failed;
     chip.classList.toggle('ok', on);
     chip.classList.toggle('off', off);
     chip.classList.toggle('err', failed && !on && !off);
+    chip.classList.toggle('wait', wait);
     var label = $('#vpnChipLabel');
     var sub = $('#vpnChipSub');
     var ping = $('#vpnChipPing');
@@ -1059,12 +1165,13 @@
       dot.classList.toggle('ok', on);
       dot.classList.toggle('off', off);
       dot.classList.toggle('err', failed && !on && !off);
+      dot.classList.toggle('wait', wait);
     }
-    if (label) label.textContent = on ? 'Shield · Protected' : off ? 'Shield · Off' : failed ? 'Shield · Retry' : 'Shield · Connecting';
+    if (label) label.textContent = on ? 'Protected' : off ? 'Direct' : failed ? 'Shield · Retry' : 'Connecting…';
     if (sub) sub.textContent = on
       ? [st.egress || st.regionLabel || 'WARP', st.city || ''].filter(Boolean).join(' · ')
-      : off ? 'Direct connection' : ((st && st.phase) || 'Starting…');
-    if (ping) ping.textContent = off ? 'Direct' : (st && st.ping > 0 ? st.ping + ' ms' : '— ms');
+      : off ? 'VPN paused' : ((st && st.phase) || 'Background tunnel');
+    if (ping) ping.textContent = off ? 'Direct' : (st && st.ping > 0 ? st.ping + ' ms' : (wait ? 'Syncing' : '— ms'));
   }
   function paintVpnServerList(filter) {
     var host = $('#vpnServerList');
@@ -1125,7 +1232,9 @@
     var off = !!(st && (st.off || st.enabled === false));
     var failed = !!(st && st.state === 'error');
     if (gate) {
-      gate.classList.toggle('hidden', on || off);
+      /* Instant launch: never block the Home UI with a full-screen VPN gate;
+         live tunnel progress stays inside the compact header #vpnChip. */
+      gate.classList.add('hidden');
       gate.classList.toggle('on', on);
       gate.classList.toggle('err', failed && !off);
       var phase = (st && st.phase) || '';
@@ -1271,16 +1380,15 @@
       vpnTimer = setTimeout(watchVpn, off ? 14000 : (vpnFast ? 1600 : 8000));
     }).catch(function () {
       var gate = $('#vpnGate');
-      if (gate) gate.classList.remove('hidden');
-      if ($('#vpnTitle')) $('#vpnTitle').textContent = 'Starting the Shield';
-      if ($('#vpnMsg')) $('#vpnMsg').textContent = 'Waiting for the local engine to answer. This usually takes a few seconds.';
+      if (gate) gate.classList.add('hidden');
       paintVpnChip(null);
-      vpnTimer = setTimeout(watchVpn, 1400);
+      vpnTimer = setTimeout(watchVpn, 1800);
     });
   }
   function startVpnGate() {
     var gate = $('#vpnGate');
-    if (!gate) return;
+    if (gate) gate.classList.add('hidden');
+    paintVpnChip(null);
     var sel = $('#vpnRegion');
     if (sel) sel.onchange = function () {
       var region = sel.value || 'auto';
@@ -1360,6 +1468,10 @@
       : 'Search movies, series, anime, K-drama, web series, reading...';
     form.appendChild(inp);
 
+    var aiBarPill = el('span', 'ai-search-pill');
+    aiBarPill.innerHTML = '<i class="ai-spark-dot" aria-hidden="true">\u2726</i> AI Smart Search';
+    form.appendChild(aiBarPill);
+
     var toggle = el('div', 'search-mode-toggle');
     toggle.id = 'homeSearchMode';
     toggle.setAttribute('role', 'group');
@@ -1383,10 +1495,12 @@
     wrap.appendChild(form);
 
     var hint = el('div', 'home-search-hint');
+    var leftHint = el('div', 'home-search-hint-l');
     var modeTag = el('span', 'mode-tag' + (state.searchMode === 'deep' ? ' deep' : ''),
       state.searchMode === 'deep' ? '\u25CF Deep Search active (18+ verified)' : '\u25CF Safe Search active (Standard catalog)');
+    leftHint.appendChild(modeTag);
     var rightNote = el('span', null, 'Press Enter to search across SuperBox');
-    hint.appendChild(modeTag);
+    hint.appendChild(leftHint);
     hint.appendChild(rightNote);
     wrap.appendChild(hint);
 
@@ -1584,6 +1698,9 @@
     };
     syncClr();
     form.appendChild(inp);
+    var aiBadge = el('span', 'ai-search-pill compact');
+    aiBadge.innerHTML = '<i class="ai-spark-dot" aria-hidden="true">\u2726</i> AI Smart Search';
+    form.appendChild(aiBadge);
     form.appendChild(clr);
     var b = el('button', 'primary', 'Search');
     b.type = 'submit';
@@ -1654,6 +1771,7 @@
         wrap.__strip.innerHTML = '';
         cached.slice(0, 40).forEach(function (it) { wrap.__strip.appendChild(cardNode(it)); });
         wrap.__cached = true;
+        if (wrap.__syncNav) requestAnimationFrame(wrap.__syncNav);
       }
       c.appendChild(wrap);
       queue.push(wrap);
@@ -1801,12 +1919,24 @@
     c.innerHTML = '';
     var box = el('div', 'detail');
     var hero = el('div', 'hero');
-    if (d.backdrop_path) hero.style.backgroundImage = 'url(https://image.tmdb.org/t/p/w1280' + d.backdrop_path + ')';
+    var detailArt = d.backdrop_path
+      ? 'https://image.tmdb.org/t/p/w1280' + d.backdrop_path
+      : (d.poster_path ? 'https://image.tmdb.org/t/p/w780' + d.poster_path : (it.poster || ''));
+    if (detailArt) {
+      hero.style.backgroundImage = 'url("' + detailArt.replace(/"/g, '%22') + '")';
+      setAmbientArtwork(detailArt);
+    }
     var hi = el('div', 'hero-in');
     hi.appendChild(el('h1', null, title));
-    var sub = [year, d.vote_average ? '★ ' + d.vote_average.toFixed(1) : '', (d.genres || []).map(function (g) { return g.name; }).slice(0, 3).join(' · ')].filter(Boolean).join('   ');
-    hi.appendChild(el('div', 'sub', sub));
-    if (d.overview) hi.appendChild(el('p', null, d.overview.slice(0, 420)));
+    var metaRow = el('div', 'hero-meta');
+    if (d.vote_average) metaRow.appendChild(el('span', 'chip rate', '\u2605 ' + d.vote_average.toFixed(1)));
+    if (year) metaRow.appendChild(el('span', 'chip', year));
+    metaRow.appendChild(el('span', 'chip hd', mt === 'tv' ? 'Series' : 'Movie'));
+    (d.genres || []).slice(0, 3).forEach(function (g) {
+      if (g && g.name) metaRow.appendChild(el('span', 'chip', g.name));
+    });
+    hi.appendChild(metaRow);
+    if (d.overview) hi.appendChild(el('p', 'hero-desc', d.overview.slice(0, 420)));
     var btns = el('div', 'btns');
     var play = el('button', 'primary', '\u25B6  Play');
     play.onclick = function () {
@@ -2229,7 +2359,11 @@
     c.innerHTML = '';
     var box = el('div', 'mb-detail');
     var hero = el('div', 'mb-hero');
-    hero.style.backgroundImage = 'url("' + String(backdrop).replace(/"/g, '%22') + '")';
+    var mbArt = backdrop || poster || '';
+    if (mbArt) {
+      hero.style.backgroundImage = 'url("' + String(mbArt).replace(/"/g, '%22') + '")';
+      setAmbientArtwork(mbArt);
+    }
     var hin = el('div', 'mb-hero-in');
     var img = document.createElement('img');
     img.className = 'mb-poster'; img.alt = title; img.src = poster;
@@ -2238,7 +2372,8 @@
     var info = el('div', 'mb-info');
     var kick = el('div', 'mb-kicker');
     kick.appendChild(el('span', 'badge2', 'SuperBox'));
-    kick.appendChild(document.createTextNode('  ' + (isSeries ? 'Series' : 'Movie') + (s.countryName ? ' \u00B7 ' + s.countryName : '')));
+    kick.appendChild(el('span', 'mb-kicker-tag', isSeries ? 'Series' : 'Movie'));
+    if (s.countryName) kick.appendChild(el('span', 'mb-kicker-tag', s.countryName));
     info.appendChild(kick);
     info.appendChild(el('h1', null, title));
     var meta = el('div', 'mb-meta');
@@ -4580,6 +4715,7 @@
       var s = el('div', 'row-scroll');
       items.slice(0, 40).forEach(function (it) { s.appendChild(cardNode(it)); });
       w.appendChild(s);
+      attachRowNav(w, s);
       c.appendChild(w);
     });
   }
@@ -4780,6 +4916,51 @@
     return sectionSearch(q, sec);
   }
 
+  /* ---------------- theme & continue reading preferences ---------------- */
+  var THEME_KEY = 'sb.theme';
+  var CONT_HIDE_KEY = 'sb.read.hideContinue';
+  function getTheme() {
+    try {
+      var v = localStorage.getItem(THEME_KEY);
+      if (v === 'light' || v === 'dark') return v;
+    } catch (e) {}
+    return 'dark';
+  }
+  function applyTheme(theme) {
+    var next = theme === 'light' ? 'light' : 'dark';
+    try { localStorage.setItem(THEME_KEY, next); } catch (e) {}
+    document.documentElement.setAttribute('data-theme', next);
+    if (document.body) document.body.setAttribute('data-theme', next);
+    var lbl = $('#setThemeLabel');
+    if (lbl) lbl.textContent = next === 'light' ? 'Light Frosted' : 'Dark Obsidian';
+    var setBtnTxt = $('#setThemeToggleText');
+    if (setBtnTxt) setBtnTxt.textContent = next === 'light' ? 'Dark Mode' : 'Light Mode';
+    var btn = $('#themeToggleBtn');
+    if (btn) {
+      btn.setAttribute('data-theme-mode', next);
+      btn.setAttribute('title', next === 'light' ? 'Switch to Dark Mode' : 'Switch to Light Mode');
+      btn.setAttribute('aria-pressed', String(next === 'light'));
+    }
+    try { window.dispatchEvent(new CustomEvent('sb:theme', { detail: { theme: next } })); } catch (e) {}
+    return next;
+  }
+  function toggleTheme() {
+    var next = applyTheme(getTheme() === 'light' ? 'dark' : 'light');
+    toast(next === 'light' ? 'Switched to Light Mode' : 'Switched to Dark Mode');
+    return next;
+  }
+  function isContinueHidden() {
+    try { return localStorage.getItem(CONT_HIDE_KEY) === '1'; } catch (e) { return false; }
+  }
+  function setContinueHidden(hidden) {
+    try { localStorage.setItem(CONT_HIDE_KEY, hidden ? '1' : '0'); } catch (e) {}
+    var hc = $('#setHideContinue');
+    if (hc) hc.checked = !!hidden;
+    if (window.READER && typeof window.READER.setContinueHidden === 'function') {
+      try { window.READER.setContinueHidden(!!hidden); } catch (e) {}
+    }
+  }
+
   /* ---------------- settings ---------------- */
   function openSettings() {
     var m = $('#settingsModal');
@@ -4790,6 +4971,13 @@
       var o = document.createElement('option'); o.value = l[0]; o.textContent = l[1]; sel.appendChild(o);
     });
     sel.value = store.lang || 'en-US';
+    var curTheme = getTheme();
+    var tLbl = $('#setThemeLabel');
+    if (tLbl) tLbl.textContent = curTheme === 'light' ? 'Light Frosted' : 'Dark Obsidian';
+    var setBtnTxt = $('#setThemeToggleText');
+    if (setBtnTxt) setBtnTxt.textContent = curTheme === 'light' ? 'Dark Mode' : 'Light Mode';
+    var hc = $('#setHideContinue');
+    if (hc) hc.checked = isContinueHidden();
     m.classList.remove('hidden');
   }
   function openSourcesDirectory() {
@@ -4804,6 +4992,21 @@
     if (o) o.classList.add('hidden');
   }
   function wireSettings() {
+    var themeBtn = $('#themeToggleBtn');
+    if (themeBtn) themeBtn.onclick = toggleTheme;
+    var setThemeBtn = $('#setThemeToggle');
+    if (setThemeBtn) setThemeBtn.onclick = toggleTheme;
+    var setHideCont = $('#setHideContinue');
+    if (setHideCont) {
+      setHideCont.onchange = function () {
+        setContinueHidden(setHideCont.checked);
+        toast(setHideCont.checked ? 'Continue Reading shelf hidden.' : 'Continue Reading shelf visible.');
+      };
+    }
+    window.addEventListener('sb:continue-hidden', function (ev) {
+      var hc = $('#setHideContinue');
+      if (hc && ev && ev.detail) hc.checked = !!ev.detail.hidden;
+    });
     $('#setSources').onclick = openSourcesDirectory;
     var soClose = $('#sourcesOverlayClose');
     if (soClose) soClose.onclick = closeSourcesDirectory;
@@ -4819,6 +5022,7 @@
 
   /* ---------------- boot & backend UI hooks ---------------- */
   function boot() {
+    applyTheme(getTheme());
     document.querySelectorAll('#nav button').forEach(function (b) {
       b.onclick = function () { renderSection(b.getAttribute('data-sec')); };
     });
@@ -4877,6 +5081,9 @@
         if (state.section === 'home') renderSection('home');
       },
       getSearchMode: function () { return state.searchMode; },
+      setTheme: applyTheme,
+      getTheme: getTheme,
+      toggleTheme: toggleTheme,
       openAgeGate: requireAge18,
       openVpnDrawer: openVpnPanel,
       closeVpnDrawer: closeVpnPanel,
