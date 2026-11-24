@@ -12,6 +12,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import zlib from 'node:zlib';
 import { execSync, execFileSync } from 'node:child_process';
 
 const [assetsDir, outDir, secretsPath] = process.argv.slice(2);
@@ -91,6 +92,17 @@ fs.mkdirSync(outDir, { recursive: true });
 const files = walk(assetsDir);
 for (const rel of files) {
   const src = path.join(assetsDir, rel);
+  /* Large third-party bundles are stored gzipped in git, then inflated into
+     the encrypted asset store. They never touch the working tree unzipped. */
+  if (rel.endsWith('.js.gz')) {
+    const outRel = rel.slice(0, -3);
+    const dst = path.join(outDir, outRel);
+    fs.mkdirSync(path.dirname(dst), { recursive: true });
+    const payload = zlib.gunzipSync(fs.readFileSync(src));
+    fs.writeFileSync(dst + '.enc', encrypt(payload));
+    console.log('inflated  ', rel, '->', path.basename(dst) + '.enc', payload.length + ' bytes');
+    continue;
+  }
   const dst = path.join(outDir, rel);
   fs.mkdirSync(path.dirname(dst), { recursive: true });
   const name = path.basename(rel);

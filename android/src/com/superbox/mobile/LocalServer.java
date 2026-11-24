@@ -1597,7 +1597,8 @@ public class LocalServer {
                     }
                 }
             } else {
-                body = readAll(am.open(file), 24 * 1024 * 1024);
+                /* ONNX q8 model and asyncify wasm are ~23 MB and ~27 MB. */
+                body = readAll(am.open(file), 40 * 1024 * 1024);
                 if ("index.html".equals(file)) {
                     String html = new String(body, "UTF-8").replace("__SB_TOKEN_VALUE__", token);
                     body = html.getBytes("UTF-8");
@@ -1659,9 +1660,10 @@ public class LocalServer {
     private static String mime(String file) {
         String f = file.toLowerCase(Locale.US);
         if (f.endsWith(".html")) return "text/html; charset=utf-8";
-        if (f.endsWith(".js")) return "application/javascript; charset=utf-8";
+        if (f.endsWith(".js") || f.endsWith(".mjs")) return "application/javascript; charset=utf-8";
         if (f.endsWith(".css")) return "text/css; charset=utf-8";
         if (f.endsWith(".json")) return "application/json; charset=utf-8";
+        if (f.endsWith(".wasm")) return "application/wasm";
         if (f.endsWith(".png")) return "image/png";
         if (f.endsWith(".jpg") || f.endsWith(".jpeg")) return "image/jpeg";
         if (f.endsWith(".webp")) return "image/webp";

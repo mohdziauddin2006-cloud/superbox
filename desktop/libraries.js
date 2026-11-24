@@ -1673,34 +1673,40 @@
       });
     }
     async function index(items, partition) {
-      if (!Array.isArray(items) || !items.length) return;
+      if (!Array.isArray(items) || !items.length) return null;
       var part = partition === 'isolated' ? 'isolated' : 'safe';
       indexLocal(items, part);
       try {
         var B = await base();
         var ctl = new AbortController();
-        var tm = setTimeout(function () { try { ctl.abort(); } catch (e) {} }, 1200);
-        fetch(B + '/api/ai/index', {
+        var tm = setTimeout(function () { try { ctl.abort(); } catch (e) {} }, 9000);
+        var r = await fetch(B + '/api/ai/index', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ partition: part, items: items.slice(0, 120) }),
           signal: ctl.signal
-        }).catch(function () {}).finally(function () { clearTimeout(tm); });
-      } catch (e) {}
+        });
+        clearTimeout(tm);
+        return r && r.ok ? r.json() : null;
+      } catch (e) { return null; }
     }
     async function similar(seed, opts) {
       opts = opts || {};
       var part = (opts.partition === 'isolated' || isAdult(seed)) ? 'isolated' : 'safe';
       var lim = Math.max(4, Math.min(24, Number(opts.limit) || 16));
-      if (Array.isArray(opts.candidates) && opts.candidates.length) indexLocal(opts.candidates, part);
+      if (Array.isArray(opts.candidates) && opts.candidates.length) {
+        indexLocal(opts.candidates, part);
+        /* Embed the shortlist first so the query itself stays a millisecond pass. */
+        await index(opts.candidates, part);
+      }
       try {
         var B = await base();
         var ctl = new AbortController();
-        var tm = setTimeout(function () { try { ctl.abort(); } catch (e) {} }, 1100);
+        var tm = setTimeout(function () { try { ctl.abort(); } catch (e) {} }, 2500);
         var r = await fetch(B + '/api/ai/similar', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ seed: seed || {}, partition: part, limit: lim, candidates: (opts.candidates || []).slice(0, 120) }),
+          body: JSON.stringify({ seed: seed || {}, partition: part, limit: lim, candidates: [] }),
           signal: ctl.signal
         });
         clearTimeout(tm);

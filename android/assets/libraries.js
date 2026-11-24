@@ -1591,6 +1591,60 @@
     var STOP = { the:1,and:1,for:1,with:1,that:1,this:1,from:1,into:1,your:1,have:1,will:1,about:1,after:1,before:1,when:1,where:1,what:1,which:1,while:1,their:1,there:1,they:1,them:1,episode:1,season:1,movie:1,series:1,watch:1,online:1,free:1,full:1,hd:1 };
     var stores = { safe: new Map(), isolated: new Map() };
     var dfs = { safe: new Map(), isolated: new Map() };
+    /* Bundled offline ONNX all-MiniLM-L6-v2 (q8). Loads from /ai/models with
+       local_files_only, then reranks the TF-IDF shortlist with dense cosine.
+       Any load failure silently keeps the millisecond TF-IDF engine. */
+    var onnx = { pipe: null, mode: 'tfidf', attempted: false, loading: null };
+    var dense = new Map();
+    function initOnnx() {
+      if (onnx.attempted) return onnx.loading || Promise.resolve(onnx.mode);
+      onnx.attempted = true;
+      onnx.loading = import('/ai/transformers.min.js').then(function (mod) {
+        mod.env.allowRemoteModels = false;
+        mod.env.allowLocalModels = true;
+        mod.env.localModelPath = '/ai/models/';
+        try {
+          var w = mod.env.backends && mod.env.backends.onnx && mod.env.backends.onnx.wasm;
+          if (w) { w.wasmPaths = '/ai/'; w.numThreads = 1; w.proxy = false; }
+        } catch (e) {}
+        return mod.pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', { dtype: 'q8', local_files_only: true });
+      }).then(function (pipe) {
+        onnx.pipe = pipe;
+        onnx.mode = 'onnx';
+        return 'onnx';
+      }).catch(function () {
+        onnx.mode = 'tfidf';
+        return 'tfidf';
+      });
+      return onnx.loading;
+    }
+    function embedOne(text) {
+      if (!onnx.pipe) return Promise.resolve(null);
+      return onnx.pipe(String(text || '').slice(0, 1200), { pooling: 'mean', normalize: true }).then(function (out) {
+        return out && out.data ? Array.from(out.data) : null;
+      }).catch(function () { return null; });
+    }
+    function ensureDense(list) {
+      if (!onnx.pipe) return Promise.resolve();
+      var todo = (list || []).filter(function (e) { return e && e.id && !dense.has(e.id); });
+      if (!todo.length) return Promise.resolve();
+      var i = 0;
+      function step() {
+        if (i >= todo.length) return Promise.resolve();
+        var batch = todo.slice(i, i + 4);
+        i += 4;
+        return Promise.all(batch.map(function (e) {
+          return embedOne(docOf(e.meta)).then(function (v) { if (v) dense.set(e.id, v); });
+        })).then(step);
+      }
+      return step();
+    }
+    function denseCos(a, b) {
+      if (!a || !b || a.length !== b.length) return 0;
+      var s = 0;
+      for (var i = 0; i < a.length; i++) s += a[i] * b[i];
+      return s;
+    }
     function isAdult(it) {
       if (!it || typeof it !== 'object') return false;
       if (it.adult === true || it.isAdult === true || it.partition === 'isolated') return true;
@@ -1672,8 +1726,16 @@
           var fk = st.keys().next().value;
           if (fk) st.delete(fk);
         }
+        if (onnx.mode === 'onnx') ensureDense([{ id: id, meta: it }]).catch(function () {});
       });
       return Promise.resolve({ ok: true });
+    }
+    function finish(top, lim) {
+      var maxS = top.length ? Math.max(0.25, top[0].s) : 1;
+      return top.slice(0, lim).map(function (r, idx) {
+        var pct = Math.max(74, Math.min(99, Math.round(74 + Math.min(1, r.s / maxS) * 24 - idx * 0.35)));
+        return Object.assign({}, r.m, { score: Math.round(r.s * 1000) / 1000, match: pct + '% Match' });
+      });
     }
     function similar(seed, opts) {
       opts = opts || {};
@@ -1690,18 +1752,36 @@
         if (stitle && String(entry.meta.t || entry.meta.title || '').trim().toLowerCase() === stitle) return;
         var s = cos(qv, entry.v, df, st.size);
         if (seed && seed.year && entry.meta.year && Math.abs(Number(seed.year) - Number(entry.meta.year)) <= 3) s += 0.03;
-        if (s > 0.01) scored.push({ m: entry.meta, s: s });
+        if (s > 0.01) scored.push({ m: entry.meta, s: s, id: entry.id });
       });
       scored.sort(function (a, b) { return b.s - a.s; });
-      var top = scored.slice(0, lim);
-      var maxS = top.length ? Math.max(0.25, top[0].s) : 1;
-      return Promise.resolve(top.map(function (r, idx) {
-        var pct = Math.max(74, Math.min(99, Math.round(74 + Math.min(1, r.s / maxS) * 24 - idx * 0.35)));
-        return Object.assign({}, r.m, { score: Math.round(r.s * 1000) / 1000, match: pct + '% Match' });
-      }));
+      var shortlist = scored.slice(0, Math.max(lim * 3, 40));
+      if (onnx.mode !== 'onnx') return Promise.resolve(finish(shortlist, lim));
+      return ensureDense(shortlist).then(function () {
+        return embedOne(docOf(seed || {}));
+      }).then(function (q) {
+        if (!q) return finish(shortlist, lim);
+        var ranked = [];
+        shortlist.forEach(function (r) {
+          var dv = dense.get(r.id);
+          if (dv) ranked.push({ m: r.m, s: 0.75 * denseCos(q, dv) + 0.25 * r.s });
+        });
+        if (!ranked.length) return finish(shortlist, lim);
+        ranked.sort(function (a, b) { return b.s - a.s; });
+        return finish(ranked, lim);
+      }).catch(function () { return finish(shortlist, lim); });
     }
-    return { index: index, similar: similar, isAdult: isAdult };
+    return {
+      index: index,
+      similar: similar,
+      isAdult: isAdult,
+      init: initOnnx,
+      status: function () {
+        return { mode: onnx.mode, model: onnx.mode === 'onnx' ? 'Xenova/all-MiniLM-L6-v2' : 'tfidf-cosine-fallback', dense: dense.size };
+      }
+    };
   })();
+  setTimeout(function () { try { SBAI.init(); } catch (e) {} }, 1500);
 
   SC.base = base;
   SC.alt = alt;

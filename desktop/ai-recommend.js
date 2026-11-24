@@ -228,6 +228,19 @@ async function computeDenseEmbedding(text) {
   return null;
 }
 
+/* Batch embeddings: one ONNX pass per chunk instead of one per title. */
+async function computeDenseBatch(texts) {
+  if (!extractor || engineMode !== 'onnx' || !Array.isArray(texts) || !texts.length) return [];
+  try {
+    const out = await extractor(texts, { pooling: 'mean', normalize: true });
+    if (out && typeof out.tolist === 'function' && out.dims && out.dims.length === 2) {
+      return out.tolist();
+    }
+    if (out && out.data) return [Array.from(out.data)];
+  } catch (e) {}
+  return [];
+}
+
 function sanitizeCardMeta(item) {
   return {
     id: itemIdOf(item),
@@ -328,8 +341,7 @@ async function reembedAllAsync() {
 
 async function indexItems(items, requestedPartition) {
   if (!Array.isArray(items) || !items.length) return { indexed: 0, mode: engineMode };
-  let count = 0;
-  const touched = { safe: false, isolated: false };
+  const prepared = [];
   for (let i = 0; i < items.length; i++) {
     const raw = items[i];
     if (!raw || typeof raw !== 'object') continue;
@@ -343,30 +355,50 @@ async function indexItems(items, requestedPartition) {
     if (!id || !meta.t) continue;
     const doc = buildDocText(raw);
     if (!doc) continue;
-    const sparse = buildSparseTf(tokenize(doc));
-    const dense = engineMode === 'onnx' ? await computeDenseEmbedding(doc) : null;
-    const store = stores[part];
-    const prev = store.get(id);
-    updateDf(part, prev ? prev.sparse : null, sparse);
-    store.set(id, {
+    const prev = stores[part].get(id);
+    prepared.push({
+      part: part,
       id: id,
       meta: meta,
       doc: doc,
-      sparse: sparse,
-      dense: dense || (prev && prev.dense) || null,
+      sparse: buildSparseTf(tokenize(doc)),
+      dense: prev && prev.doc === doc && prev.dense ? prev.dense : null
+    });
+  }
+  /* Embed every uncached document in chunks of 16; cached docs skip inference. */
+  if (engineMode === 'onnx') {
+    const need = prepared.filter(function (e) { return !e.dense; });
+    for (let i = 0; i < need.length; i += 16) {
+      const chunk = need.slice(i, i + 16);
+      const rows = await computeDenseBatch(chunk.map(function (e) { return e.doc; }));
+      chunk.forEach(function (e, k) { if (rows[k] && rows[k].length) e.dense = rows[k]; });
+    }
+  }
+  let count = 0;
+  const touched = { safe: false, isolated: false };
+  prepared.forEach(function (e) {
+    const store = stores[e.part];
+    const prev = store.get(e.id);
+    updateDf(e.part, prev ? prev.sparse : null, e.sparse);
+    store.set(e.id, {
+      id: e.id,
+      meta: e.meta,
+      doc: e.doc,
+      sparse: e.sparse,
+      dense: e.dense || (prev && prev.dense) || null,
       at: Date.now()
     });
     if (store.size > MAX_PARTITION_ITEMS) {
       const oldestKey = store.keys().next().value;
       if (oldestKey) {
         const old = store.get(oldestKey);
-        updateDf(part, old ? old.sparse : null, null);
+        updateDf(e.part, old ? old.sparse : null, null);
         store.delete(oldestKey);
       }
     }
-    touched[part] = true;
+    touched[e.part] = true;
     count++;
-  }
+  });
   if (touched.safe) schedulePersist('safe');
   if (touched.isolated) schedulePersist('isolated');
   return {

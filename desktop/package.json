@@ -12,6 +12,7 @@
     "dist": "electron-builder --win nsis"
   },
   "dependencies": {
+    "@huggingface/transformers": "^4.3.2",
     "undici": "^6.21.3"
   },
   "devDependencies": {
@@ -30,7 +31,8 @@
       "**/*",
       "!*.map",
       "!**/*.map",
-      "!bin/**"
+      "!bin/**",
+      "!models/**"
     ],
     "extraResources": [
       {
@@ -39,9 +41,19 @@
         "filter": [
           "**/*"
         ]
+      },
+      {
+        "from": "models",
+        "to": "models",
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "asar": true,
+    "asarUnpack": [
+      "node_modules/onnxruntime-node/**"
+    ],
     "compression": "normal",
     "win": {
       "target": [
