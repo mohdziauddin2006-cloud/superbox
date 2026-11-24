@@ -1707,8 +1707,9 @@
       }
       return (na && nb) ? dot / (Math.sqrt(na) * Math.sqrt(nb)) : 0;
     }
-    function index(items, partition) {
+    function index(items, partition, scope) {
       var reqP = partition === 'isolated' ? 'isolated' : 'safe';
+      var sc = String(scope || '').slice(0, 24);
       (items || []).forEach(function (it) {
         if (!it || typeof it !== 'object') return;
         if (reqP === 'safe' && isAdult(it)) return;
@@ -1716,17 +1717,18 @@
         var id = idOf(it);
         var title = String(it.t || it.title || it.name || '').trim();
         if (!id || !title) return;
-        var v = tfVec(tok(docOf(it)));
+        var meta = Object.assign({}, it, { __scope: sc || it.__scope || it.scope || '' });
+        var v = tfVec(tok(docOf(meta)));
         var st = stores[p], df = dfs[p];
         var prev = st.get(id);
         if (prev) Object.keys(prev.v).forEach(function (k) { var n = (df.get(k) || 1) - 1; if (n <= 0) df.delete(k); else df.set(k, n); });
         Object.keys(v).forEach(function (k) { df.set(k, (df.get(k) || 0) + 1); });
-        st.set(id, { id: id, meta: it, v: v });
+        st.set(id, { id: id, meta: meta, v: v });
         if (st.size > 1500) {
           var fk = st.keys().next().value;
           if (fk) st.delete(fk);
         }
-        if (onnx.mode === 'onnx') ensureDense([{ id: id, meta: it }]).catch(function () {});
+        if (onnx.mode === 'onnx') ensureDense([{ id: id, meta: meta }]).catch(function () {});
       });
       return Promise.resolve({ ok: true });
     }
@@ -1771,9 +1773,57 @@
         return finish(ranked, lim);
       }).catch(function () { return finish(shortlist, lim); });
     }
+    function searchText(query, opts) {
+      opts = opts || {};
+      var p = opts.partition === 'isolated' ? 'isolated' : 'safe';
+      var lim = Math.max(4, Math.min(40, Number(opts.limit) || 24));
+      var sc = String(opts.scope || '').slice(0, 24);
+      if (Array.isArray(opts.candidates) && opts.candidates.length) index(opts.candidates, p, sc);
+      var q = String(query || '').trim();
+      var st = stores[p], df = dfs[p];
+      if (!q || !st.size) return Promise.resolve([]);
+      var qv = tfVec(tok(q));
+      var qWords = q.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().split(/\s+/).filter(Boolean);
+      var scored = [];
+      st.forEach(function (entry) {
+        var es = String(entry.meta.__scope || entry.meta.scope || '');
+        if (sc && es && es !== sc) return;
+        if (sc && !es) return;
+        var s = cos(qv, entry.v, df, st.size);
+        var tw = String(entry.meta.t || entry.meta.title || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+        if (tw && qWords.length) {
+          var hits = 0;
+          qWords.forEach(function (w) { if (tw.indexOf(w) >= 0) hits++; });
+          if (hits) s += Math.min(0.16, 0.07 * hits);
+          if (tw === q.toLowerCase()) s += 0.25;
+          else if (tw.indexOf(q.toLowerCase()) === 0) s += 0.12;
+        }
+        if (s > 0.035) scored.push({ m: entry.meta, s: s, id: entry.id, lex: s });
+      });
+      scored.sort(function (a, b) { return b.s - a.s; });
+      var shortlist = scored.slice(0, Math.max(lim * 3, 48));
+      if (onnx.mode !== 'onnx') {
+        shortlist.forEach(function (r) { r.m = Object.assign({}, r.m, { aiHit: true }); });
+        return Promise.resolve(finish(shortlist, lim));
+      }
+      return ensureDense(shortlist).then(function () {
+        return embedOne(q);
+      }).then(function (qd) {
+        if (!qd) return finish(shortlist, lim);
+        var ranked = [];
+        shortlist.forEach(function (r) {
+          var dv = dense.get(r.id);
+          var s = dv ? (denseCos(qd, dv) * 0.72 + r.lex * 0.28) : r.s;
+          ranked.push({ m: Object.assign({}, r.m, { aiHit: true }), s: s, id: r.id });
+        });
+        ranked.sort(function (a, b) { return b.s - a.s; });
+        return finish(ranked, lim);
+      }).catch(function () { return finish(shortlist, lim); });
+    }
     return {
       index: index,
       similar: similar,
+      searchText: searchText,
       isAdult: isAdult,
       init: initOnnx,
       status: function () {

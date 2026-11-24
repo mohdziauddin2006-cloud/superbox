@@ -244,6 +244,7 @@ async function computeDenseBatch(texts) {
 function sanitizeCardMeta(item) {
   return {
     id: itemIdOf(item),
+    scope: String(item.__scope || item.scope || '').slice(0, 24),
     t: String(item.t || item.title || item.name || '').slice(0, 140),
     poster: /^https?:\/\//i.test(String(item.poster || '')) ? String(item.poster) : '',
     year: String(item.year || '').slice(0, 4),
@@ -474,6 +475,81 @@ async function querySimilar(seed, opts) {
   };
 }
 
+/* Free-text hybrid search for the application's search bars.
+   Keyword TF-IDF and all-MiniLM dense vectors are fused, the optional scope
+   restricts results to the active tab, and adult/safe partitions never mix. */
+async function queryText(query, opts) {
+  const o = opts || {};
+  const part = o.partition === 'isolated' ? 'isolated' : 'safe';
+  const scope = String(o.scope || '').slice(0, 24);
+  const limit = Math.max(4, Math.min(40, Number(o.limit) || 24));
+  const q = String(query || '').trim().slice(0, 240);
+  if (!q) return { ok: true, mode: engineMode, partition: part, scope: scope, ms: 0, items: [] };
+
+  if (Array.isArray(o.candidates) && o.candidates.length) {
+    const scoped = o.candidates.slice(0, 300).map(function (it) {
+      if (!it || typeof it !== 'object') return it;
+      return Object.assign({}, it, { __scope: scope || it.__scope || it.scope || '' });
+    });
+    await indexItems(scoped, part);
+  }
+
+  const store = stores[part];
+  if (!store.size) return { ok: true, mode: engineMode, partition: part, scope: scope, ms: 0, items: [] };
+  const df = dfMaps[part];
+  const t0 = Date.now();
+  const qSparse = buildSparseTf(tokenize(q));
+  const qDense = engineMode === 'onnx' ? await computeDenseEmbedding(q) : null;
+  const qWords = String(q).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().split(/\s+/).filter(Boolean);
+  const scored = [];
+
+  for (const entry of store.values()) {
+    const entryScope = String(entry.meta.scope || '');
+    if (scope && entryScope && entryScope !== scope) continue;
+    if (scope && !entryScope) continue;
+    const lexical = sparseCosine(qSparse, entry.sparse, df, store.size);
+    let dense = 0;
+    if (qDense && entry.dense) {
+      dense = Math.max(0, denseCosine(qDense, entry.dense));
+    }
+    let sim = (qDense && entry.dense) ? (dense * 0.72 + lexical * 0.28) : lexical;
+    const titleWords = String(entry.meta.t || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+    if (titleWords && qWords.length) {
+      let hits = 0;
+      for (let w = 0; w < qWords.length; w++) {
+        if (titleWords.indexOf(qWords[w]) >= 0) hits++;
+      }
+      if (hits) sim += Math.min(0.16, 0.07 * hits);
+      if (titleWords === q.toLowerCase()) sim += 0.25;
+      else if (titleWords.indexOf(q.toLowerCase()) === 0) sim += 0.12;
+    }
+    if (sim > 0.035) scored.push({ entry: entry, sim: sim, lexical: lexical, dense: dense });
+  }
+
+  scored.sort(function (a, b) { return b.sim - a.sim; });
+  const top = scored.slice(0, Math.max(limit, 32));
+  const maxSim = top.length ? Math.max(0.25, top[0].sim) : 1;
+  const items = top.slice(0, limit).map(function (row, idx) {
+    const pct = Math.max(74, Math.min(99, Math.round(74 + Math.min(1, row.sim / maxSim) * 24 - idx * 0.3)));
+    return Object.assign({}, row.entry.meta, {
+      score: Math.round(row.sim * 1000) / 1000,
+      lexical: Math.round(row.lexical * 1000) / 1000,
+      match: pct + '% Match',
+      aiHit: true
+    });
+  });
+  return {
+    ok: true,
+    mode: engineMode,
+    model: engineMode === 'onnx' ? MODEL_ID : 'tfidf-cosine-fallback',
+    partition: part,
+    scope: scope,
+    ms: Math.max(1, Date.now() - t0),
+    indexed: store.size,
+    items: items
+  };
+}
+
 function status() {
   return {
     ok: true,
@@ -493,6 +569,7 @@ setTimeout(function () { initOnnxBackground(); }, 1200).unref();
 module.exports = {
   indexItems: indexItems,
   querySimilar: querySimilar,
+  queryText: queryText,
   status: status,
   initOnnxBackground: initOnnxBackground
 };

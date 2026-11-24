@@ -699,7 +699,8 @@
       wrap.__cached = false;
       cachePut(row, items);
       if (window.SBAI && typeof window.SBAI.index === 'function') {
-        window.SBAI.index(items, state.section === 'adult' ? 'isolated' : 'safe');
+        var aiPart = state.section === 'adult' ? 'isolated' : 'safe';
+        window.SBAI.index(items, aiPart, state.section || 'home');
       }
     } catch (e) {
       if (hadCache) return;
@@ -4480,10 +4481,95 @@
     return w;
   }
 
-  function paintResultRows(c, defs) {
+  function aiItemKey(it) {
+    if (!it || typeof it !== 'object') return '';
+    if (it.tmdb) return 'tmdb:' + (it.mt === 'tv' ? 'tv' : 'movie') + ':' + String(it.tmdb);
+    if (it.subjectId) return 'mb:' + String(it.subjectId);
+    if (it.vid) return 'yt:' + String(it.vid);
+    if (it.page) return 'pg:' + String(it.page).replace(/[?#].*$/, '').replace(/\/+$/, '').toLowerCase();
+    var t = String(it.t || it.title || it.name || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+    return t ? 't:' + t + ':' + String(it.year || '').slice(0, 4) : '';
+  }
+
+  /* Hybrid keyword + local MiniLM reranking for every result view. The
+     provider's answer stays authoritative; semantic hits are fused on top,
+     marked with match pills, and kept inside the active Safe/18+ partition. */
+  async function aiRerankGroups(q, defs, ctx) {
+    ctx = ctx || {};
+    if (!window.SBAI || typeof window.SBAI.searchText !== 'function') return { defs: defs, ai: false };
+    var flat = [], seen = {};
+    (defs || []).forEach(function (d) {
+      (d[1] || []).forEach(function (it) {
+        var k = aiItemKey(it);
+        if (!k || seen[k]) return;
+        seen[k] = 1;
+        flat.push(it);
+      });
+    });
+    var hits = [];
+    try {
+      hits = await window.SBAI.searchText(q, {
+        partition: ctx.partition === 'isolated' ? 'isolated' : 'safe',
+        scope: ctx.scope || '',
+        candidates: flat.slice(0, 220),
+        limit: 28
+      });
+    } catch (e) { hits = []; }
+    if (!Array.isArray(hits) || !hits.length) return { defs: defs, ai: false };
+    var rank = {}, byKey = {};
+    hits.forEach(function (h, i) {
+      var k = aiItemKey(h);
+      if (!k) return;
+      rank[k] = i;
+      byKey[k] = h;
+      if (i < 24) h.aiHit = true;
+    });
+    var merged = (defs || []).map(function (d) {
+      var list = (d[1] || []).map(function (it) {
+        var k = aiItemKey(it);
+        var hi = byKey[k];
+        if (hi) {
+          it = Object.assign({}, it, {
+            match: hi.match || it.match,
+            score: hi.score,
+            aiHit: true
+          });
+        }
+        return it;
+      });
+      list.sort(function (a, b) {
+        var ar = rank[aiItemKey(a)], br = rank[aiItemKey(b)];
+        if (ar === undefined && br === undefined) return 0;
+        if (ar === undefined) return 1;
+        if (br === undefined) return -1;
+        return ar - br;
+      });
+      return [d[0], list];
+    });
+    var extras = hits.filter(function (h) {
+      var k = aiItemKey(h);
+      return k && !seen[k] && Number(h.score || 0) >= 0.09;
+    }).slice(0, 12);
+    if (extras.length) merged.unshift(['AI Smart Search', extras]);
+    return { defs: merged, ai: true, hits: hits.length };
+  }
+
+  async function paintResultRows(c, defs, aiCtx) {
     /* A fresh results grid starts its own 18+ dedupe scope: posts remembered
        from the vault page never suppress a deliberate search. */
     r34Seen = new Set();
+    if (aiCtx) {
+      try {
+        var ranked = await aiRerankGroups(aiCtx.q, defs, aiCtx);
+        defs = ranked.defs;
+        var head = c.querySelector('.searchhead');
+        if (head && ranked.ai) {
+          var badge = el('span', 'ai-smart-badge', '\u2726 AI Smart Search');
+          badge.title = 'Local all-MiniLM-L6-v2 semantic reranking \u00B7 ' + (aiCtx.partition === 'isolated' ? '18+ index' : 'safe index');
+          head.appendChild(badge);
+        }
+      } catch (e) { /* keyword results remain visible on any AI failure */ }
+    }
     var any = defs.some(function (d) { return (d[1] || []).length; });
     if (!any) { c.appendChild(el('div', 'empty', 'No matches found.')); return; }
     defs.forEach(function (d) {
@@ -4585,7 +4671,11 @@
       var deepMerged = dedupe((res[7] || []).concat(res[8] || [], res[9] || []));
       defs.push(['18+ Vault (Deep)', deepMerged]);
     }
-    paintResultRows(stage, defs);
+    await paintResultRows(stage, defs, {
+      q: q,
+      partition: useMode === 'deep' ? 'isolated' : 'safe',
+      scope: 'home'
+    });
   }
 
   /* Per-section scoped search: queries ONLY the active tab's own category & providers. */
@@ -4596,31 +4686,32 @@
     stage.appendChild(pageHeaderBar(sec));
     c.appendChild(stage);
     var dedupe = SC.dedupeItems || function (a) { return a; };
+    var aiCtx = { q: q, partition: sec === 'adult' ? 'isolated' : 'safe', scope: sec };
     try {
       window.dispatchEvent(new CustomEvent('sb:search', { detail: { query: q, mode: sec === 'adult' ? 'adult' : 'safe', scope: sec } }));
     } catch (e) {}
     if (sec === 'moviebox') {
       stage.appendChild(resultsHead(q, 'Spotlight catalogue only'));
       var rmb = dedupe(await mbSearch(q).catch(function () { return []; }));
-      paintResultRows(stage, [['Spotlight', rmb]]);
+      await paintResultRows(stage, [['Spotlight', rmb]], aiCtx);
       return;
     }
     if (sec === 'movie') {
       stage.appendChild(resultsHead(q, 'Movies only'));
       var rm = dedupe((await tmdbSearch(q, false).catch(function () { return []; })).filter(function (x) { return x.mt === 'movie'; }));
-      paintResultRows(stage, [['Movies', rm]]);
+      await paintResultRows(stage, [['Movies', rm]], aiCtx);
       return;
     }
     if (sec === 'tv') {
       stage.appendChild(resultsHead(q, 'Series only'));
       var rt = dedupe((await tmdbSearch(q, false).catch(function () { return []; })).filter(function (x) { return x.mt === 'tv'; }));
-      paintResultRows(stage, [['Series', rt]]);
+      await paintResultRows(stage, [['Series', rt]], aiCtx);
       return;
     }
     if (sec === 'kids') {
       stage.appendChild(resultsHead(q, 'Kid-safe family & animation results only'));
       var rk = dedupe(await tmdbScopedSearch(q, 'kids').catch(function () { return []; }));
-      paintResultRows(stage, [['Kids', rk]]);
+      await paintResultRows(stage, [['Kids', rk]], aiCtx);
       return;
     }
     if (sec === 'cartoons') {
@@ -4629,7 +4720,7 @@
         archiveCartoonSearch(q).catch(function () { return []; }),
         tmdbScopedSearch(q, 'cartoons').catch(function () { return []; })
       ]);
-      paintResultRows(stage, [['Classic Cartoons', dedupe(rc[0])], ['Animated Series & Films', dedupe(rc[1])]]);
+      await paintResultRows(stage, [['Classic Cartoons', dedupe(rc[0])], ['Animated Series & Films', dedupe(rc[1])]], aiCtx);
       return;
     }
     if (sec === 'anime') {
@@ -4638,7 +4729,7 @@
         anilistSearch(q).catch(function () { return []; }),
         tmdbScopedSearch(q, 'anime').catch(function () { return []; })
       ]);
-      paintResultRows(stage, [['Anime (AniList)', dedupe(r1[0])], ['Anime (Catalog)', dedupe(r1[1])]]);
+      await paintResultRows(stage, [['Anime (AniList)', dedupe(r1[0])], ['Anime (Catalog)', dedupe(r1[1])]], aiCtx);
       return;
     }
     if (sec === 'kdrama') {
@@ -4647,7 +4738,7 @@
         tmdbScopedSearch(q, 'kdrama').catch(function () { return []; }),
         SC.search(q, 'kdrama').catch(function () { return []; })
       ]);
-      paintResultRows(stage, [['K-Drama (Catalog)', dedupe(r2[0])], ['K-Drama Streams', dedupe(r2[1])]]);
+      await paintResultRows(stage, [['K-Drama (Catalog)', dedupe(r2[0])], ['K-Drama Streams', dedupe(r2[1])]], aiCtx);
       return;
     }
     if (sec === 'webseries') {
@@ -4656,25 +4747,25 @@
         tmdbScopedSearch(q, 'webseries').catch(function () { return []; }),
         SC.search(q, 'webseries').catch(function () { return []; })
       ]);
-      paintResultRows(stage, [['Web Series (Catalog)', dedupe(r3[0])], ['Web Series Streams', dedupe(r3[1])]]);
+      await paintResultRows(stage, [['Web Series (Catalog)', dedupe(r3[0])], ['Web Series Streams', dedupe(r3[1])]], aiCtx);
       return;
     }
     if (sec === 'tube') {
       stage.appendChild(resultsHead(q, 'Tube videos only'));
       var ry = dedupe(await SC.ytSearch(q).catch(function () { return []; }));
-      paintResultRows(stage, [['Tube', ry]]);
+      await paintResultRows(stage, [['Tube', ry]], aiCtx);
       return;
     }
     if (sec === 'adult') {
       var sub = state.sub || 'jav';
       stage.appendChild(resultsHead(q, vaultLabel(sub) + ' sources (18+)'));
       var r4 = dedupe(await SC.search(q, 'adult', sub).catch(function () { return []; }));
-      paintResultRows(stage, [[vaultLabel(sub), r4]]);
+      await paintResultRows(stage, [[vaultLabel(sub), r4]], aiCtx);
       return;
     }
     stage.appendChild(resultsHead(q, ''));
     var r5 = dedupe(await tmdbSearch(q, false).catch(function () { return []; }));
-    paintResultRows(stage, [['Results', r5]]);
+    await paintResultRows(stage, [['Results', r5]], aiCtx);
   }
 
   async function runSearch(q, opts) {

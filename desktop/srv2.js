@@ -2806,7 +2806,7 @@ async function handle(req, res){
 
   /* ---- Local ONNX / TF-IDF AI Recommendation Service --------------------
      Strictly partitioned ('safe' vs 'isolated') semantic similarity engine. */
-  if (path === '/api/ai/status' || path === '/api/ai/index' || path === '/api/ai/similar') {
+  if (path === '/api/ai/status' || path === '/api/ai/index' || path === '/api/ai/similar' || path === '/api/ai/search') {
     const sendAi = function (code, obj) {
       res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
       res.end(JSON.stringify(obj));
@@ -2849,6 +2849,30 @@ async function handle(req, res){
           };
         }
         const out = await aiRecommend.querySimilar(seed, { partition: partition, limit: limit, candidates: candidates });
+        return sendAi(200, out);
+      }
+      if (path === '/api/ai/search') {
+        let query = '';
+        let partition = 'safe';
+        let scope = '';
+        let limit = 24;
+        let candidates = null;
+        if (req.method === 'POST') {
+          const raw = await reqBody(req, 768 * 1024, 9000);
+          let parsed = {};
+          try { parsed = JSON.parse(raw.toString('utf8') || '{}'); } catch (e) { return sendAi(400, { ok: false, error: 'invalid json' }); }
+          query = String(parsed.query || '').slice(0, 240);
+          partition = parsed.partition === 'isolated' ? 'isolated' : 'safe';
+          scope = String(parsed.scope || '').slice(0, 24);
+          limit = Math.max(4, Math.min(40, Number(parsed.limit) || 24));
+          if (Array.isArray(parsed.candidates)) candidates = parsed.candidates.slice(0, 300);
+        } else {
+          query = u.searchParams.get('q') || '';
+          partition = u.searchParams.get('partition') === 'isolated' ? 'isolated' : 'safe';
+          scope = u.searchParams.get('scope') || '';
+          limit = Math.max(4, Math.min(40, Number(u.searchParams.get('limit')) || 24));
+        }
+        const out = await aiRecommend.queryText(query, { partition: partition, scope: scope, limit: limit, candidates: candidates });
         return sendAi(200, out);
       }
       return sendAi(405, { ok: false, error: 'method not allowed' });

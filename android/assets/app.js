@@ -279,7 +279,7 @@
     };
   }
 
-  function mergeIndex(items) {
+  function mergeIndex(items, scope) {
     for (var i = 0; i < items.length; i++) {
       var it = items[i];
       if (!it || !it.id) continue;
@@ -301,7 +301,7 @@
       S.index.forEach(function (x) { S.indexById.set(x.id, x); });
     }
     if (window.SBAI && window.SBAI.index && items && items.length) {
-      window.SBAI.index(items, "safe");
+      window.SBAI.index(items, "safe", scope || "home");
     }
   }
 
@@ -408,8 +408,8 @@
     });
     S.banners = dedupe(banners).slice(0, 9);
     S.homeRows = rows;
-    mergeIndex(S.banners.slice());
-    rows.forEach(function (r) { mergeIndex(r.items); });
+    mergeIndex(S.banners.slice(), "home");
+    rows.forEach(function (r) { mergeIndex(r.items, "home"); });
   }
 
   function dedupe(items) {
@@ -430,7 +430,7 @@
     var list = (j && j.data && j.data.subjectList) || [];
     var items = list.map(normSubject).filter(Boolean);
     S.trend[key] = { at: Date.now(), items: items };
-    mergeIndex(items);
+    mergeIndex(items, "home");
     return items;
   }
 
@@ -443,7 +443,7 @@
         loadTrending(3).catch(function () { return []; }),
         loadTrending(4).catch(function () { return []; })
       ]);
-      pages.forEach(function (p) { mergeIndex(p); });
+      pages.forEach(function (p) { mergeIndex(p, "home"); });
       if (S.searchOpen) renderSearch(searchInput.value.trim());
     } catch (e) {
     } finally {
@@ -467,7 +467,7 @@
     if (it.year) meta.push(it.year);
     if (it.genre) meta.push(String(it.genre).split(",")[0].trim());
     if (it.country) meta.push(it.country);
-    var matchHtml = opts.match ? '<span class="card-match">' + esc(opts.match) + '</span>' : "";
+    var matchHtml = (opts.match || it.match) ? '<span class="card-match">' + esc(opts.match || it.match) + '</span>' : "";
     return '<button class="card" data-id="' + esc(it.id) + '" aria-label="' + esc(it.t) + '">' +
       '<div class="card-poster">' +
       '<span class="ph">' + esc(initials(it.t)) + "</span>" +
@@ -484,11 +484,61 @@
     return (items || []).map(function (it, idx) {
       if (opts && opts.withMatch) {
         var mLbl = it.matchPct ? (it.matchPct + "% Match")
-          : (it.badge && /match/i.test(it.badge) ? it.badge : ((98 - (idx % 12)) + "% Match"));
+          : (it.match || (it.badge && /match/i.test(it.badge) ? it.badge : ((98 - (idx % 12)) + "% Match")));
         return card(it, { match: mLbl });
       }
       return card(it);
     }).join("");
+  }
+
+  function aiKey(it) {
+    if (!it) return "";
+    if (it.id) return "id:" + String(it.id);
+    if (it.tmdb) return "tmdb:" + (it.mt === "tv" ? "tv" : "movie") + ":" + it.tmdb;
+    var t = String(it.t || it.title || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    return t ? "t:" + t + ":" + String(it.year || "").slice(0, 4) : "";
+  }
+
+  var AI_BADGE = '<span class="ai-smart-badge" title="Local all-MiniLM-L6-v2 semantic reranking">✦ AI Smart Search</span>';
+
+  async function aiSmartSearch(q, lists, opts) {
+    opts = opts || {};
+    var all = [], seen = {};
+    (lists || []).forEach(function (list) {
+      (list || []).forEach(function (it) {
+        var k = aiKey(it);
+        if (!k || seen[k]) return;
+        seen[k] = 1;
+        all.push(it);
+      });
+    });
+    if (!window.SBAI || !window.SBAI.searchText || !q) return { items: all, ai: false };
+    try {
+      var hits = await window.SBAI.searchText(q, {
+        partition: opts.partition === "isolated" ? "isolated" : "safe",
+        scope: opts.scope || "",
+        candidates: all.slice(0, 220),
+        limit: 28
+      });
+      if (!hits || !hits.length) return { items: all, ai: false };
+      var out = [], used = {};
+      hits.forEach(function (h) {
+        var k = aiKey(h);
+        if (!k || used[k]) return;
+        used[k] = 1;
+        out.push(h);
+      });
+      all.forEach(function (it) {
+        var k = aiKey(it);
+        if (!k || used[k]) return;
+        used[k] = 1;
+        out.push(it);
+      });
+      mergeIndex(out, opts.scope || "home");
+      return { items: out, ai: true, hits: hits.length };
+    } catch (e) {
+      return { items: all, ai: false };
+    }
   }
 
   // ---------------------------------------------------------------- home
@@ -634,12 +684,17 @@
         return !tk || !localTitles[tk];
       }).slice(0, 48);
     } catch (e) {}
+    var smart = await aiSmartSearch(q, [local, libList], {
+      partition: S.searchMode === "deep" ? "isolated" : "safe",
+      scope: S.searchMode === "deep" ? "" : "home"
+    });
     if (tok !== homeSearchToken || !box.isConnected) return;
-    var libHtml = (libList && libList.length && window.LIB && window.LIB.cards) ? window.LIB.cards(libList.slice(0, 40)) : "";
-    var totalCount = local.length + (libList ? libList.length : 0);
-    box.innerHTML = '<div class="section-head"><h2>' + (S.searchMode === "deep" ? "Deep" : "Safe") + ' results for “' + esc(q) + '” <em>' + totalCount + '</em></h2>' +
+    var smartItems = smart.items || [];
+    var totalCount = smartItems.length;
+    box.innerHTML = '<div class="section-head"><h2>' + (S.searchMode === "deep" ? "Deep" : "Safe") + ' results for “' + esc(q) + '” <em>' + totalCount + '</em>' +
+      (smart.ai ? AI_BADGE : "") + '</h2>' +
       '<button type="button" id="homeSearchClearBtn">Clear</button></div>' +
-      (totalCount ? '<div class="grid">' + cards(local) + libHtml + "</div>" : '<div class="empty"><b>No matches found</b>Try another title or switch Safe / Deep mode.</div>');
+      (totalCount ? '<div class="grid">' + cards(smartItems) + "</div>" : '<div class="empty"><b>No matches found</b>Try another title or switch Safe / Deep mode.</div>');
     var cb = document.getElementById("homeSearchClearBtn");
     if (cb) cb.onclick = function () {
       var inp = document.getElementById("homeSearchInput");
@@ -899,13 +954,26 @@
             return !tk || !seenLocal[tk];
           });
           var grid = document.getElementById("scopedTabGrid");
-          if (grid && remote && remote.length && window.LIB.cards) {
-            grid.insertAdjacentHTML("beforeend", window.LIB.cards(remote.slice(0, 24)));
+          if (grid && window.LIB && window.LIB.cards) {
+            var combined = local.concat((remote || []).slice(0, 30));
+            var seenAll = {};
+            combined = combined.filter(function (x) {
+              var k = aiKey(x);
+              if (!k || seenAll[k]) return false;
+              seenAll[k] = 1;
+              return true;
+            });
+            var smart = await aiSmartSearch(q, [combined], { partition: "safe", scope: scope });
+            if (!resHost.isConnected || !document.getElementById("scopedTabGrid")) return;
+            grid = document.getElementById("scopedTabGrid");
+            grid.innerHTML = smart.items.length ? cards(smart.items) :
+              '<div class="empty" style="grid-column:1/-1"><b>No results in ' + esc(scope) + '</b>Try another title or clear the search.</div>';
             var cntEl = resHost.querySelector(".section-head em");
-            if (cntEl) cntEl.textContent = String(local.length + Math.min(24, remote.length));
-          }
-          if (grid && !grid.children.length) {
-            grid.innerHTML = '<div class="empty" style="grid-column:1/-1"><b>No results in ' + esc(scope) + '</b>Try another title or clear the search.</div>';
+            if (cntEl) cntEl.textContent = String(smart.items.length);
+            if (smart.ai) {
+              var h2 = resHost.querySelector(".section-head h2");
+              if (h2 && !h2.querySelector(".ai-smart-badge")) h2.insertAdjacentHTML("beforeend", AI_BADGE);
+            }
           }
         } catch (e) {}
       }
@@ -1547,7 +1615,7 @@
       var items = (((j && j.data && (j.data.items || j.data.subjectList)) || [])).map(normSubject).filter(function (x) {
         return x && x.id !== data.item.id;
       });
-      mergeIndex(items);
+      mergeIndex(items, "home");
       box.innerHTML = items.length ? cards(items, { withMatch: true }) : '<div class="empty">No suggestions for this title yet.</div>';
     } catch (e) {
       var box2 = document.getElementById("dRec");
@@ -2065,7 +2133,7 @@
         candidates = (((j && j.data && (j.data.items || j.data.subjectList)) || [])).map(normSubject).filter(function (x) {
           return x && x.id !== String(pb.subject.subjectId);
         });
-        mergeIndex(candidates);
+        mergeIndex(candidates, "home");
       }
     } catch (e) {}
     var seed = {
@@ -2684,16 +2752,24 @@
     var block = document.getElementById("libSearchBlock");
     if (!block) return;
     block.innerHTML = '<div class="lib-search-head"><i class="lib-spin"></i> Searching the full library…</div>';
-    window.LIB.searchAll(q).then(function (list) {
+    window.LIB.searchAll(q).then(async function (list) {
       if (token !== S.searchToken || !block.isConnected) return;
-      list = (list || []).slice(0, 60);
-      if (!list.length) {
-        block.innerHTML = matches.length ? "" : '<div class="empty"><b>No results</b>Try a shorter title or a different spelling.</div>';
-        return;
+      var combined = matches.concat((list || []).slice(0, 60));
+      var seenAll = {};
+      combined = combined.filter(function (x) {
+        var k = aiKey(x);
+        if (!k || seenAll[k]) return false;
+        seenAll[k] = 1;
+        return true;
+      });
+      var smart = await aiSmartSearch(q, [combined], { partition: "safe", scope: "home", limit: 40 });
+      if (token !== S.searchToken || !block.isConnected) return;
+      if (smart.items.length) {
+        searchResults.innerHTML = '<div class="section-head"><h2>' + (smart.ai ? AI_BADGE : "") + 'Results <em>' + smart.items.length + '</em></h2></div>' +
+          '<div class="grid">' + (window.LIB.cards ? window.LIB.cards(smart.items.slice(0, 60)) : cards(smart.items.slice(0, 60))) + '</div>';
+      } else {
+        block.innerHTML = '<div class="empty"><b>No results</b>Try a shorter title or a different spelling.</div>';
       }
-      var libCards = window.LIB.cards ? window.LIB.cards(list) : "";
-      block.innerHTML = '<div class="section-head"><h2>From the library <em>' + list.length + '</em></h2></div>' +
-        '<div class="grid">' + libCards + '</div>';
     }).catch(function () {
       if (token === S.searchToken && block.isConnected) block.innerHTML = "";
     });

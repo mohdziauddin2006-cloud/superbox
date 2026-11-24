@@ -935,6 +935,31 @@ body {
   color: #82f9be; font-size: 8.5px; font-weight: 800;
   backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
 }
+/* Local all-MiniLM-L6-v2 semantic-search marker used by every search surface. */
+.ai-smart-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  margin-left: 6px; padding: 3px 8px; border-radius: 999px;
+  font-size: 8.5px; font-weight: 800; letter-spacing: .25px;
+  color: #ffe08a;
+  background: linear-gradient(135deg, rgba(255,193,5,.2), rgba(255,193,5,.07));
+  border: 1px solid rgba(255,193,5,.36);
+  box-shadow: 0 3px 12px rgba(255,193,5,.12), inset 0 1px 0 rgba(255,255,255,.08);
+  backdrop-filter: blur(9px); -webkit-backdrop-filter: blur(9px);
+  white-space: nowrap; vertical-align: middle;
+  animation: aiBadgeIn .38s var(--ease-spring) both;
+}
+@keyframes aiBadgeIn {
+  from { opacity: 0; transform: translate3d(0,3px,0) scale(.94); }
+  to { opacity: 1; transform: translate3d(0,0,0) scale(1); }
+}
+.rd-match {
+  position: absolute; z-index: 3; top: 7px; right: 7px;
+  padding: 2px 6px; border-radius: 999px;
+  font-size: 8.5px; font-weight: 800;
+  color: #82f9be; background: rgba(46,232,138,.2);
+  border: 1px solid rgba(46,232,138,.44);
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+}
 
 /* Slide-Out Category Drawer */
 .nav-drawer-bg {

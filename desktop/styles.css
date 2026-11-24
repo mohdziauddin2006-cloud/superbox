@@ -726,6 +726,7 @@ body[data-sec="adult-reading"] .nav-indicator {
    MEDIA ROWS, GLOWING HOVER CARDS & SHIMMER SKELETONS
    ============================================================================ */
 .row {
+  position: relative;
   margin: 0 0 28px;
 }
 .row h3 {
@@ -1174,6 +1175,43 @@ body[data-sec="adult-reading"] .subnav .chip.active {
 }
 .searchhead h3 { margin: 0; font-size: 20px; font-weight: 850; letter-spacing: -0.025em; }
 .searchhead .sub { font-size: 12.5px; color: var(--muted); }
+/* Local semantic-search marker. Amber glass matches the AI pills on cards. */
+.ai-smart-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 0.035em;
+  color: #ffe08a;
+  background: linear-gradient(135deg, rgba(245, 197, 24, 0.18), rgba(245, 197, 24, 0.06));
+  border: 1px solid rgba(245, 197, 24, 0.34);
+  box-shadow: 0 4px 16px rgba(245, 197, 24, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(10px);
+  white-space: nowrap;
+  animation: aiBadgeIn 0.42s var(--ease-spring) both;
+}
+@keyframes aiBadgeIn {
+  from { opacity: 0; transform: translate3d(0, 4px, 0) scale(0.94); }
+  to { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
+}
+.rd-sec .ai-smart-badge { margin-left: auto; }
+.rd-match {
+  position: absolute;
+  z-index: 3;
+  top: 8px;
+  right: 8px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 9px;
+  font-weight: 800;
+  color: #79f7b5;
+  background: rgba(46, 232, 138, 0.18);
+  border: 1px solid rgba(46, 232, 138, 0.42);
+  backdrop-filter: blur(8px);
+}
 
 /* ============================================================================
    CINEMATIC VIDEO PLAYER + BELOW-PLAYER EPISODES & AI SIMILAR RESULTS

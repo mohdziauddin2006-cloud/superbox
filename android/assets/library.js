@@ -587,7 +587,7 @@
         track.innerHTML = cards(cached.slice(0, 24));
         if (count) count.textContent = cached.length + ' cached';
         q.el.setAttribute('data-cached', '1');
-        if (window.SBAI && window.SBAI.index) window.SBAI.index(cached, aiPart);
+        if (window.SBAI && window.SBAI.index) window.SBAI.index(cached, aiPart, (q.row && q.row.sec) || 'home');
         return;
       }
       q.el.classList.add('wa-empty-row');
@@ -600,7 +600,7 @@
     if (count) count.textContent = list.length + ' titles';
     if (track) track.innerHTML = cards(list.slice(0, 24));
     cachePut(q.row, list);
-    if (window.SBAI && window.SBAI.index) window.SBAI.index(list, aiPart);
+    if (window.SBAI && window.SBAI.index) window.SBAI.index(list, aiPart, (q.row && q.row.sec) || 'home');
   }
 
   function dedupe(list) {
@@ -841,7 +841,7 @@
       if (settled[i] && settled[i].length) out = out.concat(settled[i]);
     }
     var merged = (SC.dedupeItems ? SC.dedupeItems(out) : dedupe(out)).slice(0, 60);
-    if (window.SBAI && window.SBAI.index && merged.length) window.SBAI.index(merged, 'safe');
+    if (window.SBAI && window.SBAI.index && merged.length) window.SBAI.index(merged, 'safe', 'home');
     return merged;
   }
 

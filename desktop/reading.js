@@ -2382,6 +2382,48 @@
     }).join('');
   }
 
+  /* Local MiniLM reranking for the Reading catalogue. The engine stays
+     strictly partitioned: general Reading only ever touches the safe index,
+     while the 18+ vault searches its own isolated index. */
+  function readAiKey(it) {
+    if (!it) return '';
+    return String(it.source || '') + ':' + String(it.id || it.url || it.title || '');
+  }
+  async function readAiRank(q, items, isolated) {
+    if (!q || !window.SBAI || typeof window.SBAI.searchText !== 'function') return null;
+    var candidates = (items || []).slice(0, 160);
+    if (!candidates.length) return null;
+    var hits = [];
+    try {
+      hits = await window.SBAI.searchText(q, {
+        partition: isolated ? 'isolated' : 'safe',
+        scope: isolated ? 'read18' : 'read',
+        candidates: candidates,
+        limit: 40
+      });
+    } catch (e) { return null; }
+    if (!Array.isArray(hits) || !hits.length) return null;
+    var seen = {}, out = [];
+    hits.forEach(function (h) {
+      var k = readAiKey(h);
+      if (!k || seen[k]) return;
+      seen[k] = 1;
+      var base = candidates.filter(function (x) { return readAiKey(x) === k; })[0] || h;
+      out.push(Object.assign({}, base, {
+        match: h.match || base.match,
+        score: h.score,
+        aiHit: true
+      }));
+    });
+    candidates.forEach(function (it) {
+      var k = readAiKey(it);
+      if (!k || seen[k]) return;
+      seen[k] = 1;
+      out.push(it);
+    });
+    return out;
+  }
+
   function cardHtml(it) {
     var native = isNativeSource(it.source);
     var badge = it.source === 'md' ? 'MD' : it.source === 'wt' ? (it.adult ? '18+' : 'WT') : sourceShort(it.source);
@@ -2392,7 +2434,8 @@
         : [sourceName(it.source), it.adult ? '18+' : 'English'].filter(Boolean).join(' · ');
     return '<button class="rd-card" type="button" data-rd-open="' + it.source + ':' + esc(it.id) + '">' +
       '<span class="rd-cover"><img loading="lazy" decoding="async" src="' + esc(img(it.cover, nativeRef(it.source))) + '" alt="' + esc(it.title) + '" onerror="this.style.display=\'none\'">' +
-      '<span class="rd-badge' + (it.source === 'wt' ? ' green' : native ? ' native' : '') + '">' + esc(badge) + '</span></span>' +
+      '<span class="rd-badge' + (it.source === 'wt' ? ' green' : native ? ' native' : '') + '">' + esc(badge) + '</span>' +
+      (it.match ? '<span class="rd-match">' + esc(it.match) + '</span>' : '') + '</span>' +
       '<b>' + esc(it.title) + '</b><span>' + esc(sub || ' ') + '</span></button>';
   }
   function skeletonHtml(n) {
@@ -2445,10 +2488,29 @@
     else if (state.source === 'md') heading = ['Popular on MangaDex', state.type ? typeLabel(state.type) : '', esc(state.genre || ''), state.lang !== 'en' ? langLabel(state.lang) : ''].filter(Boolean).join(' · ');
     else if (state.source === 'wt') heading = ['WEBTOON', state.type === 'canvas' ? 'Canvas' : 'Originals', esc(state.genre || ''), WT_LOCALES[state.lang] ? langLabel(state.lang) : 'English'].filter(Boolean).join(' · ');
     else heading = esc(label + ' · English catalogue' + (state.genre ? ' · ' + state.genre : ''));
+    var aiKeyNow = state.source + '|' + state.q + '|' + (state.adultMode ? '18' : 'safe') + '|' +
+      state.items.length + '|' + String((state.items[0] && (state.items[0].id || state.items[0].url)) || '');
+    var shown = state.items, aiOk = false;
+    if (state.q && !state.loading) {
+      if (state.aiFor === aiKeyNow && Array.isArray(state.aiItems)) {
+        shown = state.aiItems;
+        aiOk = true;
+      } else if (state.aiPending !== aiKeyNow) {
+        state.aiPending = aiKeyNow;
+        readAiRank(state.q, state.items, !!state.adultMode).then(function (ranked) {
+          if (state.aiPending !== aiKeyNow) return;
+          state.aiPending = '';
+          state.aiFor = aiKeyNow;
+          state.aiItems = ranked || null;
+          if (ranked && root && state.view === 'browse') paintBody();
+        });
+      }
+    }
     body.innerHTML = head +
       '<div class="rd-sec"><h2>' + heading + '</h2>' +
-      '<span class="muted">' + (state.total ? state.total + ' titles' : state.items.length + ' titles') + '</span></div>' +
-      '<div class="rd-grid">' + state.items.map(cardHtml).join('') + '</div>' +
+      (aiOk ? '<span class="ai-smart-badge" title="Local all-MiniLM-L6-v2 semantic reranking">\u2726 AI Smart Search</span>' : '') +
+      '<span class="muted">' + (state.total ? state.total + ' titles' : shown.length + ' titles') + '</span></div>' +
+      '<div class="rd-grid">' + shown.map(cardHtml).join('') + '</div>' +
       (state.loading ? '<div class="rd-loading"><span class="rd-spin"></span>Loading more</div>' : '') +
       (state.more ? '<div class="rd-more"><button class="rd-btn" type="button" id="rdMore">Load more</button></div>' : '');
     var more = $('#rdMore', body);

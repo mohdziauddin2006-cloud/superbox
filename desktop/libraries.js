@@ -1626,8 +1626,9 @@
       }
       return (na && nb) ? dot / (Math.sqrt(na) * Math.sqrt(nb)) : 0;
     }
-    function indexLocal(items, partition) {
+    function indexLocal(items, partition, scope) {
       var reqP = partition === 'isolated' ? 'isolated' : 'safe';
+      var sc = String(scope || '').slice(0, 24);
       (items || []).forEach(function (it) {
         if (!it || typeof it !== 'object') return;
         if (reqP === 'safe' && isAdult(it)) return;
@@ -1635,12 +1636,13 @@
         var id = idOf(it);
         var title = String(it.t || it.title || it.name || '').trim();
         if (!id || !title) return;
-        var v = tfVec(tok(docOf(it)));
+        var meta = Object.assign({}, it, { __scope: sc || it.__scope || it.scope || '' });
+        var v = tfVec(tok(docOf(meta)));
         var st = stores[p], df = dfs[p];
         var prev = st.get(id);
         if (prev) Object.keys(prev.v).forEach(function (k) { var n = (df.get(k) || 1) - 1; if (n <= 0) df.delete(k); else df.set(k, n); });
         Object.keys(v).forEach(function (k) { df.set(k, (df.get(k) || 0) + 1); });
-        st.set(id, { id: id, meta: it, v: v });
+        st.set(id, { id: id, meta: meta, v: v });
         if (st.size > 1500) {
           var fk = st.keys().next().value;
           if (fk) st.delete(fk);
@@ -1672,10 +1674,45 @@
         return Object.assign({}, r.m, { score: Math.round(r.s * 1000) / 1000, match: pct + '% Match' });
       });
     }
-    async function index(items, partition) {
+    function textQueryLocal(query, opts) {
+      opts = opts || {};
+      var p = opts.partition === 'isolated' ? 'isolated' : 'safe';
+      var lim = Math.max(4, Math.min(40, Number(opts.limit) || 24));
+      var sc = String(opts.scope || '').slice(0, 24);
+      var st = stores[p], df = dfs[p];
+      if (!st.size) return [];
+      var q = String(query || '').trim();
+      if (!q) return [];
+      var qv = tfVec(tok(q));
+      var qWords = q.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().split(/\s+/).filter(Boolean);
+      var scored = [];
+      st.forEach(function (entry) {
+        var es = String(entry.meta.__scope || entry.meta.scope || '');
+        if (sc && es && es !== sc) return;
+        if (sc && !es) return;
+        var s = cos(qv, entry.v, df, st.size);
+        var tw = String(entry.meta.t || entry.meta.title || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+        if (tw && qWords.length) {
+          var hits = 0;
+          qWords.forEach(function (w) { if (tw.indexOf(w) >= 0) hits++; });
+          if (hits) s += Math.min(0.16, 0.07 * hits);
+        }
+        if (s > 0.035) scored.push({ m: entry.meta, s: s });
+      });
+      scored.sort(function (a, b) { return b.s - a.s; });
+      var top = scored.slice(0, Math.max(lim, 32));
+      var maxS = top.length ? Math.max(0.25, top[0].s) : 1;
+      return top.slice(0, lim).map(function (r, idx) {
+        var pct = Math.max(74, Math.min(99, Math.round(74 + Math.min(1, r.s / maxS) * 24 - idx * 0.3)));
+        return Object.assign({}, r.m, { score: Math.round(r.s * 1000) / 1000, match: pct + '% Match', aiHit: true });
+      });
+    }
+
+    async function index(items, partition, scope) {
       if (!Array.isArray(items) || !items.length) return null;
       var part = partition === 'isolated' ? 'isolated' : 'safe';
-      indexLocal(items, part);
+      var sc = String(scope || '').slice(0, 24);
+      indexLocal(items, part, sc);
       try {
         var B = await base();
         var ctl = new AbortController();
@@ -1683,7 +1720,12 @@
         var r = await fetch(B + '/api/ai/index', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ partition: part, items: items.slice(0, 120) }),
+          body: JSON.stringify({
+            partition: part,
+            items: items.slice(0, 120).map(function (it) {
+              return Object.assign({}, it, { __scope: sc || it.__scope || it.scope || '' });
+            })
+          }),
           signal: ctl.signal
         });
         clearTimeout(tm);
@@ -1717,7 +1759,33 @@
       } catch (e) {}
       return queryLocal(seed, { partition: part, limit: lim });
     }
-    return { index: index, similar: similar, queryLocal: queryLocal, isAdult: isAdult };
+    async function searchText(query, opts) {
+      opts = opts || {};
+      var part = opts.partition === 'isolated' ? 'isolated' : 'safe';
+      var lim = Math.max(4, Math.min(40, Number(opts.limit) || 24));
+      var sc = String(opts.scope || '').slice(0, 24);
+      if (Array.isArray(opts.candidates) && opts.candidates.length) {
+        await index(opts.candidates, part, sc);
+      }
+      try {
+        var B = await base();
+        var ctl = new AbortController();
+        var tm = setTimeout(function () { try { ctl.abort(); } catch (e) {} }, 4500);
+        var r = await fetch(B + '/api/ai/search', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query: String(query || '').slice(0, 240), partition: part, scope: sc, limit: lim }),
+          signal: ctl.signal
+        });
+        clearTimeout(tm);
+        if (r && r.ok) {
+          var j = await r.json();
+          if (j && Array.isArray(j.items) && j.items.length) return j.items;
+        }
+      } catch (e) {}
+      return textQueryLocal(query, { partition: part, scope: sc, limit: lim });
+    }
+    return { index: index, similar: similar, searchText: searchText, queryLocal: queryLocal, isAdult: isAdult };
   })();
 
   SC.base = base;
