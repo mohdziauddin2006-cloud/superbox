@@ -1,7 +1,7 @@
 {
   "name": "superbox",
   "productName": "SuperBox",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "SuperBox - ad-free movies, series, anime, manga and live TV in one desktop app",
   "main": "main.js",
   "author": "SuperBox",

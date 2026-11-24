@@ -87,6 +87,7 @@
           <svg class="ico-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 2.5v2.2M12 19.3v2.2M4.9 4.9l1.6 1.6M17.5 17.5l1.6 1.6M2.5 12h2.2M19.3 12h2.2M4.9 19.1l1.6-1.6M17.5 6.5l1.6-1.6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
           <svg class="ico-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.2 14.8A8.5 8.5 0 1 1 9.2 3.8a7 7 0 0 0 11 11Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </button>
+        <button id="updateBadge" class="icon-pill update-badge hidden" type="button" aria-label="Update available" title="Update available">Update</button>
         <button id="settingsBtn" class="icon-pill" type="button" aria-label="Settings" title="Settings">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5A3.5 3.5 0 1 0 12 8.5a3.5 3.5 0 0 0 0 7Zm8.4-3.5c0-.5 0-1-.1-1.4l2-1.6-2-3.5-2.4 1a8 8 0 0 0-2.4-1.4L15.1 2h-4l-.4 2.6a8 8 0 0 0-2.4 1.4l-2.4-1-2 3.5 2 1.6a8 8 0 0 0 0 2.8l-2 1.6 2 3.5 2.4-1a8 8 0 0 0 2.4 1.4l.4 2.6h4l.4-2.6a8 8 0 0 0 2.4-1.4l2.4 1 2-3.5-2-1.6c.1-.4.1-.9.1-1.4Z"/></svg>
         </button>
@@ -179,7 +180,15 @@
     <div class="box-info">
       <div><span>Ads</span><b class="good">Blocked at network level</b></div>
       <div><span>Shield</span><b id="setVpnState">Checking…</b></div>
-      <div><span>Version</span><b>1.4.0</b></div>
+      <div><span>Version</span><b id="appVersionText">1.4.1</b></div>
+      <div class="app-update-card">
+        <div class="app-update-head">
+          <span>App Updates</span>
+          <span class="sb-switch"><input id="setUpdateAuto" type="checkbox" checked /><i aria-hidden="true"></i></span>
+        </div>
+        <p id="updateStatusText">You are up to date.</p>
+        <button id="btnCheckUpdate" class="ghost" type="button">Check for updates</button>
+      </div>
     </div>
     <div class="vpn-settings-row">
       <span>Embedded VPN · usque / WARP MASQUE</span>
@@ -213,6 +222,31 @@
     <div class="boxactions">
       <button id="setClose" class="ghost" type="button">Cancel</button>
       <button id="setSave" class="primary" type="button">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- UPDATE MODAL -->
+<div id="updateModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="updateTitle">
+  <div class="box update-box">
+    <div class="box-head">
+      <span class="box-kicker">SuperBox</span>
+      <h3 id="updateTitle">Update Available</h3>
+      <p class="box-sub">A new version of SuperBox is ready to install.</p>
+    </div>
+    <div class="update-badges">
+      <span class="update-badge current" id="updateCurrentVersion">1.4.1</span>
+      <span class="update-arrow">→</span>
+      <span class="update-badge latest" id="updateLatestVersion">1.4.1</span>
+    </div>
+    <div class="update-progress hidden" id="updateProgressWrap">
+      <div class="update-progress-bar" id="updateProgressBar"></div>
+      <div class="update-progress-meta"><span id="updateProgressPct">0%</span><span id="updateProgressSpeed">0 MB/s</span></div>
+    </div>
+    <div class="update-changelog" id="updateChangelog"></div>
+    <div class="boxactions">
+      <button id="updateLater" class="ghost" type="button">Later</button>
+      <button id="updateNow" class="primary" type="button">Update Now</button>
     </div>
   </div>
 </div>

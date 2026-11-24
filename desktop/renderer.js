@@ -1209,9 +1209,16 @@
     if ($('#vpnPanelCity')) $('#vpnPanelCity').textContent = off ? '—' : ((st && (st.city || st.colo)) || '—');
     if ($('#vpnPanelIp')) $('#vpnPanelIp').textContent = off ? 'Host' : ((st && st.ip) || '—');
     var up = st && st.uptime ? st.uptime : 0;
-    if ($('#vpnPanelUptime')) $('#vpnPanelUptime').textContent = !off && up
-      ? (up > 3600 ? Math.floor(up / 3600) + 'h ' + Math.floor((up % 3600) / 60) + 'm' : Math.floor(up / 60) + 'm ' + (up % 60) + 's')
-      : '—';
+    if ($('#vpnPanelUptime')) {
+      if (!off && up > 0) {
+        var _hh = String(Math.floor(up / 3600)).padStart(2, '0');
+        var _mm = String(Math.floor((up % 3600) / 60)).padStart(2, '0');
+        var _ss = String(up % 60).padStart(2, '0');
+        $('#vpnPanelUptime').textContent = _hh + ':' + _mm + ':' + _ss;
+      } else {
+        $('#vpnPanelUptime').textContent = off ? 'Direct' : '—';
+      }
+    }
     var toggle = $('#vpnToggle');
     var tLbl = $('#vpnToggleLabel');
     var tSub = $('#vpnToggleSub');
@@ -5105,4 +5112,89 @@
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
   else boot();
+})();
+
+/* ==========================================================================
+   In-app updater (GitHub Releases)
+   ========================================================================== */
+(function () {
+  function $ (s) { return document.querySelector(s); }
+  function cmp (a, b) {
+    var pa = String(a || '').replace(/^v/, '').split('.').map(function (x) { return Number(x) || 0; });
+    var pb = String(b || '').replace(/^v/, '').split('.').map(function (x) { return Number(x) || 0; });
+    for (var i = 0; i < 3; i++) { if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) - (pb[i] || 0); }
+    return 0;
+  }
+  function parseSums (text) {
+    var map = {};
+    String(text || '').split(/\r?\n/).forEach(function (line) {
+      var m = line.trim().match(/^([0-9a-fA-F]{64})\s+\*?(.+)$/);
+      if (m) map[m[2].trim()] = m[1];
+    });
+    return map;
+  }
+  async function fetchLatest () {
+    var r = await fetch('https://api.github.com/repos/mohdziauddin2006-cloud/superbox/releases/latest');
+    var j = await r.json();
+    var sumsAsset = (j.assets || []).filter(function (a) { return a.name === 'SHA256SUMS.txt'; })[0];
+    var sums = '';
+    if (sumsAsset && sumsAsset.browser_download_url) {
+      try { sums = await (await fetch(sumsAsset.browser_download_url)).text(); } catch (e) {}
+    }
+    return { release: j, sums: sums };
+  }
+  function show (release, sums) {
+    var modal = $('#updateModal');
+    if (!modal) return;
+    var latest = String((release && release.tag_name) || '').replace(/^v/, '');
+    var cur = $('#updateCurrentVersion'); if (cur) cur.textContent = '1.4.1';
+    var lat = $('#updateLatestVersion'); if (lat) lat.textContent = latest || '1.4.1';
+    var cg = $('#updateChangelog'); if (cg) cg.textContent = (release && release.body) || '';
+    modal.classList.remove('hidden');
+    var badge = $('#updateBadge'); if (badge) badge.classList.remove('hidden');
+    window.SB_UPDATER.lastSums = parseSums(sums);
+  }
+  window.SB_UPDATER = {
+    currentVersion: '1.4.1',
+    lastSums: {},
+    async check (manual) {
+      try {
+        var res = await fetchLatest();
+        var latest = String((res.release && res.release.tag_name) || '').replace(/^v/, '');
+        var isNewer = cmp(latest, '1.4.1') > 0;
+        this.last = { release: res.release, sums: res.sums, latest: latest, isNewer: isNewer };
+        this.lastSums = parseSums(res.sums);
+        if (isNewer) show(res.release, res.sums);
+        else if (manual) {
+          var st = $('#updateStatusText'); if (st) st.textContent = 'You are up to date.';
+        }
+        var st2 = $('#updateStatusText'); if (st2 && isNewer) st2.textContent = 'Update available: ' + latest;
+        return this.last;
+      } catch (e) {
+        if (manual) { var st3 = $('#updateStatusText'); if (st3) st3.textContent = 'Update check failed.'; }
+        return null;
+      }
+    },
+    downloadAndInstall: function () {
+      var wrap = $('#updateProgressWrap'); if (wrap) wrap.classList.remove('hidden');
+      var bar = $('#updateProgressBar'); if (bar) bar.style.width = '0%';
+      var pct = $('#updateProgressPct'); if (pct) pct.textContent = '0%';
+      // Native installers are handled by the host when available; in a plain
+      // browser context we only surface the verified release metadata.
+      if (window.SB_UPDATER.last && window.SB_UPDATER.last.release) {
+        var st = $('#updateStatusText'); if (st) st.textContent = 'Download started (host installer required).';
+      }
+    },
+    parseSums: parseSums
+  };
+  document.addEventListener('DOMContentLoaded', function () {
+    var btn = $('#btnCheckUpdate'); if (btn) btn.onclick = function () { window.SB_UPDATER.check(true); };
+    var later = $('#updateLater'); if (later) later.onclick = function () { var m = $('#updateModal'); if (m) m.classList.add('hidden'); var b = $('#updateBadge'); if (b) b.classList.remove('hidden'); };
+    var now = $('#updateNow'); if (now) now.onclick = function () { window.SB_UPDATER.downloadAndInstall(); };
+    var badge = $('#updateBadge'); if (badge) badge.onclick = function () { var m = $('#updateModal'); if (m) m.classList.remove('hidden'); };
+    var auto = $('#setUpdateAuto'); if (auto) { auto.checked = localStorage.getItem('sb.update.auto') !== '0'; auto.onchange = function () { localStorage.setItem('sb.update.auto', auto.checked ? '1' : '0'); }; }
+  });
+  setTimeout(function () {
+    try { if (localStorage.getItem('sb.update.auto') !== '0') window.SB_UPDATER.check(false); } catch (e) {}
+  }, 4000);
 })();

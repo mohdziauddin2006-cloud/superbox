@@ -3551,3 +3551,34 @@
 
   init();
 })();
+
+(function () {
+  function parseSums(text) {
+    var map = {};
+    String(text || "").split(/\r?\n/).forEach(function (line) {
+      var m = line.trim().match(/^([0-9a-fA-F]{64})\s+\*?(.+)$/);
+      if (m) map[m[2].trim()] = m[1];
+    });
+    return map;
+  }
+  window.SB_UPDATER = {
+    currentVersion: "1.4.1",
+    lastSums: {},
+    check: async function (manual) {
+      try {
+        var r = await fetch("https://api.github.com/repos/mohdziauddin2006-cloud/superbox/releases/latest");
+        var j = await r.json();
+        var sumsAsset = (j.assets || []).filter(function (a) { return a.name === "SHA256SUMS.txt"; })[0];
+        var sums = "";
+        if (sumsAsset && sumsAsset.browser_download_url) {
+          try { sums = await (await fetch(sumsAsset.browser_download_url)).text(); } catch (e) {}
+        }
+        this.lastSums = parseSums(sums);
+        return { release: j, sums: sums, latest: String(j.tag_name || "").replace(/^v/, "") };
+      } catch (e) {
+        return null;
+      }
+    },
+    parseSums: parseSums
+  };
+})();
