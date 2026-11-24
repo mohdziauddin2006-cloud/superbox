@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
@@ -8,6 +8,14 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>SuperBox</title>
 <script>
+(function () {
+  try {
+    var t = localStorage.getItem("sb.theme") === "light" ? "light" : "dark";
+    document.documentElement.setAttribute("data-theme", t);
+    var m = document.querySelector('meta[name="theme-color"]');
+    if (m) m.setAttribute("content", t === "light" ? "#f3f5fa" : "#0a0b0f");
+  } catch (e) {}
+})();
 window.__SB_TOKEN__ = "__SB_TOKEN_VALUE__";
 (function () {
   var raw = window.fetch ? window.fetch.bind(window) : null;
@@ -36,7 +44,8 @@ window.__SB_TOKEN__ = "__SB_TOKEN_VALUE__";
 </script>
 <link rel="stylesheet" href="/style.css">
 </head>
-<body>
+<body data-theme="dark">
+<div id="appBg" aria-hidden="true"></div>
 
 <div id="boot" class="boot">
   <div class="boot-mark">S</div>
@@ -57,11 +66,11 @@ window.__SB_TOKEN__ = "__SB_TOKEN_VALUE__";
       </button>
     </div>
     <div class="top-actions">
-      <button id="vpnChip" class="vpn-chip" type="button" aria-haspopup="dialog" aria-label="VPN control">
-        <span class="vpn-chip-dot" id="vpnChipDot"></span>
-        <span class="vpn-chip-text"><b id="vpnChipLabel">Shield</b><i id="vpnChipPing">—</i></span>
+      <button id="vpnChip" class="vpn-chip wait" type="button" aria-haspopup="dialog" aria-label="VPN control">
+        <span class="vpn-chip-dot wait" id="vpnChipDot"></span>
+        <span class="vpn-chip-text"><b id="vpnChipLabel">Connecting…</b><i id="vpnChipPing">Shield</i></span>
       </button>
-      <button id="themeToggleBtn" class="icon-btn theme-toggle" type="button" aria-label="Switch light or dark theme" title="Switch Theme">
+      <button id="themeToggleBtn" class="icon-btn theme-toggle" type="button" aria-label="Switch light or dark theme" aria-pressed="false" title="Switch Theme">
         <svg class="ico-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4.5"></circle><path d="M12 2.5v2.2M12 19.3v2.2M4.9 4.9l1.6 1.6M17.5 17.5l1.6 1.6M2.5 12h2.2M19.3 12h2.2M4.9 19.1l1.6-1.6M17.5 6.5l1.6-1.6"></path></svg>
         <svg class="ico-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.2 14.8A8.5 8.5 0 1 1 9.2 3.8a7 7 0 0 0 11 11Z"></path></svg>
       </button>
@@ -155,8 +164,8 @@ window.__SB_TOKEN__ = "__SB_TOKEN_VALUE__";
   </div>
 </div>
 
-<!-- SUPERBOX SHIELD GATE: unskippable until the embedded WARP tunnel
-     reports warp=on. Polls /api/vpn/status (token auto-signed). -->
+<!-- SUPERBOX SHIELD GATE: kept hidden for instant non-blocking startup.
+     Live tunnel progress stays inside the compact header #vpnChip. -->
 <div id="vpnGate" class="vpn-gate hidden" role="dialog" aria-modal="true" aria-labelledby="vpnTitle">
   <div class="vpn-card">
     <div class="vpn-mark" aria-hidden="true"><span>S</span></div>

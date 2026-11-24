@@ -513,12 +513,22 @@
 
   function setAmbientArtwork(url) {
     try {
+      var bg = document.getElementById("appBg");
       if (url) {
-        document.documentElement.style.setProperty("--ambient-img", cssUrl(url));
-        document.body.classList.add("has-ambient");
+        var val = cssUrl(url);
+        if (bg) {
+          bg.style.setProperty("--ambient-img", val);
+          bg.classList.add("has-ambient");
+        }
+        document.documentElement.style.setProperty("--ambient-img", val);
+        if (document.body) document.body.classList.add("has-ambient");
       } else {
+        if (bg) {
+          bg.style.removeProperty("--ambient-img");
+          bg.classList.remove("has-ambient");
+        }
         document.documentElement.style.removeProperty("--ambient-img");
-        document.body.classList.remove("has-ambient");
+        if (document.body) document.body.classList.remove("has-ambient");
       }
     } catch (e) {}
   }
@@ -534,11 +544,14 @@
       meta.push('<span class="hero-pill accent">' + (b.stype === 2 ? "Series" : "Movie") + "</span>");
       var primary = b.bg || b.poster || "";
       var fallback = b.poster || "";
+      var fbUrl = fallback && fallback !== primary ? esc(imgUrl(fallback)).replace(/'/g, "\\'") : "";
+      var onErr = fbUrl
+        ? 'if(!this.dataset.fb){this.dataset.fb=1;this.src=\'' + fbUrl + '\';if(this.parentNode)this.parentNode.style.backgroundImage=\'url(\\\'' + fbUrl + '\\\')\';}else{this.style.display=\'none\';}'
+        : "this.style.display='none'";
       var imgTag = primary
-        ? '<img class="hero-bg-img" src="' + esc(imgUrl(primary)) + '" alt="" loading="' + (i === 0 ? "eager" : "lazy") + '" decoding="async" referrerpolicy="no-referrer"' +
-          (fallback && fallback !== primary ? ' onerror="if(!this.dataset.fb){this.dataset.fb=1;this.src=\'' + esc(imgUrl(fallback)).replace(/'/g, "\\'") + '\';}else{this.style.display=\'none\';}"' : ' onerror="this.style.display=\'none\'"') + '>'
+        ? '<img class="hero-bg-img" src="' + esc(imgUrl(primary)) + '" alt="" loading="' + (i === 0 ? "eager" : "lazy") + '" decoding="async" referrerpolicy="no-referrer" onerror="' + onErr + '">'
         : "";
-      return '<div class="hero-slide' + (i === 0 ? " active" : "") + '" style="background-image:' + cssUrl(primary) + '">' +
+      return '<div class="hero-slide' + (i === 0 ? " active" : "") + '" style="background-image:' + cssUrl(primary || fallback) + '">' +
         imgTag +
         '<div class="hero-inner">' +
         '<div class="hero-badge"><i class="dot"></i><span>' + (i === 0 ? "Featured" : "Now Streaming") + '</span><em class="hero-src-pill">SuperBox</em></div>' +
@@ -550,7 +563,9 @@
         '<button class="btn-ghost" data-hero-info="' + i + '">' + ICON.info + " Details</button>" +
         "</div></div></div>";
     }).join("");
-    var dots = S.banners.map(function (_, i) { return '<i class="' + (i === 0 ? "on" : "") + '"></i>'; }).join("");
+    var dots = S.banners.map(function (_, i) {
+      return '<button type="button" class="' + (i === 0 ? "on" : "") + '" data-hero-dot="' + i + '" aria-label="Slide ' + (i + 1) + '"></button>';
+    }).join("");
     return '<div class="hero"><div class="hero-track" id="heroTrack">' + slides + '</div><div class="hero-dots" id="heroDots">' + dots + "</div></div>";
   }
 
@@ -658,11 +673,11 @@
       }).slice(0, 48);
     } catch (e) {}
     if (tok !== homeSearchToken || !box.isConnected) return;
-    var libHtml = (libList && libList.length && window.LIB && window.LIB.cards) ? window.LIB.cards(libList.slice(0, 40)) : "";
+    var libHtml = (libList && libList.length && window.LIB && window.LIB.cards) ? window.LIB.cards(libList.slice(0, 40), { withMatch: true }) : "";
     var totalCount = local.length + (libList ? libList.length : 0);
     box.innerHTML = '<div class="section-head"><h2>' + (S.searchMode === "deep" ? "Deep" : "Safe") + ' results for “' + esc(q) + '” <em>' + totalCount + '</em></h2>' +
       '<button type="button" id="homeSearchClearBtn">Clear</button></div>' +
-      (totalCount ? '<div class="grid">' + cards(local) + libHtml + "</div>" : '<div class="empty"><b>No matches found</b>Try another title or switch Safe / Deep mode.</div>');
+      (totalCount ? '<div class="grid">' + cards(local, { withMatch: true }) + libHtml + "</div>" : '<div class="empty"><b>No matches found</b>Try another title or switch Safe / Deep mode.</div>');
     var cb = document.getElementById("homeSearchClearBtn");
     if (cb) cb.onclick = function () {
       var inp = document.getElementById("homeSearchInput");
@@ -750,25 +765,33 @@
     clearInterval(S.heroTimer);
     S.activeSection = "spotlight";
     syncDrawerActive("spotlight");
-    var rowsHtml = (S.homeRows || []).map(function (r, i) {
-      var items = r.items.slice(0, 20);
-      return '<section class="section" id="spot-row-' + i + '">' +
-        '<div class="section-head"><h2>' + esc(r.title) + ' <em>' + items.length + '</em></h2>' +
-        '<button data-row="' + i + '">See all</button></div>' +
-        '<div class="row-track">' + cards(items) + "</div></section>";
-    }).join("");
-    view.innerHTML = '<div class="page-head">' +
-      '<button class="lib-back" data-go="home" aria-label="Back to Home">‹ Home</button>' +
-      '<div class="page-kicker">✦ CURATED FEATURED</div>' +
-      '<h1 class="page-title">Spotlight</h1>' +
-      '<div class="page-sub">Flagship cinema, trending releases, and top rated picks</div>' +
-      scopedTabSearchMarkup("spotlight", "Search Spotlight titles...") +
-      '</div>' +
-      '<div id="scopedTabResults" class="hidden" style="padding:0 16px 24px"></div>' +
-      '<div id="scopedTabBody">' + heroMarkup() + (rowsHtml || '<div class="empty"><b>Loading Spotlight…</b></div>') + '</div>';
-    startHero();
-    bindScopedTabSearch("spotlight");
+    function paintSpot() {
+      var rowsHtml = (S.homeRows || []).map(function (r, i) {
+        var items = r.items.slice(0, 20);
+        return '<section class="section" id="spot-row-' + i + '">' +
+          '<div class="section-head"><h2>' + esc(r.title) + ' <em>' + items.length + '</em></h2>' +
+          '<button data-row="' + i + '">See all</button></div>' +
+          '<div class="row-track">' + cards(items) + "</div></section>";
+      }).join("");
+      view.innerHTML = '<div class="page-head">' +
+        '<button class="lib-back" data-go="home" aria-label="Back to Home">‹ Home</button>' +
+        '<div class="page-kicker">✦ CURATED FEATURED</div>' +
+        '<h1 class="page-title">Spotlight</h1>' +
+        '<div class="page-sub">Flagship cinema, trending releases, and top rated picks</div>' +
+        scopedTabSearchMarkup("spotlight", "Search Spotlight titles...") +
+        '</div>' +
+        '<div id="scopedTabResults" class="hidden" style="padding:0 16px 24px"></div>' +
+        '<div id="scopedTabBody">' + heroMarkup() + (rowsHtml || '<div class="empty"><b>Loading Spotlight…</b></div>') + '</div>';
+      startHero();
+      bindScopedTabSearch("spotlight");
+    }
+    paintSpot();
     window.scrollTo(0, 0);
+    if (!S.banners.length || !S.homeRows.length) {
+      loadHome().then(function () {
+        if (S.activeSection === "spotlight") paintSpot();
+      }).catch(function () {});
+    }
   }
 
   function paintLibRows(tab) {
@@ -787,23 +810,46 @@
     if (!slides.length) return;
     var current = 0;
     function setActive(i) {
-      slides.forEach(function (s, k) { s.classList.toggle("active", k === i); });
-      if (dots) $$("i", dots).forEach(function (d, k) { d.classList.toggle("on", k === i); });
-      var b = S.banners && S.banners[i];
+      current = ((i % slides.length) + slides.length) % slides.length;
+      slides.forEach(function (s, k) {
+        s.classList.toggle("active", k === current);
+      });
+      if (dots) {
+        $$("button, i", dots).forEach(function (d, k) {
+          d.classList.toggle("on", k === current);
+        });
+      }
+      var b = S.banners && S.banners[current];
       if (b) setAmbientArtwork(b.bg || b.poster || "");
     }
     setActive(0);
     if (slides.length < 2) return;
-    track.addEventListener("scroll", function () {
-      var i = Math.round(track.scrollLeft / Math.max(1, track.clientWidth));
-      if (i !== current && i >= 0 && i < slides.length) { current = i; setActive(i); }
+    if (dots) {
+      dots.onclick = function (ev) {
+        var btn = ev.target.closest("[data-hero-dot]");
+        if (!btn) return;
+        setActive(num(btn.getAttribute("data-hero-dot"), 0));
+      };
+    }
+    /* Native touch swipe support across crossfade slides */
+    var touchX = 0, touchY = 0;
+    track.addEventListener("touchstart", function (ev) {
+      if (!ev.touches || !ev.touches.length) return;
+      touchX = ev.touches[0].clientX;
+      touchY = ev.touches[0].clientY;
+    }, { passive: true });
+    track.addEventListener("touchend", function (ev) {
+      if (!ev.changedTouches || !ev.changedTouches.length) return;
+      var dx = ev.changedTouches[0].clientX - touchX;
+      var dy = ev.changedTouches[0].clientY - touchY;
+      if (Math.abs(dx) > 42 && Math.abs(dx) > Math.abs(dy) * 1.2) {
+        setActive(dx < 0 ? current + 1 : current - 1);
+      }
     }, { passive: true });
     if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
     S.heroTimer = setInterval(function () {
       if (document.hidden || !track.isConnected) return;
-      current = (current + 1) % slides.length;
-      track.scrollTo({ left: current * track.clientWidth, behavior: "smooth" });
-      setActive(current);
+      setActive(current + 1);
     }, 6500);
   }
 
@@ -898,7 +944,7 @@
         return words.every(function (w) { return h.indexOf(w) >= 0; });
       }).slice(0, 30);
       resHost.innerHTML = '<div class="section-head"><h2>' + esc(scope) + ' matches for “' + esc(q) + '” <em>' + local.length + '</em></h2><button type="button" data-ss-reset="1">Clear</button></div>' +
-        '<div class="grid" id="scopedTabGrid">' + (local.length ? cards(local) : "") + '</div>';
+        '<div class="grid" id="scopedTabGrid">' + (local.length ? cards(local, { withMatch: true }) : "") + '</div>';
       var rb = resHost.querySelector("[data-ss-reset]");
       if (rb) rb.onclick = function () { input.value = ""; reset(); };
       if (window.LIB && window.LIB.searchAll) {
@@ -928,7 +974,7 @@
           });
           var grid = document.getElementById("scopedTabGrid");
           if (grid && remote && remote.length && window.LIB.cards) {
-            grid.insertAdjacentHTML("beforeend", window.LIB.cards(remote.slice(0, 24)));
+            grid.insertAdjacentHTML("beforeend", window.LIB.cards(remote.slice(0, 24), { withMatch: true }));
             var cntEl = resHost.querySelector(".section-head em");
             if (cntEl) cntEl.textContent = String(local.length + Math.min(24, remote.length));
           }
@@ -1024,14 +1070,15 @@
     document.documentElement.setAttribute("data-theme", next);
     if (document.body) document.body.setAttribute("data-theme", next);
     var meta = document.querySelector('meta[name="theme-color"]');
-    if (meta) meta.setAttribute("content", next === "light" ? "#f4f6fb" : "#0a0b0f");
+    if (meta) meta.setAttribute("content", next === "light" ? "#f3f5fa" : "#0a0b0f");
     var btn = document.getElementById("themeToggleBtn");
     if (btn) {
       btn.setAttribute("data-theme-mode", next);
       btn.setAttribute("aria-pressed", String(next === "light"));
+      btn.setAttribute("title", next === "light" ? "Switch to Dark Mode" : "Switch to Light Mode");
     }
     var meTheme = document.getElementById("meThemeState");
-    if (meTheme) meTheme.textContent = next === "light" ? "Light" : "Dark";
+    if (meTheme) meTheme.textContent = next === "light" ? "Light Frosted" : "Dark Obsidian";
     try { window.dispatchEvent(new CustomEvent("sb:theme", { detail: { theme: next } })); } catch (e) {}
     return next;
   }
@@ -1056,13 +1103,16 @@
     try { if (window.SBAndroid && window.SBAndroid.version) version = window.SBAndroid.version(); } catch (e) {}
     var curTheme = getTheme();
     var hideCont = isContinueHidden();
+    var themeIcons =
+      '<svg class="ico-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4.5"></circle><path d="M12 2.5v2.2M12 19.3v2.2M4.9 4.9l1.6 1.6M17.5 17.5l1.6 1.6M2.5 12h2.2M19.3 12h2.2M4.9 19.1l1.6-1.6M17.5 6.5l1.6-1.6"></path></svg>' +
+      '<svg class="ico-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.2 14.8A8.5 8.5 0 1 1 9.2 3.8a7 7 0 0 0 11 11Z"></path></svg>';
     view.innerHTML =
       '<div class="page-head" style="padding-top:14px"><div class="page-kicker">Your space</div><h1 class="page-title">Me</h1></div>' +
       '<div class="me-card"><div class="me-avatar">S</div><h2 class="me-name">SuperBox</h2>' +
       '<div class="me-sub">Your ad-free entertainment hub</div>' +
       '<div class="me-badges"><span>NO ADS</span><span>NO ACCOUNT</span><span>NO TRACKERS</span></div></div>' +
       '<div class="me-section"><h3>Appearance &amp; Reading</h3><div class="me-list">' +
-      '<button class="me-row" data-setting="theme"><span class="ic">◐</span><span class="tx"><b>Theme</b><span>Switch between Dark Obsidian &amp; Light Frosted</span></span><span class="rt" id="meThemeState">' + (curTheme === "light" ? "Light" : "Dark") + "</span></button>" +
+      '<button class="me-row" data-setting="theme"><span class="ic me-theme-ico" aria-hidden="true">' + themeIcons + '</span><span class="tx"><b>Theme</b><span>Switch between Dark Obsidian &amp; Light Frosted</span></span><span class="rt" id="meThemeState">' + (curTheme === "light" ? "Light Frosted" : "Dark Obsidian") + "</span></button>" +
       '<button class="me-row" data-setting="hide-continue"><span class="ic">⊟</span><span class="tx"><b>Hide "Continue Reading" shelf</b><span>Toggle recent titles shelf in Reading Room</span></span><span class="switch ' + (hideCont ? "on" : "") + '"></span></button>' +
       "</div></div>" +
       '<div class="me-section"><h3>Playback</h3><div class="me-list">' +
@@ -1593,6 +1643,7 @@
       if (!S.detailOpen || S.detailToken !== token) return;
       S.detailData = data;
       if (S.detailSeason == null) S.detailSeason = data.seasons.length ? data.seasons[0].se : 1;
+      setAmbientArtwork((data.item && (data.item.bg || data.item.poster)) || fresh.bg || fresh.poster || "");
       detail.innerHTML = detailMarkup(data);
       detail.scrollTop = 0;
       loadRecommendations(data, token);
@@ -2757,7 +2808,7 @@
       return num(b.rating, 0) - num(a.rating, 0);
     });
     matches = matches.slice(0, 60);
-    var html = matches.length ? cards(matches) :
+    var html = matches.length ? cards(matches, { withMatch: true }) :
       (q.length < 2 ? '<div class="empty" style="grid-column:1/-1"><b>Keep typing</b>Search the whole SuperBox library.</div>' : "");
     searchResults.innerHTML = html + '<div id="libSearchBlock" class="lib-search-block"></div>';
     if (q.length < 2 || !window.LIB || !window.LIB.searchAll) return;
@@ -2771,7 +2822,7 @@
         block.innerHTML = matches.length ? "" : '<div class="empty"><b>No results</b>Try a shorter title or a different spelling.</div>';
         return;
       }
-      var libCards = window.LIB.cards ? window.LIB.cards(list) : "";
+      var libCards = window.LIB.cards ? window.LIB.cards(list, { withMatch: true }) : "";
       block.innerHTML = '<div class="section-head"><h2>From the library <em>' + list.length + '</em></h2></div>' +
         '<div class="grid">' + libCards + '</div>';
     }).catch(function () {
@@ -3403,7 +3454,8 @@
     imgUrl: imgUrl,
     num: num,
     state: S,
-    lockBody: lockBody
+    lockBody: lockBody,
+    setAmbientArtwork: setAmbientArtwork
   };
 
   window.SuperBoxUI = {
