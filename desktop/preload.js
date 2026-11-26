@@ -15,6 +15,15 @@ if (window.top === window) {
     onCf: function (fn) {
       try { ipcRenderer.on('wab:cf', function (_e, msg) { try { fn(msg); } catch (e) {} }); } catch (e) {}
     },
+    updateDownload: function (opts) {
+      return ipcRenderer.invoke('update-download', opts || {});
+    },
+    updateInstall: function (opts) {
+      return ipcRenderer.invoke('update-install', opts || {});
+    },
+    onUpdateProgress: function (fn) {
+      try { ipcRenderer.on('update-progress', function (_e, p) { try { fn(p); } catch (e) {} }); } catch (e) {}
+    },
     version: '3.1.0'
   });
 } else {

@@ -22,6 +22,7 @@ const { app, BrowserWindow, shell, ipcMain, session, dialog } = require('electro
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const crypto = require('crypto');
 
 /* SuperBox Shield: the embedded WARP/MASQUE core. It must install the
    process-wide dispatcher BEFORE srv2.js is required, otherwise the first
@@ -367,19 +368,40 @@ app.whenReady().then(function () {
   const SHIELD_PROXY_RULES = 'http=127.0.0.1:46950;https=127.0.0.1:46950;socks=127.0.0.1:46950';
   const SHIELD_BYPASS = '127.0.0.1,localhost,::1,*.hakunaymatata.com,*.1hanime.com';
   let shieldDirect = false;
+  let lastRouteKey = '';
+  /* A verified country exit is an HTTP or SOCKS5 relay; Chromium needs the
+     matching rule shape. WARP keeps the local CONNECT proxy. */
+  const rulesForProxy = function (raw) {
+    try {
+      const u = new URL(raw);
+      /* Electron's proxyRules grammar: scheme=host:port for HTTP, but SOCKS
+         must keep the URI spelling. Using socks5=host:port is silently
+         ignored by Chromium and sends traffic direct. */
+      if (u.protocol === 'socks5:') return 'socks5://' + u.host;
+      return 'http=' + u.host + ';https=' + u.host;
+    } catch (e) {
+      return SHIELD_PROXY_RULES;
+    }
+  };
   /* Manual OFF must switch Chromium itself, not only the Node dispatcher:
      otherwise the UI would claim honest direct routing while every <img>,
      iframe and media request still aimed at a dead proxy port. */
   vpn.setListener(function (st) {
     const direct = !!(st && (st.off || st.state === 'off' || st.enabled === false));
-    if (direct === shieldDirect) return;
+    const relayProxy = (!direct && st && st.mode === 'relay' && st.proxy) ? st.proxy : '';
+    const rules = relayProxy ? rulesForProxy(relayProxy) : SHIELD_PROXY_RULES;
+    const key = direct ? 'direct' : (relayProxy || 'shield');
+    if (key === lastRouteKey) return;
+    lastRouteKey = key;
     shieldDirect = direct;
     try {
       session.defaultSession.setProxy(direct
         ? { mode: 'direct' }
-        : { proxyRules: SHIELD_PROXY_RULES, proxyBypassRules: SHIELD_BYPASS }
+        : { proxyRules: rules, proxyBypassRules: SHIELD_BYPASS }
       ).then(function () {
-        logLine('INFO', direct ? 'Chromium session switched to direct routing' : 'Chromium session routed through SuperBox Shield');
+        logLine('INFO', direct ? 'Chromium session switched to direct routing'
+          : (relayProxy ? 'Chromium session routed through regional exit ' + relayProxy
+            : 'Chromium session routed through SuperBox Shield'));
       }).catch(function (e) {
         logLine('ERROR', 'session proxy switch failed: ' + String((e && e.message) || e));
       });
@@ -393,8 +415,10 @@ app.whenReady().then(function () {
     logLine('ERROR', 'Shield start failed: ' + String((e && e.message) || e));
   });
   try {
+    const bootStatus = vpn.status();
+    const bootRelay = bootStatus && bootStatus.mode === 'relay' && bootStatus.proxy ? bootStatus.proxy : '';
     session.defaultSession.setProxy({
-      proxyRules: SHIELD_PROXY_RULES,
+      proxyRules: bootRelay ? rulesForProxy(bootRelay) : SHIELD_PROXY_RULES,
       /* Moviebox's media CDN rejects Cloudflare WARP egress with 427, and
          nhplayer's r2 host throttles the WARP path to a few KB/s while the
          media element waits for the MP4 index. The catalogue, API, artwork,
@@ -565,6 +589,109 @@ app.whenReady().then(function () {
 });
 
 ipcMain.handle('open-external', function (_e, url) { return shell.openExternal(url); });
+
+/* ------------------------------------------------------------------ updater
+   The renderer can ask for a release asset, but it never gets a filesystem or
+   a shell. The host downloads to its own temp directory, hashes the stream as
+   it arrives, refuses to keep a byte that does not match the published
+   SHA-256, and only then launches the installer. */
+function hashFile(file) {
+  return new Promise(function (resolve, reject) {
+    const h = crypto.createHash('sha256');
+    const s = fs.createReadStream(file);
+    s.on('data', function (d) { h.update(d); });
+    s.on('end', function () { resolve(h.digest('hex')); });
+    s.on('error', reject);
+  });
+}
+
+function updateDir() {
+  const dir = path.join(app.getPath('temp'), 'superbox-update');
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+ipcMain.handle('update-download', async function (event, opts) {
+  const url = String((opts && opts.url) || '');
+  const name = path.basename(String((opts && opts.name) || ''));
+  const want = String((opts && opts.sha256) || '').toLowerCase();
+  if (!/^https:\/\//i.test(url)) throw new Error('update URL must use https');
+  if (!/^[A-Za-z0-9._-]+$/.test(name)) throw new Error('invalid asset name');
+  if (!/^[0-9a-f]{64}$/.test(want)) throw new Error('missing published SHA-256');
+
+  const dest = path.join(updateDir(), name);
+  try { fs.unlinkSync(dest); } catch (e) {}
+  const res = await fetch(url, {
+    redirect: 'follow',
+    headers: { 'User-Agent': 'SuperBox/1.4.1', 'Accept': 'application/octet-stream' }
+  });
+  if (!res.ok) throw new Error('download HTTP ' + res.status);
+  const total = Number(res.headers.get('content-length') || 0);
+  const hash = crypto.createHash('sha256');
+  const out = fs.createWriteStream(dest);
+  let seen = 0;
+  let lastTick = 0;
+  const reader = res.body.getReader();
+  for (;;) {
+    const step = await reader.read();
+    if (step.done) break;
+    const chunk = Buffer.from(step.value);
+    hash.update(chunk);
+    seen += chunk.length;
+    if (!out.write(chunk)) {
+      await new Promise(function (resolve) { out.once('drain', resolve); });
+    }
+    const now = Date.now();
+    if (now - lastTick > 250) {
+      lastTick = now;
+      try {
+        event.sender.send('update-progress', {
+          received: seen,
+          total: total,
+          pct: total ? Math.min(99, Math.round((seen / total) * 100)) : 0
+        });
+      } catch (e) {}
+    }
+  }
+  await new Promise(function (resolve, reject) {
+    out.once('error', reject);
+    out.end(function () { resolve(); });
+  });
+  const got = hash.digest('hex');
+  if (got !== want) {
+    try { fs.unlinkSync(dest); } catch (e) {}
+    throw new Error('SHA-256 mismatch (expected ' + want.slice(0, 12) + '…, got ' + got.slice(0, 12) + '…)');
+  }
+  try {
+    event.sender.send('update-progress', { received: seen, total: total || seen, pct: 100 });
+  } catch (e) {}
+  return { ok: true, path: dest, size: seen, sha256: got };
+});
+
+ipcMain.handle('update-install', async function (_e, opts) {
+  const file = String((opts && opts.path) || '');
+  const want = String((opts && opts.sha256) || '').toLowerCase();
+  const dir = updateDir();
+  const resolved = path.resolve(file);
+  if (resolved.indexOf(path.resolve(dir) + path.sep) !== 0) throw new Error('installer is outside the update folder');
+  if (!fs.existsSync(resolved)) throw new Error('installer is missing');
+  if (!/^[0-9a-f]{64}$/.test(want)) throw new Error('missing published SHA-256');
+  const got = await hashFile(resolved);
+  if (got !== want) {
+    try { fs.unlinkSync(resolved); } catch (e) {}
+    throw new Error('installer changed after verification');
+  }
+  if (process.platform === 'win32') {
+    const { spawn } = require('child_process');
+    const child = spawn(resolved, [], { detached: true, stdio: 'ignore' });
+    child.unref();
+    setTimeout(function () { app.quit(); }, 1800);
+    return { ok: true, launched: true };
+  }
+  const err = await shell.openPath(resolved);
+  if (err) throw new Error(err);
+  return { ok: true, launched: true };
+});
 
 /* Deny popups + external navigation for EVERY web contents ever created. */
 app.on('web-contents-created', function (_event, contents) { hardenContents(contents); });

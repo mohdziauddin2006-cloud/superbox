@@ -44,6 +44,7 @@ public class MainActivity extends Activity {
     private WebView web;
     private LocalServer server;
     private VpnManager vpn;
+    private volatile int localPort = 0;
     private View customView;
     private WebChromeClient.CustomViewCallback customViewCallback;
     private TextView splash;
@@ -204,6 +205,7 @@ public class MainActivity extends Activity {
                     });
                     server = new LocalServer(getApplicationContext(), vpn);
                     final int port = server.start();
+                    localPort = port;
                     runOnUiThread(new Runnable() {
                         @Override
                         public void run() {
@@ -229,18 +231,29 @@ public class MainActivity extends Activity {
     /* Full-screen in-app browser used only for sources that refuse to expose
        a raw media file (provider embeds, some custom-library pages). It keeps
        the viewer inside SuperBox instead of handing off to an external app. */
-    private boolean webProxyApplied = false;
+    private String webProxyKey = "";
 
+    /* The WebView must ride the same exit as the bridge. WARP uses the local
+       proxy port; a pinned country uses the verified HTTP relay itself, so a
+       source page opened in the WebView does not silently fall back to the
+       host ISP or to anycast WARP. */
     private void installWebViewProxy() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
-        if (webProxyApplied) return;
+        String target = VpnManager.HOST + ":" + VpnManager.PORT;
+        if (vpn != null && vpn.isRelayOn() && localPort > 0) {
+            /* A regional relay can be SOCKS5, which WebView cannot speak. The
+               app server exposes a local CONNECT tunnel that opens through
+               the relay, so WebView still leaves from the verified country. */
+            target = "127.0.0.1:" + localPort;
+        }
+        if (target.equals(webProxyKey)) return;
         try {
             if (!WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE)) {
                 android.util.Log.w("SuperBoxShield", "WebView proxy override not supported");
                 return;
             }
             ProxyConfig cfg = new ProxyConfig.Builder()
-                    .addProxyRule(VpnManager.HOST + ":" + VpnManager.PORT)
+                    .addProxyRule(target)
                     .addBypassRule("127.0.0.1")
                     .addBypassRule("localhost")
                     .addBypassRule("<local>")
@@ -249,7 +262,7 @@ public class MainActivity extends Activity {
             ProxyController.getInstance().setProxyOverride(cfg, ex, new Runnable() {
                 @Override public void run() { ex.shutdown(); }
             });
-            webProxyApplied = true;
+            webProxyKey = target;
         } catch (Throwable e) {
             android.util.Log.w("SuperBoxShield",
                     "WebView proxy override unavailable: " + e.getMessage());
@@ -261,14 +274,14 @@ public class MainActivity extends Activity {
        images load directly until the user reconnects. */
     private void clearWebViewProxy() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
-        if (!webProxyApplied) return;
+        if (webProxyKey.isEmpty()) return;
         try {
             if (!WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE)) return;
             final ExecutorService ex = Executors.newSingleThreadExecutor();
             ProxyController.getInstance().clearProxyOverride(ex, new Runnable() {
                 @Override public void run() { ex.shutdown(); }
             });
-            webProxyApplied = false;
+            webProxyKey = "";
         } catch (Throwable e) {
             android.util.Log.w("SuperBoxShield",
                     "WebView proxy clear failed: " + e.getMessage());

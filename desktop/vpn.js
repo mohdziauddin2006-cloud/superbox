@@ -28,6 +28,7 @@ const net = require('net');
 const path = require('path');
 const { app } = require('electron');
 const { ProxyAgent, fetch: proxyFetch, setGlobalDispatcher, Agent } = require('undici');
+const relay = require('./relay');
 
 const PROXY_HOST = '127.0.0.1';
 const PROXY_PORT = 46950;
@@ -73,6 +74,7 @@ const COLO_CITY = {
   BOM: 'Mumbai', DEL: 'New Delhi', MAA: 'Chennai', BLR: 'Bengaluru',
   IAD: 'Ashburn', EWR: 'Newark', LAX: 'Los Angeles', SJC: 'San Jose',
   ORD: 'Chicago', DFW: 'Dallas', MIA: 'Miami', SEA: 'Seattle',
+  ATL: 'Atlanta', DEN: 'Denver', PHX: 'Phoenix', BOS: 'Boston',
   YYZ: 'Toronto', YVR: 'Vancouver', YUL: 'Montreal',
   LHR: 'London', LGW: 'London', MAN: 'Manchester',
   SYD: 'Sydney', MEL: 'Melbourne', BNE: 'Brisbane',
@@ -140,6 +142,11 @@ class VpnManager {
     this._watchdog = null;
     this._watchFails = 0;
     this._watchBusy = false;
+    this.mode = 'warp';           /* warp | relay */
+    this.relay = null;            /* verified regional exit descriptor */
+    this._relayAgent = null;      /* undici dispatcher for the active exit */
+    this._relayBusy = null;
+    try { relay.configure({ cacheFile: path.join(this.dataDir(), 'relays.json') }); } catch (e) {}
   }
 
   binary() {
@@ -164,6 +171,7 @@ class VpnManager {
   configPath() { return path.join(this.dataDir(), 'config.json'); }
 
   agent() {
+    if (this.mode === 'relay' && this._relayAgent) return this._relayAgent;
     if (!this._agent) {
       try {
         this._agent = new ProxyAgent({
@@ -188,6 +196,110 @@ class VpnManager {
       catch (e) { this._directAgent = null; }
     }
     return this._directAgent;
+  }
+
+  /* Drop the regional exit and return the dispatcher to the WARP tunnel. The
+     usque child is deliberately left running: switching back to
+     "Fastest / Local Shield" is then instant, and the relay never has to
+     rebuild the tunnel it may need as a fallback. */
+  _clearRelay() {
+    var old = this._relayAgent;
+    this._relayAgent = null;
+    this.relay = null;
+    this.mode = 'warp';
+    if (old) { try { old.close(); } catch (e) {} }
+  }
+
+  /* Pin a country by finding a relay that actually exits there. The relay is
+     verified through Cloudflare's trace endpoint before it is installed, so
+     the chip can never claim a country the traffic is not using. */
+  async _activateRelay(region) {
+    if (!this.enabled) return this.status();
+    if (this._relayBusy) {
+      /* A scan is already running. Let it settle, then honour the newest
+         request instead of silently keeping the older country. */
+      var selfQueue = this;
+      return this._relayBusy.then(function () {
+        return selfQueue._activateRelay(region);
+      }, function () {
+        return selfQueue._activateRelay(region);
+      });
+    }
+    var self = this;
+    var wanted = normRegion(region);
+    this.preferred = wanted;
+    this._relayBusy = (async function () {
+      self.stopWatchdog();
+      self.setPhase('connecting', 'Finding a live ' + (REGION_LABEL[wanted] || wanted) + ' exit', 8);
+      self.error = '';
+      try {
+        var exit = await relay.findExit(wanted, {
+          timeout: 70000,
+          onProgress: function (done, total, msg) {
+            var pct = 10 + Math.min(80, Math.round((done / Math.max(1, total)) * 80));
+            self.setPhase('connecting', msg, pct);
+          }
+        });
+        /* Manual OFF or a newer switch can land while the scan is running.
+           Never install an exit the user has already cancelled. */
+        if (!self.enabled || self.state === 'off') return self.status();
+        if (self.preferred !== wanted) return self.status();
+        var agent = relay.dispatcherFor(exit);
+        var old = self._relayAgent;
+        self._relayAgent = agent;
+        self.relay = exit;
+        self.mode = 'relay';
+        self.region = wanted;
+        self.preferred = wanted;
+        self.warp = false;
+        self.actual = exit.loc;
+        self.colo = exit.colo || '';
+        self.city = exit.city || '';
+        self.ip = exit.ip || exit.host;
+        self.endpoint = exit.host + ':' + exit.port;
+        self.transport = exit.protocol;
+        self.ping = 0;
+        self.error = '';
+        self.state = 'on';
+        self.progress = 100;
+        self.phase = 'Exit live';
+        self.startedAt = Date.now();
+        self.lastProbe = Date.now();
+        self._watchFails = 0;
+        try { setGlobalDispatcher(agent); } catch (e) {}
+        if (old) { try { old.close(); } catch (e) {} }
+        self.startWatchdog();
+        self.notify();
+        self.log('relay live ' + exit.url + ' egress=' + exit.loc + ' ' + (exit.city || ''));
+        return self.status();
+      } catch (e) {
+        self.log('relay failed for ' + wanted + ': ' + (e && e.message));
+        var reason = (e && e.message) || ('No live ' + wanted + ' exit');
+        self.mode = 'warp';
+        self.relay = null;
+        if (self.child && self.state === 'on') {
+          /* WARP is healthy; keep the app online and report the mismatch. */
+          try { setGlobalDispatcher(self.agent()); } catch (err) {}
+          self.phase = 'WARP fallback';
+          self.error = reason;
+          self.notify();
+          return self.status();
+        }
+        try {
+          await self._bringUp('auto', true);
+          self.error = reason + ' \u00b7 using WARP ' + (self.actual || '');
+        } catch (e2) {
+          self.state = 'error';
+          self.phase = 'No exit answered';
+          self.error = reason;
+        }
+        self.notify();
+        return self.status();
+      } finally {
+        self._relayBusy = null;
+      }
+    })();
+    return this._relayBusy;
   }
 
   log(line) {
@@ -377,10 +489,11 @@ class VpnManager {
         /* Manual OFF means there is no tunnel to ask: measure the host route
            so ping/latency stays honest while disconnected. */
         var direct = !self.enabled || self.state === 'off';
+        var relayMode = self.mode === 'relay' && !!self._relayAgent;
         var t0 = Date.now();
         var r = direct
           ? await BASE_FETCH(TRACE_URL, { signal: ctl.signal, cache: 'no-store' })
-          : await proxyFetch(TRACE_URL, { dispatcher: self.agent(), signal: ctl.signal });
+          : await proxyFetch(TRACE_URL, { dispatcher: relayMode ? self._relayAgent : self.agent(), signal: ctl.signal });
         if (!r.ok) throw new Error('trace HTTP ' + r.status);
         var text = await r.text();
         self.ping = Math.max(1, Date.now() - t0);
@@ -389,12 +502,18 @@ class VpnManager {
           var i = line.indexOf('=');
           if (i > 0) map[line.slice(0, i)] = line.slice(i + 1);
         });
-        self.warp = map.warp === 'on';
+        self.warp = relayMode ? false : map.warp === 'on';
         self.actual = String(map.loc || '').toUpperCase();
         self.colo = String(map.colo || '').toUpperCase();
         self.city = COLO_CITY[self.colo] || '';
         self.ip = String(map.ip || '');
         self.lastProbe = Date.now();
+        if (relayMode) {
+          if (self.relay && self.relay.loc && self.actual !== self.relay.loc) {
+            throw new Error('relay egress moved to ' + self.actual);
+          }
+          return true;
+        }
         return direct ? true : self.warp;
       } finally {
         clearTimeout(tm);
@@ -447,7 +566,12 @@ class VpnManager {
     if (!this.enabled) return;
     if (this._watchBusy || this._starting) return;
     if (this.state !== 'on') return;
-    if (!this.child) { this.recover('Shield process disappeared'); return; }
+    if (this.mode === 'relay') {
+      if (!this._relayAgent) { this._activateRelay(this.region); return; }
+    } else if (!this.child) {
+      this.recover('Shield process disappeared');
+      return;
+    }
     this._watchBusy = true;
     try {
       var ok = false;
@@ -457,7 +581,8 @@ class VpnManager {
       this.log('watchdog miss ' + this._watchFails + '/' + WATCHDOG_FAILS);
       if (this._watchFails >= WATCHDOG_FAILS) {
         this._watchFails = 0;
-        this.recover('Tunnel stopped answering');
+        if (this.mode === 'relay') this._activateRelay(this.region);
+        else this.recover('Tunnel stopped answering');
       }
     } finally {
       this._watchBusy = false;
@@ -467,6 +592,7 @@ class VpnManager {
   async recover(reason) {
     if (!this.enabled) return this.status();
     if (this._recovering || this._starting) return this._recovering;
+    if (this.mode === 'relay') return this._activateRelay(this.region);
     this.log('self-repair: ' + reason);
     this.error = reason || 'Reconnecting the Shield';
     this.setPhase('connecting', 'Repairing the tunnel', 8);
@@ -482,6 +608,8 @@ class VpnManager {
     if (!this.enabled) return this.status();
     var wanted = normRegion(region || this.region);
     this.installDispatcher();
+    if (this.mode === 'relay') this._clearRelay();
+    try { setGlobalDispatcher(this.agent()); } catch (e) {}
     this.stopWatchdog();
     this.setPhase('connecting', 'Preparing the Shield', 2);
     this.error = '';
@@ -588,12 +716,14 @@ class VpnManager {
 
   async start(region) {
     if (!this.enabled) return this.status();
+    var wanted = normRegion(region || this.region);
+    if (wanted !== 'auto') return this._activateRelay(wanted);
     if (this._starting) return this._starting;
     try { setGlobalDispatcher(this.agent()); } catch (e) {}
     var self = this;
     this._starting = (async function () {
       try {
-        return await self._bringUp(region || self.region, true);
+        return await self._bringUp(wanted, true);
       } finally {
         self._starting = null;
       }
@@ -618,6 +748,7 @@ class VpnManager {
     this.enabled = false;
     this.stopWatchdog();
     this._watchFails = 0;
+    this._clearRelay();
     this.killChild();
     try { await this.waitPortFree(5000); } catch (e) {}
     try { setGlobalDispatcher(this.directAgent()); } catch (e) {}
@@ -636,12 +767,14 @@ class VpnManager {
   }
 
   /* Manual ON: restore the tunnel and, when the host session listens, point
-     Chromium at the local proxy again. */
+     Chromium at the local proxy again. A pinned country goes straight to its
+     verified exit instead of pretending WARP moved. */
   async manualOn(region) {
     this.enabled = true;
     this.preferred = normRegion(region || this.preferred || this.region || 'auto');
     this.log('manual ON - ' + this.preferred);
-    return this.start(this.preferred);
+    if (this.preferred !== 'auto') return this._activateRelay(this.preferred);
+    return this.start('auto');
   }
 
   /* Host hook (main.js) so the Chromium session proxy follows manual OFF/ON.
@@ -678,45 +811,62 @@ class VpnManager {
     if (!this.enabled) return this.status();
     var wanted = normRegion(region);
     this.preferred = wanted;
-    if (this.state === 'on' && wanted === this.region && this.warp) return this.status();
-    if (this._starting) {
-      try { await this._starting; } catch (e) {}
-      if (this.state === 'on' && wanted === this.region && this.warp) return this.status();
+    if (wanted === 'auto') {
+      if (this.state === 'on' && this.region === 'auto' && this.warp) return this.status();
+      if (this._starting) {
+        try { await this._starting; } catch (e) {}
+        if (this.state === 'on' && this.region === 'auto' && this.warp) return this.status();
+      }
+      var self = this;
+      this._starting = (async function () {
+        try { return await self._bringUp('auto', true); }
+        finally { self._starting = null; }
+      })();
+      return this._starting;
     }
-    var self = this;
-    this._starting = (async function () {
-      try { return await self._bringUp(wanted, true); }
-      finally { self._starting = null; }
-    })();
-    return this._starting;
+    if (this.state === 'on' && wanted === this.region && this.relay) return this.status();
+    return this._activateRelay(wanted);
   }
 
   /* Non-disruptive: a source asking for a region records a preference. A
-     healthy tunnel is never torn down mid-session just to chase a country. */
+     healthy route is never torn down mid-session just to chase a country. */
   async ensure(region) {
     if (!this.enabled) return this.status();
     var wanted = normRegion(region);
+    /* A source that does not care about a country must not undo a country the
+       user pinned in the Shield panel. */
+    if (wanted === 'auto' && this.preferred !== 'auto' && this.relay) return this.status();
     this.preferred = wanted;
-    if (this.state === 'on' && this.warp) return this.status();
+    var settled = this.state === 'on' && wanted === this.region &&
+      (wanted === 'auto' ? this.warp : !!this.relay);
+    if (settled) return this.status();
     if (this._starting) {
       try { await this._starting; } catch (e) {}
-      if (this.state === 'on' && this.warp) return this.status();
+      settled = this.state === 'on' && wanted === this.region &&
+        (wanted === 'auto' ? this.warp : !!this.relay);
+      if (settled) return this.status();
     }
     if (this.state === 'connecting' || this.state === 'provisioning') {
       try { await this.waitReady(20000); } catch (e) {}
-      if (this.state === 'on' && this.warp) return this.status();
+      settled = this.state === 'on' && wanted === this.region &&
+        (wanted === 'auto' ? this.warp : !!this.relay);
+      if (settled) return this.status();
     }
     return this.switchRegion(wanted);
   }
 
   status() {
-    var on = this.state === 'on' && this.warp;
+    var on = this.state === 'on' && (this.warp || !!this.relay);
+    var relayMode = this.mode === 'relay' && !!this.relay;
     return {
       ok: on,
       connected: on,
       enabled: this.enabled,
       off: this.state === 'off' || !this.enabled,
-      engine: 'usque/WARP MASQUE',
+      engine: relayMode ? 'Verified regional exit (' + (this.relay.protocol || 'relay') + ')' : 'usque/WARP MASQUE',
+      mode: relayMode ? 'relay' : 'warp',
+      proxy: relayMode ? this.relay.url : '',
+      relayCity: relayMode ? (this.relay.city || '') : '',
       state: this.state,
       phase: this.phase,
       progress: this.progress,

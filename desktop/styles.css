@@ -15,7 +15,7 @@
   --line-2: rgba(255, 255, 255, 0.17);
   --text: #f3f5fa;
   --muted: #98a1b5;
-  --dim: #687185;
+  --dim: #76819a;
   --accent: #f5c518;
   --accent-2: #ff9f1c;
   --accent-glow: rgba(245, 197, 24, 0.24);
@@ -45,7 +45,7 @@
   --line-2: rgba(15, 23, 42, 0.17);
   --text: #0f172a;
   --muted: #475569;
-  --dim: #64748b;
+  --dim: #5b6779;
   --accent: #d97706;
   --accent-2: #f59e0b;
   --accent-glow: rgba(217, 119, 6, 0.2);
@@ -521,7 +521,7 @@ body[data-sec="adult-reading"] .nav-indicator {
 }
 .search-mode-toggle[data-mode="deep"] .search-mode-thumb {
   transform: translate3d(100%, 0, 0);
-  background: linear-gradient(135deg, #ff4d7d, #d946ef);
+  background: linear-gradient(135deg, #be185d, #a21caf);
   box-shadow: 0 4px 16px rgba(255, 77, 125, 0.35);
 }
 .search-mode-toggle button {
@@ -1080,7 +1080,7 @@ body[data-sec="adult-reading"] .nav-indicator {
 }
 body[data-sec="adult"] .subnav .chip.active,
 body[data-sec="adult-reading"] .subnav .chip.active {
-  background: linear-gradient(135deg, #ff4d7d, #d946ef);
+  background: linear-gradient(135deg, #be185d, #a21caf);
   color: #fff;
   box-shadow: 0 6px 22px rgba(255, 77, 125, 0.34);
 }
@@ -1664,7 +1664,7 @@ body[data-sec="adult-reading"] .subnav .chip.active {
 }
 .adult-src-switcher button:hover { color: #fff; }
 .adult-src-switcher button.on {
-  background: linear-gradient(135deg, #ff4d7d, #d946ef);
+  background: linear-gradient(135deg, #be185d, #a21caf);
   color: #fff;
   box-shadow: 0 6px 20px rgba(255, 77, 125, 0.32);
 }
@@ -1737,7 +1737,7 @@ body[data-sec="adult-reading"] .subnav .chip.active {
   width: 56px; height: 56px; border-radius: 18px; margin: 0 auto 14px;
   display: grid; place-items: center;
   font-size: 18px; font-weight: 900; color: #fff;
-  background: linear-gradient(135deg, #ff4d7d, #d946ef);
+  background: linear-gradient(135deg, #be185d, #a21caf);
   box-shadow: 0 12px 32px rgba(255, 77, 125, 0.38);
 }
 .age-box .box-kicker { color: #ff7fa3; }
@@ -2488,6 +2488,7 @@ body[data-sec="adult-reading"] .subnav .chip.active {
   box-shadow: 0 14px 36px rgba(15, 23, 42, 0.09), inset 0 1px 0 rgba(255, 255, 255, 0.92);
 }
 [data-theme="light"] .brand-text { color: #0f172a; }
+[data-theme="light"] .brand-text span { color: #b45309; }
 [data-theme="light"] #nav button { color: #475569; }
 [data-theme="light"] #nav button:hover,
 [data-theme="light"] #nav button.active { color: #0f172a; }
@@ -2735,10 +2736,11 @@ body[data-sec="adult-reading"] .subnav .chip.active {
 [data-theme="light"] .vpn-live-ping {
   background: rgba(5, 150, 105, 0.13);
   border-color: rgba(5, 150, 105, 0.34);
-  color: #047857;
+  color: #065f46;
 }
 [data-theme="light"] .vpn-code { background: rgba(15, 23, 42, 0.08); color: #1e293b; }
-[data-theme="light"] .vpn-server.on .vpn-code { background: #059669; color: #ffffff; }
+[data-theme="light"] .vpn-server.on .vpn-code { background: #047857; color: #ffffff; }
+[data-theme="light"] .box-info b.good { color: #047857; }
 [data-theme="light"] .sb-switch i { background: #cbd5e1; }
 [data-theme="light"] .ghost {
   background: rgba(15, 23, 42, 0.06);

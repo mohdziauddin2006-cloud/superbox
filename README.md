@@ -1,298 +1,303 @@
 <div align="center">
-  <img src="docs/hero-1.4.svg" alt="SuperBox 1.4.0 — one box, infinite library" width="100%">
+  <img src="docs/hero-1.4.svg" alt="SuperBox 1.4.1" width="100%">
   <br>
   <h1>SUPERBOX</h1>
-  <p><b>One private box for everything you watch and read — with offline AI recommendations, an embedded global VPN, and zero ads.</b></p>
+  <p><b>A private desktop and Android library for films, series, anime, live TV and comics. On-device AI search, a verified multi-country VPN, no ads.</b></p>
   <p>
-    <img alt="Version 1.4.0" src="https://img.shields.io/badge/release-v1.4.0-FFC105?style=flat-square&labelColor=0B0B0F">
+    <img alt="Version 1.4.1" src="https://img.shields.io/badge/release-v1.4.1-FFC105?style=flat-square&labelColor=0B0B0F">
     <img alt="Windows 10 and 11" src="https://img.shields.io/badge/platform-Windows%2010%2F11-FFC105?style=flat-square&labelColor=0B0B0F&logo=windows&logoColor=0B0B0F">
     <img alt="Android 6.0 and newer" src="https://img.shields.io/badge/platform-Android%206.0%2B-FFC105?style=flat-square&labelColor=0B0B0F&logo=android&logoColor=0B0B0F">
     <img alt="Offline ONNX AI" src="https://img.shields.io/badge/AI-offline%20ONNX-FFC105?style=flat-square&labelColor=0B0B0F">
-    <img alt="Embedded VPN" src="https://img.shields.io/badge/VPN-embedded%20WARP-FFC105?style=flat-square&labelColor=0B0B0F">
+    <img alt="Verified relay VPN" src="https://img.shields.io/badge/VPN-verified%20relay-FFC105?style=flat-square&labelColor=0B0B0F">
     <img alt="Zero ads" src="https://img.shields.io/badge/ads-zero-FFC105?style=flat-square&labelColor=0B0B0F">
     <img alt="MIT license" src="https://img.shields.io/badge/license-MIT-FFC105?style=flat-square&labelColor=0B0B0F">
   </p>
   <p>
-    <a href="https://github.com/mohdziauddin2006-cloud/superbox/releases/download/v1.4.0/SuperBox-Setup-1.4.0.exe"><img alt="Download for Windows" src="https://img.shields.io/badge/Download_for_Windows-FFC105?style=for-the-badge&labelColor=0B0B0F&logo=windows&logoColor=0B0B0F"></a>
+    <a href="https://github.com/mohdziauddin2006-cloud/superbox/releases/download/v1.4.1/SuperBox-Setup-1.4.1.exe"><img alt="Download for Windows" src="https://img.shields.io/badge/Download_for_Windows-FFC105?style=for-the-badge&labelColor=0B0B0F&logo=windows&logoColor=0B0B0F"></a>
     &nbsp;
-    <a href="https://github.com/mohdziauddin2006-cloud/superbox/releases/download/v1.4.0/SuperBox-1.4.0.apk"><img alt="Download the universal APK" src="https://img.shields.io/badge/Download_APK-FFC105?style=for-the-badge&labelColor=0B0B0F&logo=android&logoColor=0B0B0F"></a>
+    <a href="https://github.com/mohdziauddin2006-cloud/superbox/releases/download/v1.4.1/SuperBox-1.4.1.apk"><img alt="Download the universal APK" src="https://img.shields.io/badge/Download_APK-FFC105?style=for-the-badge&labelColor=0B0B0F&logo=android&logoColor=0B0B0F"></a>
   </p>
-  <p><sub>Windows 10/11 x64 &nbsp;·&nbsp; Android 6.0+ &nbsp;·&nbsp; Setup 237.1 MB &nbsp;·&nbsp; universal APK 288.2 MB</sub></p>
-  <p><sub>MOVIES &nbsp;·&nbsp; SERIES &nbsp;·&nbsp; ANIME &nbsp;·&nbsp; LIVE TV &nbsp;·&nbsp; READING &nbsp;·&nbsp; OFFLINE AI &nbsp;·&nbsp; EMBEDDED VPN &nbsp;·&nbsp; ZERO ADS</sub></p>
+  <p><sub>Windows 10/11 x64 &nbsp;·&nbsp; Android 6.0+ &nbsp;·&nbsp; Setup 237.1 MB &nbsp;·&nbsp; Universal APK 288.3 MB</sub></p>
+  <p><sub>MOVIES &nbsp;·&nbsp; SERIES &nbsp;·&nbsp; ANIME &nbsp;·&nbsp; LIVE TV &nbsp;·&nbsp; READING &nbsp;·&nbsp; OFFLINE AI &nbsp;·&nbsp; VERIFIED VPN &nbsp;·&nbsp; ZERO ADS</sub></p>
 </div>
 
 <p align="center">
-  <a href="#whats-new-in-140">What's new</a> &nbsp;·&nbsp;
+  <a href="#whats-new-in-141">What's new</a> &nbsp;·&nbsp;
   <a href="#download">Download</a> &nbsp;·&nbsp;
-  <a href="#offline-intelligence">Offline AI</a> &nbsp;·&nbsp;
-  <a href="#reading-refined">Reading</a> &nbsp;·&nbsp;
-  <a href="#the-shield-embedded-vpn">Shield VPN</a> &nbsp;·&nbsp;
+  <a href="#the-vpn">VPN</a> &nbsp;·&nbsp;
+  <a href="#offline-search">AI search</a> &nbsp;·&nbsp;
+  <a href="#reading">Reading</a> &nbsp;·&nbsp;
   <a href="#architecture">Architecture</a> &nbsp;·&nbsp;
-  <a href="#verified-in-140">Verified</a> &nbsp;·&nbsp;
+  <a href="#controls--reader-shortcuts">Controls</a> &nbsp;·&nbsp;
+  <a href="#sha-256-verification">Verify</a> &nbsp;·&nbsp;
   <a href="#build-from-source">Build</a>
 </p>
 
 ---
 
-## What's new in 1.4.0
+## What's new in 1.4.1
 
-**1.4.0 is the intelligence release.** The AI Studio backend is now part of both
-apps, recommendations run entirely on-device, the reader gained a complete HUD,
-and every catalogue ships behind one private shell.
+The region switch is no longer a label on a single tunnel. SuperBox now discovers
+public relays, proves that each one exits in the country it claims, and routes
+the app through the healthy result. The same release finishes the glass
+interface, the updater and the Android transport work.
 
-<table>
-  <tr>
-    <td align="center" width="25%" valign="top">
-      <h3>∞</h3>
-      <b>Offline AI</b><br>
-      <sub>Quantized MiniLM embeddings, bundled for Windows and Android. No API key, no cloud call.</sub>
-    </td>
-    <td align="center" width="25%" valign="top">
-      <h3>◐</h3>
-      <b>Reader HUD</b><br>
-      <sub>Every reading mode, a chapter drawer, keyboard paging and swipe, with strict language filtering.</sub>
-    </td>
-    <td align="center" width="25%" valign="top">
-      <h3>◉</h3>
-      <b>Shield control</b><br>
-      <sub>Power control, live latency, Auto-Region and a searchable region picker in one panel.</sub>
-    </td>
-    <td align="center" width="25%" valign="top">
-      <h3>⌁</h3>
-      <b>One search</b><br>
-      <sub>Safe and deep search share one bar. Deep results stay behind the age gate.</sub>
-    </td>
-  </tr>
-</table>
+- **Working country egress.** UK, US, Japan, Germany, Australia, Singapore,
+  Canada, Netherlands, France and India. Relays are checked against two
+  independent HTTPS endpoints before use, so a proxy that rewrites traffic is
+  rejected instead of trusted.
+- **Live connection facts.** The panel shows the verified egress IP, country,
+  city, relay address and a ticking `HH:MM:SS` uptime. If the relay drops, the
+  app fails over to the next healthy candidate.
+- **WARP, renamed honestly.** Cloudflare WARP is now **Fastest / Local Shield
+  (WARP)** and remains the fallback when relay discovery finds nothing usable.
+  It is no longer presented as a country selector.
+- **VPN OFF means direct.** Turning the VPN off removes the Chromium rules, the
+  Node dispatcher and the Android proxy target, so traffic returns to the
+  system route immediately.
+- **Android parity.** `VpnManager` performs the same discovery, verification,
+  caching and failover. Because a WebView cannot speak SOCKS5, `LocalServer`
+  adds a loopback CONNECT tunnel and forwards absolute-URI requests through the
+  active relay.
+- **Glass interface, both themes.** Frosted panels, animated hero slides and
+  spring transitions, with light and dark palettes checked for WCAG AA text
+  contrast. The preference persists across launches.
+- **Instant home.** The window paints while the tunnel connects in the
+  background, instead of holding the first frame behind the VPN gate.
+- **Updater with real verification.** `window.SB_UPDATER` and the update modal
+  download the release asset, stream it to disk, verify its SHA-256 before an
+  install button appears, and re-check the digest before launch.
+- **Resilient artwork and episodes.** Every poster has a local proxy and a
+  public resizer fallback. Episode lists paginate in ranges of 50 from the real
+  season total, and range switches never duplicate rows.
+- **Isolated AI partitions.** Safe and 18+ vectors live in separate stores.
+  A test item written to the isolated store never appeared in safe search.
 
-- **Offline recommendations.** `all-MiniLM-L6-v2` in q8 ONNX form is bundled
-  with its tokenizer and loaded with `local_files_only: true`. Matching runs in
-  a separate vector partition per audience, returns 12–16 previews with match
-  pills, and answers warm queries in about 20 ms.
-- **A real reader HUD.** Modes for paged, vertical and continuous reading; a
-  chapter drawer; keyboard arrows, page keys and swipe; and English-only
-  chapter filtering that never paints a stale page.
-- **Episode pagination that scales.** Seasons plus `1–50`, `51–100`, `101+`
-  range tabs, with a non-blocking catalogue fallback when the primary metadata
-  service is slow or unavailable.
-- **Scoped search everywhere.** Every search surface can scope itself and clear
-  in one tap; deep search opens through the same age verification used by the
-  private vault.
-- **Every catalogue activated.** Native adapters, detail pages, chapter lists
-  and readers for the complete catalogue set, with desktop and Android parity.
-  Raw provider endpoints are resolved inside the app and are never shown in the
-  interface.
-- **A private adult vault.** Adult catalogues live in a separate registry and a
-  separate vector partition, appear beside each other only inside **18+
-  Reading**, and are absent from standard Reading and Kids. A dedicated **18+
-  Video** search is isolated the same way.
-- **VPN control, finished.** A status chip, pulse ring, power copy, manual
-  ON/OFF, latency badge, Auto-Region switch and searchable region cards replace
-  the old one-way indicator.
-- **Stability pass.** The merged backend now guards `undici` and `TLSSocket`
-  failures, every outbound request has a timeout and a retry budget, and a
-  dropped socket can no longer take down the app.
-
-## Feature matrix
+## What it does
 
 | Capability | Windows | Android | Notes |
 |---|:---:|:---:|---|
-| Offline ONNX recommendations | ● | ● | q8 MiniLM, 384-dim embeddings, local files only |
-| Separate safe / 18+ vectors | ● | ● | hard partition enforcement; adult items never enter safe |
-| Reader HUD and chapter drawer | ● | ● | modes, progress, chapter jump, keyboard or swipe |
-| Scoped safe / deep search | ● | ● | deep results require age verification |
-| Episode range pagination | ● | ● | `1–50` · `51–100` · `101+`, plus season selector |
-| Non-blocking metadata fallback | ● | ● | cached catalogue answers while upstream recovers |
-| VPN power panel | ● | ● | manual ON/OFF, latency, Auto-Region, region search |
-| Native video player | ● | ● | MP4 · HLS · DASH, quality and audio ladders |
-| Universal APK | — | ● | `arm64-v8a` · `armeabi-v7a` · `x86` · `x86_64` |
-| Zero ads / zero telemetry | ● | ● | no account, no trackers, no watch history |
+| Film, series, anime and live TV catalogues | ● | ● | native adapters plus an in-app shell |
+| MP4, HLS and DASH playback | ● | ● | quality and audio selection, signed URLs preserved |
+| Offline ONNX semantic search | ● | ● | q8 MiniLM, 384 dimensions, no API key |
+| Separate safe and 18+ indexes | ● | ● | hard partition; adult items never enter safe |
+| Scoped search on every surface | ● | ● | deep results require the age gate |
+| Reading HUD and chapter drawer | ● | ● | paged, vertical and continuous modes |
+| Episode range pagination | ● | ● | `1–50`, `51–100`, `101+`, season selector |
+| Verified multi-country VPN | ● | ● | SOCKS5/HTTP relays, egress proof, failover |
+| WARP fallback | ● | ● | labelled Fastest / Local Shield |
+| In-app updater with SHA-256 | ● | — | desktop release asset |
+| Light and dark themes | ● | ● | persisted; contrast checked |
+| Zero ads and zero telemetry | ● | ● | no account, no trackers, no watch history |
 
-## Offline intelligence
+## Download
 
-Recommendations are local by design.
+| Build | Platform | Architecture | Size | Get it |
+|---|---|---|---:|---|
+| **SuperBox Setup** `.exe` | Windows 10/11 | x64 | 237.1 MB | [Download](https://github.com/mohdziauddin2006-cloud/superbox/releases/download/v1.4.1/SuperBox-Setup-1.4.1.exe) |
+| **SuperBox APK** | Android 6.0+ | `arm64-v8a` · `armeabi-v7a` · `x86` · `x86_64` | 288.3 MB | [Download](https://github.com/mohdziauddin2006-cloud/superbox/releases/download/v1.4.1/SuperBox-1.4.1.apk) |
 
-- **Model:** `Xenova/all-MiniLM-L6-v2`, quantized to q8 ONNX (about 23 MB),
-  shipped with `config.json`, tokenizer files and vocabulary in both builds.
-- **Runtime:** `onnxruntime-node` on Windows; the bundled browser ESM runtime
-  and asyncify WASM on Android, served from the app's own loopback origin.
-- **No network:** the loader passes `local_files_only: true`. There is no
-  inference API and no key to configure.
-- **Two partitions:** safe metadata and adult metadata are embedded and stored
-  separately. The index API refuses to place an adult item in the safe store,
-  and the mobile build mirrors that rule.
-- **Fast handoff:** a candidate shortlist is embedded in batches of 16, then the
-  query is a single dense pass. Cold indexing of 16 titles took about 42 ms on
-  the reference Windows machine; a warm recommendation pass took about 10 ms.
-  On Android, the first pass was about 151 ms and the second about 19 ms.
-- **Useful output:** 12–16 preview cards, each with a percentage match pill,
-  joining the existing similar section instead of replacing the page.
+Both files are attached to the **[v1.4.1 release](https://github.com/mohdziauddin2006-cloud/superbox/releases/tag/v1.4.1)**
+with `SHA256SUMS.txt`. The Windows build is an NSIS setup wizard, not a portable
+archive. The APK is one universal file signed with the SuperBox release key and
+contains all four ABIs, the ONNX model, the tokenizer and the native decoders.
 
-## Reading, refined
+## The VPN
 
-The Reading room remains a first-class reader, not a browser shortcut.
+SuperBox ships two transports and chooses between them in this order.
 
-- **Three ways to read:** paged manga, vertical comic and a continuous mode,
-  with the HUD adapting to each.
-- **Chapter drawer:** every chapter in one sheet, current position preserved,
-  and one-tap jumps that do not reload the catalogue.
-- **Input parity:** arrow keys, Page Up/Down, Space and Home/End on desktop;
-  horizontal or vertical swipe on touch, with a guard against accidental taps.
-- **Strict English filtering:** feeds request the selected language, hosted
-  pages are verified, and chapters without hosted pages are omitted rather than
-  opening a blank reader.
-- **Catalogue coverage:** native catalogues, chapter lists, lazy covers and
-  ordered page extraction for every reading catalogue in the build. A fallback
-  chain handles JavaScript-only chapters and anti-bot interstitials.
-- **Safe by default:** standard Reading and Kids contain no adult items. The
-  private adult shelf is reachable only through **18+ Reading** and the age
-  gate, and its search is separate from the standard search index.
+1. **Relay mode.** The app collects public SOCKS5 and HTTP relays for the
+   requested country, tests them concurrently, and keeps only the ones that
+   answer the Cloudflare trace endpoint with the expected country.
+   Each candidate must also answer a second TLS host with the same egress IP;
+   a relay that returns different addresses is treated as untrusted. Healthy
+   relays are cached, and the newest request wins when the country changes
+   during a scan.
+2. **Fastest / Local Shield (WARP).** If no relay passes, the app can start its
+   bundled Cloudflare WARP client. This is a real tunnel, but anycast means the
+   exit country cannot be promised, so the interface does not claim one.
 
-## The Shield: embedded VPN
+When a relay is active, the panel reports the verified egress IP, country, city
+and relay endpoint. The uptime counter starts at `00:00:00` and ticks once per
+second. A watchdog checks the tunnel; if it stops answering, the app rotates to
+another verified relay before showing a failure.
 
-The VPN is part of both builds, not an app you install first.
+**Desktop routing.** Chromium receives explicit `socks5://host:port` or
+`http=host:port;https=host:port` rules. Node traffic uses a global `undici`
+dispatcher. Loopback and the local BFF stay direct. The previous rules are
+cleared when the VPN is turned off.
 
-- **Engine:** open-source Cloudflare WARP over MASQUE, anonymously registered.
-  No account, email or personal details.
-- **Desktop:** a hidden local proxy, an `undici` agent for Node and
-  `session.setProxy` for Chromium. Loopback stays direct.
-- **Android:** a bundled native core exposed as a loopback HTTP proxy, with the
-  WebView routed through it by `ProxyController`.
-- **Control panel:** state chip, pulse ring, power copy, manual ON/OFF, live
-  latency badge, Auto-Region switch and a searchable card list of regions.
-- **Truthful status:** the panel reports the requested region *and* the actual
-  egress when known. Anycast regions choose an endpoint pool; the UI never
-  promises a country it cannot prove.
-- **Fail closed:** gated calls fail when the tunnel is down. Manual OFF switches
-  the app to direct routing deliberately instead of leaving requests pointed at
-  a stopped proxy.
-- **Scoped split tunnel:** one media CDN rejects WARP egress, so its signed
-  bytes are fetched directly while its catalogue, artwork and metadata stay
-  behind the tunnel. The exception is scoped to that CDN only.
+**Android routing.** `VpnManager` owns discovery, verification, caching and
+failover. The WebView cannot use SOCKS5 directly, so `LocalServer` exposes a
+local CONNECT tunnel and forwards requests through the active relay. Switching
+off restores the direct proxy target.
 
-> [!IMPORTANT]
-> The Shield needs a working network and a few seconds to connect. If the
-> endpoint pool is unreachable, SuperBox shows the error instead of browsing
-> unprotected.
+Public relays are third-party infrastructure. They can be slow, rate-limited or
+taken offline without notice, which is why the app verifies before use and keeps
+more than one candidate. The app does not log browsing history.
 
-## Architecture
+## Offline search
+
+Recommendations and search run on the device.
+
+- **Model:** `Xenova/all-MiniLM-L6-v2`, quantized to q8 ONNX, bundled with its
+  tokenizer and vocabulary in both builds.
+- **Runtime:** `onnxruntime-node` on Windows; the bundled ONNX runtime and WASM
+  on Android, served from the app's loopback origin.
+- **No cloud call:** the loader uses `local_files_only: true`. There is no
+  inference endpoint and no key to configure.
+- **Two stores:** safe and 18+ documents are embedded and persisted separately.
+  The index API rejects an adult item in the safe store, and the isolated store
+  stays empty until the 18+ vault is unlocked.
+- **Measured on the packaged build:** safe index with 762 documents; warm
+  semantic searches answered in 9–19 ms; the similar section painted 16 unique
+  cards in about 112 ms; an isolated test document was deduplicated on re-index
+  and never appeared in safe results.
+- **Fallback:** if the ONNX runtime cannot load, a local TF-IDF engine answers
+  instead of disabling search.
+
+## Reading
+
+- Three reader modes: paged, vertical and continuous.
+- A chapter drawer that preserves the current page and does not reload the
+  catalogue.
+- Arrow keys page left and right in paged modes; `C` opens the chapter drawer.
+- Touch swipe with a tap guard, so accidental taps do not turn a page.
+- English-only filtering for the English lane. Chapters without a hosted page
+  are omitted rather than opening a blank reader.
+- The 18+ shelf is reachable only through **18+ Reading** and the age gate. It
+  is absent from standard Reading, Kids and the safe search index.
+
+## Interface
+
+The shell uses translucent panels over a moving hero backdrop. The search bar,
+settings dialog and VPN drawer all use backdrop blur, and card hover states use
+short spring curves rather than linear fades. Both themes are token-driven:
+dark uses a near-black base with gold accents, light uses warm paper surfaces
+with darker text tokens. Text contrast was audited on home, detail, settings and
+VPN surfaces in both themes, including the hero pills and the VPN status rows.
+
+`prefers-reduced-motion` is honoured. When it is set, transitions collapse to
+near-zero duration and the hero does not animate.
+
+<details id="architecture">
+<summary><b>Architecture</b></summary>
+
+<br>
 
 ```mermaid
 flowchart LR
     UI["Windows renderer<br/>Android WebView"]
     BFF["Loopback BFF<br/>127.0.0.1 only"]
     AI["Offline AI<br/>q8 MiniLM · ONNX"]
-    HUD["Reader HUD<br/>modes · drawer · swipe"]
+    READ["Reader HUD<br/>modes · drawer · swipe"]
     VAULT["Independent 18+ partition<br/>age-gated"]
-    VPN["Shield<br/>embedded WARP"]
-    WEB["VPN-routed shell"]
+    VPN["VPN manager<br/>relay verification · failover"]
+    RELAY["Verified relay<br/>SOCKS5 or HTTP"]
+    WARP["WARP fallback<br/>Fastest / Local Shield"]
     PLAYER["Native player<br/>MP4 · HLS · DASH"]
     NET["Catalogues"]
 
     UI --> BFF
     UI --> PLAYER
     BFF --> AI
-    BFF --> HUD
+    BFF --> READ
     BFF --> NET
+    READ --> VAULT
+    VAULT -. verified only .-> READ
     NET --> VPN
-    HUD --> VAULT
-    VAULT -. verified only .-> HUD
-    NET -. unresolved shell .-> WEB
-    WEB --> VPN
+    VPN --> RELAY
+    VPN --> WARP
+    RELAY --> Internet
+    WARP --> Internet
     BFF -. signed bytes .-> PLAYER
-    VPN --> Internet
 ```
 
 Both apps keep the UI away from CORS and signing problems with a loopback-only
-server. Windows uses ports `46901–46903`; Android uses `47821–47832`. Every
-proxied request goes through the Shield, except the scoped media exception.
+server. Windows uses ports `46901–46903`; Android uses `47821–47832`. Proxied
+requests follow the active VPN transport, except for the scoped media CDN path
+that rejects VPN egress.
+
 On Android, privileged endpoints require a per-session token, first-party
 scripts are obfuscated, and every `.js` asset is stored as AES-256-GCM
-ciphertext and decrypted in memory by the local server.
+ciphertext and decrypted in memory by the local server. The token is injected
+into the page at serve time.
 
-## Download
+Relay discovery is split into a provider layer and a verification layer. The
+provider layer normalizes public lists into `host:port` candidates with a
+protocol and country hint. The verification layer opens the proxy, requests the
+Cloudflare trace endpoint and a second TLS endpoint, compares the reported IPs,
+and only then marks the candidate healthy. Results are cached per country under
+the app data directory, so a restart does not begin with an empty pool.
 
-| Build | Best for | Architecture | Size | Get it |
-|---|---|---|---:|---|
-| **SuperBox Setup** `.exe` | Windows 10/11 — normal wizard, any folder or drive | x64 | 237.1 MB | [Download](https://github.com/mohdziauddin2006-cloud/superbox/releases/download/v1.4.0/SuperBox-Setup-1.4.0.exe) |
-| **SuperBox APK** | Android 6.0+ — one universal build | `arm64-v8a` · `armeabi-v7a` · `x86` · `x86_64` | 288.2 MB | [Download](https://github.com/mohdziauddin2006-cloud/superbox/releases/download/v1.4.0/SuperBox-1.4.0.apk) |
+</details>
 
-Everything is attached to the **[v1.4.0 release](https://github.com/mohdziauddin2006-cloud/superbox/releases/tag/v1.4.0)**,
-together with `SHA256SUMS.txt`.
+<details id="controls--reader-shortcuts">
+<summary><b>Controls &amp; Reader Shortcuts</b></summary>
 
-### SHA-256
+<br>
+
+| Context | Input | Action |
+|---|---|---|
+| Reader, paged modes | `←` / `→` | previous or next page |
+| Reader, any mode | `C` | open or close the chapter drawer |
+| Reader, touch | horizontal or vertical swipe | move one page or one viewport |
+| Reader, touch | tap | show or hide the HUD |
+| Player | `Back` button | close the player |
+| Player | Play, Prev Ep, Next Ep, Mute, Fullscreen | transport controls |
+| Overlays | `Esc` | close the open menu, age gate or catalogue directory |
+| Search | `Enter` | submit the current query |
+| Search | Safe / 18+ pills | switch scope; 18+ asks for the age gate |
+| VPN panel | power control | connect, disconnect or reconnect |
+| VPN panel | region cards | pick a country; scan cancels the previous one |
+
+The player also accepts the standard Chromium media keys while it has focus.
+Episode range tabs are keyboard reachable and keep the active range visible.
+
+</details>
+
+<details id="sha-256-verification">
+<summary><b>SHA-256 Verification</b></summary>
+
+<br>
 
 | Artifact | Bytes | SHA-256 |
 |---|---:|---|
-| `SuperBox-Setup-1.4.0.exe` | 248,648,081 | `4CEF93A4A7C3693529C957FE9A3A33BDCB9F505ED09FE82564C5E390420FF955` |
-| `SuperBox-1.4.0.apk` | 302,201,211 | `3003157DE51DBAD052433B70AE5023FE05C89521A4CAEAA617231451A9D1EDD4` |
+| `SuperBox-Setup-1.4.1.exe` | 248,664,675 | `D72EFC55CF2E9F40FDD4AB8F683DC816DF4C29F57147E61BB446C7331BCF8CFF` |
+| `SuperBox-1.4.1.apk` | 302,262,719 | `14246D09DC9C5A6080525B614D895172EB5DBBC941ED6CDE36576D7D1ABE92D8` |
 
-```text
-4CEF93A4A7C3693529C957FE9A3A33BDCB9F505ED09FE82564C5E390420FF955  SuperBox-Setup-1.4.0.exe
-3003157DE51DBAD052433B70AE5023FE05C89521A4CAEAA617231451A9D1EDD4  SuperBox-1.4.0.apk
+Windows PowerShell:
+
+```powershell
+Get-FileHash .\SuperBox-Setup-1.4.1.exe -Algorithm SHA256
+Get-FileHash .\SuperBox-1.4.1.apk -Algorithm SHA256
 ```
 
-> [!TIP]
-> **Windows:** run the Setup wizard and pick any folder or drive. No admin
-> rights are required.
->
-> **Android:** allow “Install unknown apps” for your browser or file manager,
-> open the APK, and install. One file covers phones, tablets and emulators.
+Linux, macOS or Termux:
 
-## Verified in 1.4.0
+```bash
+sha256sum SuperBox-Setup-1.4.1.exe
+sha256sum SuperBox-1.4.1.apk
+```
 
-Every check below ran headless or in a hidden window, with audio muted and no
-media stream allowed to run longer than ten seconds.
+The same two lines are published in `SHA256SUMS.txt` on the release page. The
+in-app updater verifies the downloaded installer against the checksum file
+before it offers to install, and verifies it again before launch. A mismatch
+aborts the update and keeps the current installation.
 
-| Check | Result |
-|---|---|
-| Desktop AI engine | `mode=onnx`, `Xenova/all-MiniLM-L6-v2`, 384-dimensional vectors |
-| Desktop indexing | 16 titles embedded in 42 ms cold; re-index skipped inference |
-| Desktop recommendation | 16 previews, first match pill 98%, 10 ms warm |
-| Android AI engine | bundled ONNX loaded in 907 ms; 384-dimensional vectors |
-| Android recommendation | first pass 151 ms, warm pass 19 ms, 95% top match |
-| Vector isolation | safe index populated; isolated index empty unless 18+ is active |
-| Reader surfaces | HUD modes, chapter drawer, keyboard and swipe handlers present |
-| Search surfaces | scoped inputs and clear controls on every search bar |
-| Episode ranges | `1–50`, `51–100`, `101+` generated from season totals |
-| VPN panel | power control, pulse ring, latency badge, Auto-Region, region search |
-| Catalogue adapters | ordered pages and chapter lists returned within the cap |
-| JavaScript syntax | every desktop and Android bundle passes `node --check` |
-| Android Java | `LocalServer`, activity, VPN and player sources compile |
-| APK package | universal, `versionCode=5`, four ABIs, ONNX assets, signature verified |
-| Media ceiling | every verification stream muted and stopped under 10 s |
+</details>
 
-The complete artifact hashes are in the table above and in `SHA256SUMS.txt` on
-the release page.
+<details id="build-from-source">
+<summary><b>Build From Source</b></summary>
 
-## Install
-
-### Windows 10/11
-
-1. Download **SuperBox-Setup-1.4.0.exe**.
-2. Run the wizard and choose any destination folder or drive.
-3. If SmartScreen appears, choose **More info → Run anyway**. The indie build is
-   signed for Android but not with a paid Windows code-signing certificate.
-4. Launch SuperBox. The Shield screen becomes the app once the tunnel is up.
-
-The Windows build targets x64. Windows 11 on ARM runs it through x64 emulation.
-
-### Android 6.0+
-
-1. Download **SuperBox-1.4.0.apk**.
-2. Allow installs from unknown apps for the browser or file manager you use.
-3. Open the APK and install.
-4. The universal APK contains `arm64-v8a`, `armeabi-v7a`, `x86` and `x86_64`
-   libraries, so the same file runs on phones, tablets and emulators.
-
-## Build from source
+<br>
 
 **Windows**
 
 ```powershell
 cd desktop
 npm install
-npm start          # run
+npm start          # run from source
 npm run dist       # NSIS installer in ..\dist
 ```
 
@@ -304,46 +309,54 @@ Copy-Item build.local.example.ps1 build.local.ps1   # add keystore details
 .\build.ps1
 ```
 
-Requirements: Node.js 20+, JDK 17, Android SDK platform 34, build-tools 34.0.0
-and Python 3. The APK build is SDK-only — `aapt2`, `javac`, `d8`, `zipalign`
-and `apksigner`, with no Gradle. The offline model, tokenizer, ONNX runtime and
-native VPN cores are bundled by the build.
+Requirements: Node.js 20 or newer, JDK 17, Android SDK platform 34,
+build-tools 34.0.0 and Python 3. The APK build is SDK-only: it calls `aapt2`,
+`javac`, `d8`, `zipalign` and `apksigner` directly, with no Gradle. The offline
+model, tokenizer, ONNX runtime, FFmpeg decoders and native VPN cores are bundled
+by the build scripts.
 
-## Repository map
+The Android build reads signing details from `build.local.ps1` or the
+environment. The file is git-ignored. Without it the build stops rather than
+producing an unsigned release.
+
+**Repository map**
 
 ```text
-android/               Java shell + WebView UI + bundled VPN + reader
-  assets/              app shell, reader HUD, libraries, offline AI bundle
-  src/                 MainActivity, LocalServer, VpnManager, native player
+android/               Java shell, WebView UI, relay manager, reader
+  assets/              app shell, libraries, reader, offline AI bundle
+  src/                 MainActivity, LocalServer, VpnManager, player
   res/                 launcher icon, strings, theme
 desktop/               Electron app
-  main.js              window and lifecycle
-  renderer.js          desktop UI, age gate, search and views
-  reading.js           reading catalogue, readers and HUD
-  libraries.js         SBAI client, scoped search and episode wiring
+  main.js              window, lifecycle, Chromium proxy, updater IPC
+  renderer.js          desktop UI, age gate, search, views, player wiring
+  reading.js           reading catalogues, readers and HUD
+  libraries.js         catalogue client, scoped search, episode wiring
   ai-recommend.js      ONNX / TF-IDF engine and vector partitions
-  srv2.js              BFF, Shield routes, resolver and media proxy
-  vpn.js               WARP lifecycle, regions and status
+  relay.js             relay discovery, verification, cache, failover
+  srv2.js              BFF, VPN routes, resolver and media proxy
+  vpn.js               WARP and relay lifecycle, status and watchdog
   models/              bundled q8 ONNX model and tokenizer
 build-resources/       app icons
-docs/                  hero, architecture and verification notes
+docs/                  hero artwork and architecture notes
 tools/                 asset pipeline and verification suites
 ```
 
+</details>
+
 ## Privacy and fair use
 
-- No account, no ads, no trackers, no watch history.
-- The VPN registers anonymously with Cloudflare WARP; no personal details are
-  sent. The client is open source and the traffic path is auditable.
-- Local proxies bind to `127.0.0.1` and die with the app.
-- Privileged Android endpoints require a token generated for the current
-  process and injected into the page at load time.
-- Provider names and endpoints are resolved inside the app. The interface
-  exposes catalogues, not raw provider URLs.
+- No account, no ads, no trackers and no watch history.
+- Local proxies bind to `127.0.0.1` and stop with the app.
+- Android privileged routes require a token generated for the current process
+  and injected into the page at load time.
+- The WARP client registers anonymously with Cloudflare. Relay mode uses public
+  relays; those operators can see connection metadata, as with any VPN.
+- Catalogue names and endpoints are resolved inside the app. The interface
+  shows catalogues, not raw provider URLs.
 - SuperBox does not host or re-host media. It indexes public catalogues and
-  plays streams from third parties; rights remain with their owners.
-- Use SuperBox for personal, lawful access only, and respect the laws and
-  service terms that apply where you live.
+  plays streams from third parties. Rights remain with their owners.
+- Use SuperBox for personal, lawful access and follow the laws and service
+  terms that apply where you live.
 - SuperBox is not affiliated with any catalogue, metadata service, CDN, VPN
   provider or rights holder.
 
@@ -359,28 +372,11 @@ components remain under their own licenses.
   <img src="docs/infinite-hero.jpeg" alt="SuperBox infinity icon" width="96">
   <h3>One box. Infinite library.</h3>
   <p>
-    <a href="https://github.com/mohdziauddin2006-cloud/superbox/stargazers"><b>⭐ Star SuperBox</b></a>
+    <a href="https://github.com/mohdziauddin2006-cloud/superbox/stargazers"><b>Star SuperBox</b></a>
     &nbsp;·&nbsp;
-    <a href="https://github.com/mohdziauddin2006-cloud/superbox/releases/tag/v1.4.0"><b>Download v1.4.0</b></a>
+    <a href="https://github.com/mohdziauddin2006-cloud/superbox/releases/tag/v1.4.1"><b>Download v1.4.1</b></a>
     &nbsp;·&nbsp;
     <a href="CHANGELOG.md"><b>Changelog</b></a>
   </p>
   <sub>Built for touch. Tuned for quiet. Zero ads.</sub>
 </div>
-
-
----
-
-## What's new in 1.4.1
-
-- Living frosted-glass UI across Desktop and Android with animated hero backdrop slides.
-- Instant background launch: Home opens immediately while the Shield connects asynchronously.
-- In-app auto-updater wired to GitHub Releases with SHA-256 verification.
-- App-wide offline ONNX AI semantic search across Home and every scoped search bar.
-- Real multi-country VPN egress selection with live uptime counter.
-- Complete Light/Dark theme switching with persisted preference.
-- Removable, hideable, and clearable Continue Reading shelf.
-
-Release assets:
-- SuperBox-Setup-1.4.1.exe — 237.1 MB — SHA-256: 11e10ba91af20541463af1dd64c6b5d4a2c7e817c4e9da6c125f1f4f26107083
-- SuperBox-1.4.1.apk — 288.27 MB — SHA-256: 4c5a8ad2ae4bb3dccdddf84d94e46cad83cd9476dbab8b47658ff0cd282c6f1f

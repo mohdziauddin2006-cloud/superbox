@@ -3,13 +3,16 @@ package com.superbox.mobile;
 import android.content.Context;
 import android.util.Log;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
+import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.InetSocketAddress;
@@ -17,14 +20,21 @@ import java.net.Proxy;
 import java.net.Socket;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.ExecutorCompletionService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.Callable;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * SuperBox Shield - the embedded WARP tunnel.
@@ -55,6 +65,8 @@ public final class VpnManager {
     public static final String HOST = "127.0.0.1";
     public static final int PORT = 46950;
     private static final String TRACE = "https://www.cloudflare.com/cdn-cgi/trace";
+    private static final Pattern RELAY_LINE = Pattern.compile("^(https?|socks5)://([^:/\\s]+):(\\d{2,5})$", Pattern.CASE_INSENSITIVE);
+    private static final Pattern HOST_PORT = Pattern.compile("^([^:/\\s]+):(\\d{2,5})$");
     private static final int START_ATTEMPTS = 6;
     private static final long ATTEMPT_READY_MS = 13000L;
     /* MASQUE over IPv6 uses a different anycast path and is often much faster
@@ -64,6 +76,7 @@ public final class VpnManager {
 
     private static final Map<String, String[]> ENDPOINTS = new LinkedHashMap<>();
     private static final Map<String, String> LABELS = new LinkedHashMap<>();
+    private static final Map<String, String> COUNTRY = new LinkedHashMap<>();
     private static final Map<String, String> COLO_CITY = new LinkedHashMap<>();
 
     private static final String[] WARP_ENDPOINTS = {
@@ -116,6 +129,10 @@ public final class VpnManager {
         COLO_CITY.put("IAD", "Ashburn");
         COLO_CITY.put("EWR", "New York");
         COLO_CITY.put("LAX", "Los Angeles");
+        COLO_CITY.put("ATL", "Atlanta");
+        COLO_CITY.put("DEN", "Denver");
+        COLO_CITY.put("PHX", "Phoenix");
+        COLO_CITY.put("BOS", "Boston");
         COLO_CITY.put("YYZ", "Toronto");
         COLO_CITY.put("YVR", "Vancouver");
         COLO_CITY.put("LHR", "London");
@@ -132,6 +149,44 @@ public final class VpnManager {
         COLO_CITY.put("CDG", "Paris");
         COLO_CITY.put("MRS", "Marseille");
         COLO_CITY.put("GRU", "São Paulo");
+        COLO_CITY.put("AMS", "Amsterdam");
+        COLO_CITY.put("MAD", "Madrid");
+        COLO_CITY.put("FCO", "Rome");
+        COLO_CITY.put("WAW", "Warsaw");
+        COLO_CITY.put("DUS", "Düsseldorf");
+
+        COUNTRY.put("us", "US");
+        COUNTRY.put("uk", "GB");
+        COUNTRY.put("ca", "CA");
+        COUNTRY.put("au", "AU");
+        COUNTRY.put("in", "IN");
+        COUNTRY.put("de", "DE");
+        COUNTRY.put("jp", "JP");
+        COUNTRY.put("sg", "SG");
+        COUNTRY.put("hk", "HK");
+        COUNTRY.put("kr", "KR");
+        COUNTRY.put("fr", "FR");
+        COUNTRY.put("br", "BR");
+        COUNTRY.put("nl", "NL");
+        COUNTRY.put("es", "ES");
+        COUNTRY.put("it", "IT");
+        COUNTRY.put("se", "SE");
+        COUNTRY.put("ch", "CH");
+        COUNTRY.put("ae", "AE");
+        COUNTRY.put("za", "ZA");
+        COUNTRY.put("mx", "MX");
+        COUNTRY.put("tr", "TR");
+        COUNTRY.put("id", "ID");
+        COUNTRY.put("ph", "PH");
+        COUNTRY.put("th", "TH");
+        COUNTRY.put("vn", "VN");
+        COUNTRY.put("pk", "PK");
+        COUNTRY.put("bd", "BD");
+        COUNTRY.put("ru", "RU");
+        COUNTRY.put("pl", "PL");
+        COUNTRY.put("pt", "PT");
+        COUNTRY.put("ie", "IE");
+        COUNTRY.put("nz", "NZ");
     }
 
     private final Context context;
@@ -186,6 +241,21 @@ public final class VpnManager {
     private volatile boolean ipv6 = false;
     private final AtomicBoolean watchBusy = new AtomicBoolean(false);
 
+    /* Regional exits. WARP is anycast, so a country is served by a verified
+       relay (HTTP CONNECT or SOCKS5) whose live egress really is that
+       country. The fields below are only populated after the relay answers
+       Cloudflare's trace endpoint with the requested country code. */
+    private volatile String mode = "warp";
+    private volatile boolean relayOn = false;
+    private volatile String relayUrl = "";
+    private volatile String relayProto = "";
+    private volatile String relayHost = "";
+    private volatile int relayPort = 0;
+    private volatile String relayLoc = "";
+    private volatile String relayCity = "";
+    private volatile Proxy relayProxy = null;
+    private volatile boolean relayBusy = false;
+
     public VpnManager(Context context) {
         this.context = context.getApplicationContext();
         try {
@@ -203,7 +273,41 @@ public final class VpnManager {
     }
 
     public boolean isOn() {
-        return "on".equals(state) && warp;
+        return "on".equals(state) && (warp || relayOn);
+    }
+
+    /** Route for LocalServer: the verified country relay when one is active,
+        otherwise null so the caller keeps using the local WARP proxy. */
+    public Proxy proxyRoute() {
+        if (bypass) return Proxy.NO_PROXY;
+        if (relayOn && relayProxy != null) return relayProxy;
+        return null;
+    }
+
+    public String getMode() {
+        return mode;
+    }
+
+    /** host:port of the verified regional relay, or "" when WARP is active. */
+    public String proxyHostPort() {
+        if (!relayOn || relayHost.isEmpty() || relayPort <= 0) return "";
+        return relayHost + ":" + relayPort;
+    }
+
+    public boolean isRelayOn() {
+        return relayOn;
+    }
+
+    public String relayHost() {
+        return relayOn ? relayHost : "";
+    }
+
+    public int relayPort() {
+        return relayOn ? relayPort : 0;
+    }
+
+    public String relayProto() {
+        return relayOn ? relayProto : "";
     }
 
     /** True when the user deliberately turned the Shield off. */
@@ -233,7 +337,10 @@ public final class VpnManager {
             error = "";
         }
         submit(new Runnable() {
-            @Override public void run() { bringUp(r, false); }
+            @Override public void run() {
+                if ("auto".equals(r)) bringUp(r, false);
+                else activateRelay(r);
+            }
         });
         return status();
     }
@@ -249,7 +356,7 @@ public final class VpnManager {
         return reconnect(region);
     }
 
-    /** Forces a fresh tunnel on the requested region, even when already on. */
+    /** Forces a fresh route on the requested region, even when already on. */
     public JSONObject reconnect(String wanted) {
         final String r = normRegion(wanted);
         setBypass(false);
@@ -262,9 +369,13 @@ public final class VpnManager {
             region = r;
             preferred = r;
             warp = false;
+            clearRelay();
         }
         submit(new Runnable() {
-            @Override public void run() { bringUp(r, true); }
+            @Override public void run() {
+                if ("auto".equals(r)) bringUp(r, true);
+                else activateRelay(r);
+            }
         });
         return status();
     }
@@ -272,23 +383,39 @@ public final class VpnManager {
     public JSONObject switchRegion(String wanted) {
         final String r = normRegion(wanted);
         if (bypass) return enable(r);
-        if (isOn() && r.equals(region)) {
+        if (isOn() && r.equals(region) && ("auto".equals(r) ? warp : relayOn)) {
             preferred = r;
             return status();
         }
-        return reconnect(r);
+        if ("auto".equals(r)) return reconnect(r);
+        setBypass(false);
+        synchronized (lock) {
+            stopped = false;
+            state = "connecting";
+            phase = "Finding a " + LABELS.getOrDefault(r, r) + " exit";
+            progress = 6;
+            error = "";
+            region = r;
+            preferred = r;
+            warp = false;
+        }
+        submit(new Runnable() {
+            @Override public void run() { activateRelay(r); }
+        });
+        return status();
     }
 
     /**
      * Non-disruptive ensure: a source asking for a region records a
-     * preference. A healthy tunnel is reused instead of being torn down.
+     * preference. A healthy route is reused instead of being torn down.
      */
     public JSONObject ensure(String wanted) {
         String r = normRegion(wanted);
+        if ("auto".equals(r) && !"auto".equals(preferred) && relayOn) return status();
         preferred = r;
         if (bypass) return status();
-        if (isOn()) return status();
-        return startAsync(r);
+        if (isOn() && r.equals(region) && ("auto".equals(r) ? warp : relayOn)) return status();
+        return switchRegion(r);
     }
 
     /** Manual OFF: stop the tunnel and route every request directly. */
@@ -299,6 +426,7 @@ public final class VpnManager {
             state = "off";
             phase = "off";
             warp = false;
+            clearRelay();
             actual = "";
             ip = "";
             city = "";
@@ -311,6 +439,18 @@ public final class VpnManager {
         }
         waitPortFree(2600L);
         return status();
+    }
+
+    private void clearRelay() {
+        relayOn = false;
+        relayProxy = null;
+        relayUrl = "";
+        relayProto = "";
+        relayHost = "";
+        relayPort = 0;
+        relayLoc = "";
+        relayCity = "";
+        mode = "warp";
     }
 
     private void setBypass(boolean on) {
@@ -342,6 +482,7 @@ public final class VpnManager {
             stopped = true;
             state = "idle";
             warp = false;
+            clearRelay();
             actual = "";
             ip = "";
             error = "";
@@ -369,8 +510,245 @@ public final class VpnManager {
         }
     }
 
+    /* ------------------------------------------------------ regional exits */
+
+    /* A country profile is only useful if the egress really changes. WARP is
+       anycast, so the manager tests public country-grouped relays and keeps
+       the first one whose live Cloudflare trace reports the requested code. */
+    private void activateRelay(String wanted) {
+        if (stopped || bypass) return;
+        final String cc = COUNTRY.get(wanted);
+        if (cc == null) { fail(new IOException("Unknown region " + wanted)); return; }
+        synchronized (lock) {
+            if (relayBusy) return;
+            relayBusy = true;
+            state = "connecting";
+            phase = "Fetching " + cc + " relay list";
+            progress = 8;
+            error = "";
+        }
+        try {
+            List<String[]> list = fetchRelayCandidates(cc);
+            if (list.isEmpty()) throw new IOException("No " + cc + " relay candidates published");
+            synchronized (lock) {
+                phase = "Testing " + list.size() + " " + cc + " relays";
+                progress = 14;
+            }
+            ExecutorService pool = Executors.newFixedThreadPool(10);
+            ExecutorCompletionService<String[]> done = new ExecutorCompletionService<>(pool);
+            for (final String[] cand : list) {
+                done.submit(new Callable<String[]>() {
+                    @Override public String[] call() {
+                        try { return verifyRelay(cand[0], cand[1], Integer.parseInt(cand[2]), cc); }
+                        catch (Exception e) { return null; }
+                    }
+                });
+            }
+            String[] hit = null;
+            long deadline = System.currentTimeMillis() + 80000L;
+            int checked = 0;
+            for (int i = 0; i < list.size(); i++) {
+                long remain = deadline - System.currentTimeMillis();
+                if (remain <= 0) break;
+                Future<String[]> f = done.poll(Math.min(remain, 12000L), TimeUnit.MILLISECONDS);
+                if (f == null) break;
+                checked++;
+                try { String[] got = f.get(); if (got != null) { hit = got; break; } } catch (Exception ignored) {}
+                synchronized (lock) {
+                    progress = 14 + (int) Math.min(80L, checked * 80L / Math.max(1, list.size()));
+                    phase = "Testing " + cc + " relays " + checked + "/" + list.size();
+                }
+                if (stopped || bypass) break;
+            }
+            pool.shutdownNow();
+            if (hit == null) throw new IOException("No live " + cc + " exit answered in time");
+            synchronized (lock) {
+                if (stopped || bypass) throw new IOException("Shield stopped");
+                relayProto = hit[0];
+                relayHost = hit[1];
+                relayPort = Integer.parseInt(hit[2]);
+                relayUrl = relayProto + "://" + relayHost + ":" + relayPort;
+                relayLoc = hit[3];
+                relayProxy = new Proxy("socks5".equals(relayProto) ? Proxy.Type.SOCKS : Proxy.Type.HTTP,
+                        new InetSocketAddress(relayHost, relayPort));
+                relayOn = true;
+                mode = "relay";
+                region = wanted;
+                preferred = wanted;
+                warp = false;
+                actual = relayLoc;
+                ip = hit[4];
+                colo = hit[5];
+                city = COLO_CITY.containsKey(colo) ? COLO_CITY.get(colo) : "";
+                relayCity = city;
+                state = "on";
+                phase = "Exit live";
+                progress = 100;
+                startedAt = System.currentTimeMillis();
+                lastProbe = startedAt;
+                watchFails = 0;
+                error = "";
+                ping = 0L;
+            }
+            log("relay live " + relayUrl + " egress=" + relayLoc + " " + city);
+        } catch (Exception e) {
+            log("relay failed: " + e.getMessage());
+            String reason = String.valueOf(e.getMessage());
+            boolean keepWarp;
+            synchronized (lock) {
+                keepWarp = warp && process != null;
+                clearRelay();
+                if (keepWarp) {
+                    state = "on";
+                    phase = "WARP fallback";
+                } else {
+                    state = "connecting";
+                    phase = "Trying WARP fallback";
+                }
+                error = reason;
+            }
+            if (!keepWarp) {
+                bringUp("auto", true);
+                synchronized (lock) {
+                    if (isOn()) error = reason + " \u00b7 using WARP " + actual;
+                }
+            }
+        } finally {
+            synchronized (lock) { relayBusy = false; }
+        }
+    }
+
+    private List<String[]> fetchRelayCandidates(String cc) {
+        List<String[]> raw = new ArrayList<>();
+        String text = directText("https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/countries/" + cc + "/data.txt", 14000);
+        if (text != null) parseRelayLines(text, null, raw);
+        if (raw.isEmpty()) {
+            text = directText("https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/countries/" + cc + "/data.txt", 14000);
+            if (text != null) parseRelayLines(text, null, raw);
+        }
+        if (raw.size() < 40) {
+            parseRelayLines(directText("https://api.proxyscrape.com/v2/?request=getproxies&protocol=socks5&timeout=10000&country=" + cc, 14000), "socks5", raw);
+            parseRelayLines(directText("https://api.proxyscrape.com/v2/?request=getproxies&protocol=http&timeout=10000&country=" + cc, 14000), "http", raw);
+        }
+        if (raw.size() < 40) {
+            parseGeoNode(directText("https://proxylist.geonode.com/api/proxy-list?limit=500&page=1&sort_by=lastChecked&sort_type=desc&country=" + cc + "&protocols=socks5,http", 16000), raw);
+        }
+        Map<String, String[]> seen = new LinkedHashMap<>();
+        List<String[]> socks = new ArrayList<>();
+        List<String[]> http = new ArrayList<>();
+        for (String[] c : raw) {
+            if (!"socks5".equals(c[0]) && !"http".equals(c[0])) continue;
+            String key = c[0] + "://" + c[1] + ":" + c[2];
+            if (seen.containsKey(key)) continue;
+            seen.put(key, c);
+            if ("socks5".equals(c[0])) socks.add(c); else http.add(c);
+        }
+        List<String[]> list = new ArrayList<>();
+        int max = Math.max(socks.size(), http.size());
+        for (int i = 0; i < max && list.size() < 260; i++) {
+            if (i < socks.size()) list.add(socks.get(i));
+            if (i < http.size() && list.size() < 260) list.add(http.get(i));
+        }
+        return list;
+    }
+
+    private void parseGeoNode(String text, List<String[]> out) {
+        if (text == null) return;
+        try {
+            JSONObject doc = new JSONObject(text);
+            JSONArray data = doc.optJSONArray("data");
+            if (data == null) return;
+            for (int i = 0; i < data.length(); i++) {
+                JSONObject p = data.optJSONObject(i);
+                if (p == null) continue;
+                String ip = p.optString("ip", "");
+                String port = p.optString("port", "");
+                if (ip.isEmpty() || port.isEmpty()) continue;
+                JSONArray protos = p.optJSONArray("protocols");
+                String proto = "";
+                if (protos != null) {
+                    for (int j = 0; j < protos.length(); j++) {
+                        String v = protos.optString(j, "").toLowerCase(Locale.US);
+                        if ("socks5".equals(v)) { proto = "socks5"; break; }
+                        if ("http".equals(v)) proto = "http";
+                    }
+                }
+                if (!proto.isEmpty()) out.add(new String[]{proto, ip, port});
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void parseRelayLines(String text, String fallback, List<String[]> out) {        if (text == null) return;
+        for (String rawLine : text.split("\\r?\\n")) {
+            String line = rawLine.trim();
+            if (line.isEmpty() || line.startsWith("#") || line.indexOf('<') >= 0) continue;
+            Matcher m = RELAY_LINE.matcher(line);
+            if (m.matches()) {
+                out.add(new String[]{m.group(1).toLowerCase(Locale.US), m.group(2), m.group(3)});
+                continue;
+            }
+            if (fallback == null) continue;
+            m = HOST_PORT.matcher(line);
+            if (m.matches()) out.add(new String[]{fallback, m.group(1), m.group(2)});
+        }
+    }
+
+    private String[] verifyRelay(String proto, String host, int port, String cc) {
+        HttpURLConnection c = null;
+        try {
+            Proxy proxy = new Proxy("socks5".equals(proto) ? Proxy.Type.SOCKS : Proxy.Type.HTTP,
+                    new InetSocketAddress(host, port));
+            c = (HttpURLConnection) new URL(TRACE).openConnection(proxy);
+            c.setConnectTimeout(7000);
+            c.setReadTimeout(8000);
+            c.setUseCaches(false);
+            c.setRequestProperty("User-Agent", "SuperBox/1.4.1");
+            c.setRequestProperty("Accept", "text/plain");
+            c.setRequestProperty("Connection", "close");
+            if (c.getResponseCode() != 200) return null;
+            String text = readAll(c.getInputStream(), 16384);
+            String loc = traceValue(text, "loc").toUpperCase(Locale.US);
+            if (!cc.equals(loc)) return null;
+            return new String[]{proto, host, String.valueOf(port), loc,
+                    traceValue(text, "ip"), traceValue(text, "colo").toUpperCase(Locale.US)};
+        } catch (Exception e) {
+            return null;
+        } finally {
+            if (c != null) c.disconnect();
+        }
+    }
+
+    private String directText(String url, int timeoutMs) {
+        HttpURLConnection c = null;
+        try {
+            c = (HttpURLConnection) new URL(url).openConnection(Proxy.NO_PROXY);
+            c.setConnectTimeout(9000);
+            c.setReadTimeout(timeoutMs);
+            c.setUseCaches(false);
+            c.setRequestProperty("User-Agent", "SuperBox/1.4.1");
+            c.setRequestProperty("Accept", "text/plain");
+            c.setRequestProperty("Connection", "close");
+            if (c.getResponseCode() != 200) return null;
+            return readAll(c.getInputStream(), 1024 * 1024);
+        } catch (Exception e) {
+            return null;
+        } finally {
+            if (c != null) c.disconnect();
+        }
+    }
+
+    private static String traceValue(String text, String key) {
+        for (String line : String.valueOf(text).split("\\r?\\n")) {
+            int i = line.indexOf('=');
+            if (i > 0 && key.equals(line.substring(0, i).trim())) return line.substring(i + 1).trim();
+        }
+        return "";
+    }
+
     private void bringUp(String wanted, boolean fresh) {
         if (stopped) return;
+        clearRelay();
         state = "connecting";
         error = "";
         phase = "Preparing the Shield";
@@ -714,7 +1092,9 @@ public final class VpnManager {
     }
 
     private boolean probe() throws Exception {
-        Proxy proxy = new Proxy(Proxy.Type.HTTP, new InetSocketAddress(HOST, PORT));
+        Proxy proxy = relayOn && relayProxy != null
+                ? relayProxy
+                : new Proxy(Proxy.Type.HTTP, new InetSocketAddress(HOST, PORT));
         HttpURLConnection c = (HttpURLConnection) new URL(TRACE).openConnection(proxy);
         c.setConnectTimeout(6000);
         c.setReadTimeout(8000);
@@ -732,13 +1112,17 @@ public final class VpnManager {
                 int i = line.indexOf('=');
                 if (i > 0) map.put(line.substring(0, i).trim(), line.substring(i + 1).trim());
             }
-            warp = "on".equals(map.get("warp"));
+            warp = relayOn ? false : "on".equals(map.get("warp"));
             actual = String.valueOf(map.getOrDefault("loc", "")).toUpperCase(Locale.US);
             ip = String.valueOf(map.getOrDefault("ip", ""));
             colo = String.valueOf(map.getOrDefault("colo", "")).toUpperCase(Locale.US);
             city = COLO_CITY.getOrDefault(colo, colo);
             ping = Math.max(1L, System.currentTimeMillis() - started);
             lastProbe = System.currentTimeMillis();
+            if (relayOn) {
+                if (!relayLoc.isEmpty() && !relayLoc.equalsIgnoreCase(actual)) return false;
+                return true;
+            }
             return warp;
         } finally {
             c.disconnect();
@@ -749,7 +1133,8 @@ public final class VpnManager {
 
     /** Repairs a tunnel that died after the gate had already opened. */
     private void watch() {
-        if (!"on".equals(state) || process == null || stopped) return;
+        if (!"on".equals(state) || stopped) return;
+        if (!relayOn && process == null) return;
         if (!watchBusy.compareAndSet(false, true)) return;
         try {
             boolean ok = false;
@@ -759,16 +1144,19 @@ public final class VpnManager {
             log("watchdog miss " + watchFails + "/3");
             if (watchFails >= 3) {
                 watchFails = 0;
-                log("self-repair: tunnel stopped answering");
+                log("self-repair: route stopped answering");
                 synchronized (lock) {
                     state = "connecting";
-                    phase = "Repairing the tunnel";
+                    phase = relayOn ? "Repairing the regional exit" : "Repairing the tunnel";
                     progress = 8;
                     error = "Reconnecting the Shield";
                 }
                 final String keep = region;
                 submit(new Runnable() {
-                    @Override public void run() { bringUp(keep, true); }
+                    @Override public void run() {
+                        if (relayOn) activateRelay(keep);
+                        else bringUp(keep, true);
+                    }
                 });
             }
         } finally {
@@ -782,7 +1170,12 @@ public final class VpnManager {
             j.put("ok", isOn());
             j.put("enabled", !bypass);
             j.put("off", bypass);
-            j.put("engine", "usque/WARP MASQUE");
+            j.put("engine", relayOn
+                    ? "Verified regional exit (" + relayProto + ")"
+                    : "usque/WARP MASQUE");
+            j.put("mode", relayOn ? "relay" : "warp");
+            j.put("proxy", relayOn ? relayUrl : "");
+            j.put("relayCity", relayOn ? relayCity : "");
             j.put("state", state);
             j.put("phase", phase);
             j.put("progress", progress);

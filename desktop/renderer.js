@@ -751,7 +751,11 @@
   function posterChain(it) {
     var u = it.poster || '';
     if (!u) return [''];
-    if (it.kind === 'tmdb' || it.kind === 'country' || it.kind === 'arc' || it.kind === 'live' || it.kind === 'yt' || it.kind === 'mb' || /^https?:\/\/image\.tmdb\.org/i.test(u)) return [u];
+    if (it.kind === 'country' || it.kind === 'arc' || it.kind === 'live' || it.kind === 'yt' || it.kind === 'mb' || /^https?:\/\/image\.tmdb\.org/i.test(u)) {
+      /* TMDB CDN first; the proxy/weserv fallbacks only fire when it fails. */
+      if (/^https?:\/\/image\.tmdb\.org/i.test(u)) return SC.imgChain(u);
+      return [u];
+    }
     return SC.imgChain(u);
   }
 
@@ -1250,7 +1254,9 @@
       if ($('#vpnMsg')) $('#vpnMsg').textContent = off
         ? 'The VPN is off. SuperBox is using a clean direct connection until you reconnect.'
         : on
-          ? 'Anonymous WARP tunnel is live. Every request in SuperBox rides it.'
+          ? (st && st.mode === 'relay'
+            ? 'Verified ' + (st.regionLabel || st.egress || 'regional') + ' exit is live. Every request in SuperBox rides it.'
+            : 'Anonymous WARP tunnel is live. Every request in SuperBox rides it.')
           : (failed
             ? 'The tunnel did not come up. Retry, or pick another regional profile.'
             : (phase && /endpoint/i.test(phase)
@@ -5175,14 +5181,66 @@
         return null;
       }
     },
-    downloadAndInstall: function () {
-      var wrap = $('#updateProgressWrap'); if (wrap) wrap.classList.remove('hidden');
-      var bar = $('#updateProgressBar'); if (bar) bar.style.width = '0%';
-      var pct = $('#updateProgressPct'); if (pct) pct.textContent = '0%';
-      // Native installers are handled by the host when available; in a plain
-      // browser context we only surface the verified release metadata.
-      if (window.SB_UPDATER.last && window.SB_UPDATER.last.release) {
-        var st = $('#updateStatusText'); if (st) st.textContent = 'Download started (host installer required).';
+    downloadAndInstall: async function () {
+      var st = $('#updateStatusText');
+      var wrap = $('#updateProgressWrap');
+      var bar = $('#updateProgressBar');
+      var pct = $('#updateProgressPct');
+      var speed = $('#updateProgressSpeed');
+      if (!this.last || !this.last.release) {
+        await this.check(true);
+        if (!this.last || !this.last.release) {
+          if (st) st.textContent = 'No release metadata is available yet.';
+          return;
+        }
+      }
+      var assets = this.last.release.assets || [];
+      var asset = assets.filter(function (a) { return /^SuperBox-Setup-.*\.exe$/i.test(a.name || ''); })[0]
+        || assets.filter(function (a) { return /\.exe$/i.test(a.name || ''); })[0];
+      if (!asset) {
+        if (st) st.textContent = 'This release has no Windows installer asset.';
+        return;
+      }
+      var sha = (this.lastSums || {})[asset.name] || '';
+      if (!sha) {
+        if (st) st.textContent = 'SHA256SUMS.txt does not list ' + asset.name + '.';
+        return;
+      }
+      if (!window.bridge || !window.bridge.updateDownload) {
+        if (st) st.textContent = 'Automatic install is only available in the desktop app.';
+        return;
+      }
+      if (!this._progressWired && window.bridge.onUpdateProgress) {
+        this._progressWired = true;
+        window.bridge.onUpdateProgress(function (p) {
+          if (!p) return;
+          if (wrap) wrap.classList.remove('hidden');
+          if (bar) bar.style.width = Math.max(0, Math.min(100, p.pct || 0)) + '%';
+          if (pct) pct.textContent = (p.pct || 0) + '%';
+          if (speed) {
+            var mb = (p.received || 0) / 1048576;
+            var tot = p.total ? ' / ' + (p.total / 1048576).toFixed(1) + ' MB' : '';
+            speed.textContent = mb.toFixed(1) + ' MB' + tot;
+          }
+        });
+      }
+      if (wrap) wrap.classList.remove('hidden');
+      if (bar) bar.style.width = '0%';
+      if (pct) pct.textContent = '0%';
+      if (speed) speed.textContent = '';
+      if (st) st.textContent = 'Downloading ' + asset.name + '\u2026';
+      try {
+        var got = await window.bridge.updateDownload({
+          url: asset.browser_download_url,
+          name: asset.name,
+          sha256: sha
+        });
+        if (st) st.textContent = 'SHA-256 verified. Launching the installer\u2026';
+        await window.bridge.updateInstall({ path: got.path, sha256: got.sha256 });
+        if (st) st.textContent = 'Installer launched. SuperBox will close so files can be replaced.';
+      } catch (e) {
+        if (st) st.textContent = 'Update failed: ' + String((e && e.message) || e);
+        if (bar) bar.style.width = '0%';
       }
     },
     parseSums: parseSums

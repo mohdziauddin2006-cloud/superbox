@@ -1379,9 +1379,14 @@
   }
   function imgChain(u) {
     if (!u) return [''];
-    if (/^https?:\/\/image\.tmdb\.org/i.test(u)) return [u];
     var B = BASE || 'http://127.0.0.1:46901';
-    return [B + '/img?url=' + enc(u) + '&cv=2', u, 'https://images.weserv.nl/?url=' + enc(u.replace(/^https?:\/\//, ''))];
+    var weserv = 'https://images.weserv.nl/?url=' + enc(u.replace(/^https?:\/\//, ''));
+    if (/^https?:\/\/image\.tmdb\.org/i.test(u)) {
+      /* TMDB's CDN is normally direct, but a blocked CDN must never leave a
+         blank card: retry through the local image proxy, then a public one. */
+      return [u, B + '/img?url=' + enc(u) + '&cv=2', weserv];
+    }
+    return [B + '/img?url=' + enc(u) + '&cv=2', u, weserv];
   }
 
   /* ---------------- search helpers ---------------- */

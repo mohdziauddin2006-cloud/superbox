@@ -223,6 +223,18 @@ public class LocalServer {
                 if (++safety > 120) break;
             }
 
+            if ("CONNECT".equalsIgnoreCase(method)) {
+                tunnel(client, in, out, target);
+                return;
+            }
+            /* A WebView proxy sends plain-HTTP requests in absolute-URI form.
+               They must be forwarded through the same route, not parsed as a
+               local path. */
+            if (target.startsWith("http://")) {
+                forwardAbsolute(in, out, method, target, headers);
+                return;
+            }
+
             if ("OPTIONS".equalsIgnoreCase(method)) {
                 send(out, 204, "text/plain", new byte[0], null);
                 return;
@@ -1711,6 +1723,10 @@ public class LocalServer {
         explicitly turned the Shield off. */
     private Proxy proxy() {
         if (vpn != null && vpn.isBypassed()) return Proxy.NO_PROXY;
+        if (vpn != null) {
+            Proxy regional = vpn.proxyRoute();
+            if (regional != null) return regional;
+        }
         return new Proxy(Proxy.Type.HTTP,
                 new InetSocketAddress(VpnManager.HOST, VpnManager.PORT));
     }
@@ -1786,6 +1802,197 @@ public class LocalServer {
 
     private static byte[] bytes(String s) {
         try { return s.getBytes("UTF-8"); } catch (Exception e) { return new byte[0]; }
+    }
+
+    // ------------------------------------------------------------- tunnel
+
+    /* WebView has no SOCKS support, so the app server doubles as a local
+       CONNECT proxy. Every tunnel is opened through the active route: the
+       verified country relay when one is live, the WARP port otherwise, or a
+       direct socket after a manual OFF. */
+    private Socket openTunnel(String host, int port) throws IOException {
+        if (vpn != null && vpn.isBypassed()) {
+            Socket s = new Socket();
+            s.connect(new InetSocketAddress(host, port), 12000);
+            return s;
+        }
+        if (vpn != null && vpn.isRelayOn()) {
+            String rh = vpn.relayHost();
+            int rp = vpn.relayPort();
+            if ("socks5".equals(vpn.relayProto())) return socksTunnel(rh, rp, host, port);
+            return httpTunnel(rh, rp, host, port);
+        }
+        return httpTunnel(VpnManager.HOST, VpnManager.PORT, host, port);
+    }
+
+    private void tunnel(Socket client, BufferedInputStream in, OutputStream out, String target)
+            throws IOException {
+        int colon = target.lastIndexOf(':');
+        if (colon <= 0) {
+            send(out, 400, "text/plain", bytes("bad CONNECT target"), null);
+            return;
+        }
+        String host = target.substring(0, colon);
+        int port;
+        try {
+            port = Integer.parseInt(target.substring(colon + 1));
+        } catch (Exception e) {
+            send(out, 400, "text/plain", bytes("bad CONNECT port"), null);
+            return;
+        }
+        Socket upstream = null;
+        try {
+            upstream = openTunnel(host, port);
+            out.write(bytes("HTTP/1.1 200 Connection Established\r\nProxy-Agent: SuperBox\r\n\r\n"));
+            out.flush();
+            client.setSoTimeout(0);
+            final Socket up = upstream;
+            final InputStream uin = up.getInputStream();
+            final Socket down = client;
+            Thread back = new Thread(new Runnable() {
+                @Override public void run() {
+                    try { copy(uin, out); } catch (IOException ignored) {}
+                    finally { closeQuietly(up); closeQuietly(down); }
+                }
+            }, "superbox-tunnel-back");
+            back.setDaemon(true);
+            back.start();
+            copy(in, up.getOutputStream());
+        } finally {
+            closeQuietly(upstream);
+            closeQuietly(client);
+        }
+    }
+
+    private void forwardAbsolute(BufferedInputStream in, OutputStream out, String method,
+                                 String target, Map<String, String> headers) throws IOException {
+        URL u;
+        try { u = new URL(target); } catch (Exception e) {
+            send(out, 400, "text/plain", bytes("bad proxy URL"), null);
+            return;
+        }
+        String host = u.getHost();
+        int port = u.getPort() > 0 ? u.getPort() : 80;
+        Socket upstream = null;
+        try {
+            upstream = openTunnel(host, port);
+            StringBuilder req = new StringBuilder();
+            req.append(method).append(' ').append(target).append(" HTTP/1.1\r\n");
+            for (Map.Entry<String, String> e : headers.entrySet()) {
+                String k = e.getKey();
+                if ("proxy-connection".equals(k) || "connection".equals(k)) continue;
+                req.append(k).append(": ").append(e.getValue()).append("\r\n");
+            }
+            req.append("Connection: close\r\n\r\n");
+            OutputStream uout = upstream.getOutputStream();
+            uout.write(bytes(req.toString()));
+            long len = 0;
+            try { len = Long.parseLong(headers.containsKey("content-length") ? headers.get("content-length") : "0"); }
+            catch (Exception ignored) {}
+            copyN(in, uout, len);
+            uout.flush();
+            copy(upstream.getInputStream(), out);
+        } finally {
+            closeQuietly(upstream);
+        }
+    }
+
+    private static Socket socksTunnel(String proxyHost, int proxyPort, String host, int port)
+            throws IOException {
+        Socket s = new Socket();
+        s.connect(new InetSocketAddress(proxyHost, proxyPort), 12000);
+        s.setSoTimeout(15000);
+        OutputStream out = s.getOutputStream();
+        InputStream in = s.getInputStream();
+        out.write(new byte[]{5, 1, 0});
+        out.flush();
+        byte[] hello = readN(in, 2);
+        if (hello[0] != 5 || hello[1] != 0) {
+            closeQuietly(s);
+            throw new IOException("SOCKS5 auth rejected");
+        }
+        byte[] name = host.getBytes("UTF-8");
+        ByteArrayOutputStream req = new ByteArrayOutputStream();
+        req.write(5);
+        req.write(1);
+        req.write(0);
+        req.write(3);
+        req.write(name.length);
+        req.write(name);
+        req.write((port >> 8) & 0xff);
+        req.write(port & 0xff);
+        out.write(req.toByteArray());
+        out.flush();
+        byte[] head = readN(in, 4);
+        if (head[1] != 0) {
+            closeQuietly(s);
+            throw new IOException("SOCKS5 connect rejected (" + head[1] + ")");
+        }
+        int addrLen = head[3] == 1 ? 4 : head[3] == 4 ? 16 : head[3] == 3 ? (readN(in, 1)[0] & 0xff) : 0;
+        if (addrLen > 0) readN(in, addrLen);
+        readN(in, 2);
+        s.setSoTimeout(0);
+        return s;
+    }
+
+    private static Socket httpTunnel(String proxyHost, int proxyPort, String host, int port)
+            throws IOException {
+        Socket s = new Socket();
+        s.connect(new InetSocketAddress(proxyHost, proxyPort), 12000);
+        s.setSoTimeout(15000);
+        String req = "CONNECT " + host + ":" + port + " HTTP/1.1\r\nHost: " + host + ":" + port
+                + "\r\nProxy-Connection: keep-alive\r\n\r\n";
+        s.getOutputStream().write(bytes(req));
+        s.getOutputStream().flush();
+        InputStream in = s.getInputStream();
+        String status = readLine(in);
+        if (status == null || !status.contains(" 200")) {
+            closeQuietly(s);
+            throw new IOException("CONNECT rejected: " + status);
+        }
+        String line;
+        int guard = 0;
+        while ((line = readLine(in)) != null && !line.isEmpty() && ++guard < 80) { }
+        s.setSoTimeout(0);
+        return s;
+    }
+
+    private static byte[] readN(InputStream in, int n) throws IOException {
+        byte[] b = new byte[n];
+        int off = 0;
+        while (off < n) {
+            int r = in.read(b, off, n - off);
+            if (r < 0) throw new IOException("unexpected end of stream");
+            off += r;
+        }
+        return b;
+    }
+
+    private static void copyN(InputStream in, OutputStream out, long n) throws IOException {
+        byte[] buf = new byte[16384];
+        long left = n;
+        while (left > 0) {
+            int r = in.read(buf, 0, (int) Math.min(buf.length, left));
+            if (r < 0) break;
+            out.write(buf, 0, r);
+            left -= r;
+        }
+    }
+
+    private static void copy(InputStream in, OutputStream out) throws IOException {
+        byte[] buf = new byte[32768];
+        int n;
+        while ((n = in.read(buf)) >= 0) {
+            if (n == 0) continue;
+            out.write(buf, 0, n);
+            out.flush();
+        }
+    }
+
+    private static void closeQuietly(java.io.Closeable c) {
+        if (c != null) {
+            try { c.close(); } catch (IOException ignored) { }
+        }
     }
 
     private static String readLine(InputStream in) throws IOException {
