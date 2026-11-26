@@ -251,8 +251,9 @@ the app data directory, so a restart does not begin with an empty pool.
 | VPN panel | power control | connect, disconnect or reconnect |
 | VPN panel | region cards | pick a country; scan cancels the previous one |
 
-The player also accepts the standard Chromium media keys while it has focus.
-Episode range tabs are keyboard reachable and keep the active range visible.
+The player also responds to its on-screen transport controls and closes with
+the Back button. Episode range tabs are keyboard reachable and keep the active
+range visible.
 
 </details>
 
